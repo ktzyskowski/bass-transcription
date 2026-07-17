@@ -1,5 +1,5 @@
-#data
-data/
+# datasets (anchored to repo root so it doesn't match src/stemify/data/)
+/data/
 *.wav
 *.flac
 *.zip

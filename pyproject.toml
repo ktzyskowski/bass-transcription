@@ -1,9 +1,12 @@
 [project]
 name = "stemify-ml"
 version = "0.1.0"
-description = "Add your description here"
+description = "Bass tablature transcription: audio in, tab out."
 readme = "README.md"
-requires-python = ">=3.13"
+# Pinned to match the SageMaker PyTorch training DLC (Python 3.12), so the
+# interpreter that resolves deps and runs training is identical locally and in
+# the container. See docs/datasets.md and the .python-version file.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "boto3>=1.43.50",
     "librosa>=0.11.0",
@@ -13,3 +16,10 @@ dependencies = [
     "torch>=2.13.0",
     "torchaudio>=2.11.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stemify"]
