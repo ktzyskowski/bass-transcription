@@ -1053,6 +1053,20 @@ wheels = [
 ]
 
 [[package]]
+name = "mir-eval"
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "decorator" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/db/3bf39fc9ab0fb757f297f9a0da7207e823688291f9e61bb67b44fa17bc2f/mir_eval-0.8.2.tar.gz", hash = "sha256:141a3e1193276889fc32e911547e73dcb3e829ee8cfea60f7bbcd633c0792569", size = 117649, upload-time = "2025-02-25T18:09:57.505Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/5a/69ce896a32ebc8c75deae00b1fba9837567405fa6ef37b377f2e85b856ae/mir_eval-0.8.2-py3-none-any.whl", hash = "sha256:114cda33d8e17408c170598e0b36ed0d71ff4a2fee8eaf9e165b58ecf1c87170", size = 102794, upload-time = "2025-02-25T18:09:56.012Z" },
+]
+
+[[package]]
 name = "ml-dtypes"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1585,6 +1599,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/62/93/dcc25d52f49022ae6175d15e6bd751f1acc99b98bc61fc55e5155a7be2e7/paramiko-5.0.0.tar.gz", hash = "sha256:36763b5b95c2a0dcfdf1abc48e48156ee425b21efe2f0e787c2dd5a95c0e5e79", size = 1548586, upload-time = "2026-05-09T18:28:52.256Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/5b/eadf6d45de38d30ab603f49393b6cd2cbe7e233af8cf90197e32782b68a9/paramiko-5.0.0-py3-none-any.whl", hash = "sha256:b7044611c30140d9a75261653210e2002977b71a0497ff3ba0d98d7edbf62f7c", size = 208919, upload-time = "2026-05-09T18:28:50.295Z" },
+]
+
+[[package]]
+name = "pesto-pitch"
+version = "2.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "omegaconf" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/bc/b79b34944bff2e9868c7f162b61f186cc006e51bd1452013d971aee74e31/pesto_pitch-2.0.1.tar.gz", hash = "sha256:9ea0690be863e929af73de3653f09567c9d6583951fd75281bf16a6fa85f427e", size = 631175, upload-time = "2025-02-18T16:24:22.304Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/85/46cc8ad5bf44a8f8626336ad3ffcd171c60002189b8b6dd0fdb80a7d444d/pesto_pitch-2.0.1-py3-none-any.whl", hash = "sha256:2eb1e5ac1c2f78f7563f4800cccd73daf04d52717ff0d95ea30257a56f3f9d37", size = 627938, upload-time = "2025-02-18T16:24:18.845Z" },
 ]
 
 [[package]]
@@ -2366,7 +2397,9 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "librosa" },
+    { name = "mir-eval" },
     { name = "numpy" },
+    { name = "pesto-pitch" },
     { name = "sagemaker" },
     { name = "soundfile" },
     { name = "torch" },
@@ -2377,7 +2410,9 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.50" },
     { name = "librosa", specifier = ">=0.11.0" },
+    { name = "mir-eval", specifier = ">=0.8.2" },
     { name = "numpy", specifier = ">=2.4.6" },
+    { name = "pesto-pitch", specifier = ">=2.0.1" },
     { name = "sagemaker", specifier = ">=3.16.0" },
     { name = "soundfile", specifier = ">=0.14.0" },
     { name = "torch", specifier = ">=2.13.0" },

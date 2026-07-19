@@ -20,11 +20,13 @@ from pathlib import Path
 
 from stemify.baselines.base import PitchBaseline
 from stemify.baselines.basic_pitch import BasicPitchBaseline
+from stemify.baselines.pesto import PestoBaseline
 from stemify.baselines.pyin import PyinBaseline
 from stemify.data.idmt_smt_bass import Note, index
 
 BASELINES: dict[str, type[PitchBaseline]] = {
     "pyin": PyinBaseline,
+    "pesto": PestoBaseline,
     "basic-pitch": BasicPitchBaseline,
 }
 

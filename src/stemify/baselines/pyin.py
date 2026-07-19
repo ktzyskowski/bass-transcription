@@ -10,7 +10,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.baselines.base import PitchBaseline
+from stemify.baselines.base import F0Contour, PitchBaseline
 from stemify.data import features
 
 # Search range. The lower bound is the open low E (E1, ~41 Hz). The upper bound
@@ -19,6 +19,7 @@ from stemify.data import features
 # metrics instead of being silently clipped to the correct octave.
 FMIN = librosa.note_to_hz("E1")
 FMAX = librosa.note_to_hz("A4")
+HOP_LENGTH = 512  # pyin's default; pinned so the time grid is explicit
 
 
 class PyinBaseline(PitchBaseline):
@@ -28,12 +29,25 @@ class PyinBaseline(PitchBaseline):
         self.fmin = fmin
         self.fmax = fmax
 
-    def predict_pitch(self, path: str | Path) -> float | None:
+    def predict_f0(self, path: str | Path) -> F0Contour:
         audio = features.load_audio(path)
-        f0, _voiced_flag, _voiced_prob = librosa.pyin(
-            audio, sr=features.SAMPLE_RATE, fmin=self.fmin, fmax=self.fmax
+        f0, _voiced_flag, voiced_prob = librosa.pyin(
+            audio,
+            sr=features.SAMPLE_RATE,
+            fmin=self.fmin,
+            fmax=self.fmax,
+            hop_length=HOP_LENGTH,
         )
-        voiced = f0[~np.isnan(f0)]
+        times = librosa.times_like(
+            f0, sr=features.SAMPLE_RATE, hop_length=HOP_LENGTH
+        )
+        # pyin marks unvoiced frames with NaN; mir_eval wants 0.0.
+        freqs = np.nan_to_num(f0, nan=0.0)
+        return F0Contour(times=times, freqs=freqs, confidence=voiced_prob)
+
+    def predict_pitch(self, path: str | Path) -> float | None:
+        contour = self.predict_f0(path)
+        voiced = contour.freqs[contour.freqs > 0]
         if voiced.size == 0:
             return None
         # Median over voiced frames: robust to the pitch wobble at onset/decay.
