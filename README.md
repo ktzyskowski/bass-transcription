@@ -27,7 +27,10 @@ unzip IDMT-SMT-BASS.zip -d idmt_smt_bass && rm IDMT-SMT-BASS.zip
 ## Layout
 
 ```text
-src/data/     dataset loaders and feature extraction
+src/stemify/  installed package
+  data/         dataset loaders and feature extraction
+  baselines/    off-the-shelf pitch estimators to beat
+  evaluation/   harness, alignment, and metrics
 docs/         dataset provenance, licensing, download instructions
 data/         downloaded datasets (gitignored)
 ```

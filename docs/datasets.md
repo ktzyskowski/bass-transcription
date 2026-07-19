@@ -24,7 +24,7 @@ Verify the download before unzipping if you like — the published MD5 is
 `884d77260aaaa3df7557f77a6b3aef18` (`md5 -q IDMT-SMT-BASS.zip` on macOS,
 `md5sum` on Linux).
 
-The loader in `src/data/idmt_smt_bass.py` defaults to nothing and takes the root
+The loader in `src/stemify/data/idmt_smt_bass.py` defaults to nothing and takes the root
 explicitly, so the directory name is up to you — but `index("data/raw/idmt_smt_bass")`
 is what the rest of the code assumes.
 
@@ -61,7 +61,7 @@ Underlying papers:
 ### What's actually in it
 
 Layout, filename schemas, and the gotchas found by inspecting the unpacked data
-are documented in the module docstring of `src/data/idmt_smt_bass.py`. The short
+are documented in the module docstring of `src/stemify/data/idmt_smt_bass.py`. The short
 version:
 
 - **Strings are numbered 1=E .. 4=G** (low-to-high), the reverse of standard tab
@@ -75,6 +75,64 @@ version:
   bends, and slides aren't pinned down by `(string, fret)`.
 - Published counts disagree with reality (Zenodo says ~4300 files, the PDF says
   ~5200; there are 5306 on disk, 4837 unique). Trust the index, not the docs.
+
+## MDB-bass-synth
+
+71 real songs (from MedleyDB) with **perfect frame-level bass f0 annotations**. The
+bridge off isolated notes: real recordings and real basslines, but still
+frame-level, so it needs no note segmentation and no onset detection.
+
+How the labels can be perfect: the bass stem was analysed, then *resynthesized*
+from that analysis and mixed back in. The annotation is the synthesis control
+signal, so it describes the audio exactly. The tradeoff is that the bass you hear
+is synthetic even though the surrounding song is a real recording.
+
+### Contents
+
+Per track: the full mix (stereo, resynthesized bass in place), the isolated bass
+stem (mono), and a CSV annotation.
+
+The CSV is `timestamp,hz` at a `128/44100` s hop (~2.9 ms), first frame
+zero-centred, **0 Hz = silence** — already the `mir_eval` convention used
+throughout this codebase, so it needs no conversion.
+
+Same labels apply to both the stem and the mix, which makes
+`--source stem` vs `--source mix` a clean controlled test of whether the bass
+survives a full arrangement.
+
+### Download
+
+**No scriptable fetch** — the download sits behind an email form at
+<https://synthdatasets.weebly.com/mdb-bass-synth.html>. Request it, unpack under
+`data/raw/mdb_bass_synth`, then verify the layout:
+
+```sh
+uv run python -c "from stemify.data.mdb_bass_synth import index; ts=index('data/raw/mdb_bass_synth'); print(len(ts), ts[0])"
+```
+
+The loader pairs each `*.csv` with a `*.wav` sharing its basename. The published
+archive's folder and file naming was inferred from the dataset description rather
+than an unpacked copy, so if that print fails, fix `_find_audio()` in
+[src/stemify/data/mdb_bass_synth.py](../src/stemify/data/mdb_bass_synth.py) — it
+raises with a listing of what it actually found.
+
+### License — CC BY-NC 4.0
+
+Non-commercial, but **no ND clause**, unlike IDMT-SMT-Bass. Derivative works are
+permitted, so trained weights are not themselves a licensing problem here — the
+NC term is. See the licensing summary at the bottom of this file.
+
+### Citation
+
+> Salamon, J., Bittner, R. M., Bonada, J., Bosch, J. J., Gómez, E., and Bello, J. P.
+> "An analysis/synthesis framework for automatic f0 annotation of multitrack
+> datasets." *ISMIR*, Suzhou, China, 2017.
+
+Also cite MedleyDB itself:
+
+> Bittner, R. M., Salamon, J., Tierney, M., Mauch, M., Cannam, C., and Bello, J. P.
+> "MedleyDB: A multitrack dataset for annotation-intensive MIR research." *ISMIR*,
+> 155–160, Taipei, Taiwan, 2014.
 
 ## Planned
 
@@ -91,3 +149,22 @@ Not yet downloaded — see the staged data plan.
 
 Check each one's license independently. The IDMT-SMT-Bass situation says nothing
 about theirs.
+
+## Licensing summary
+
+| Dataset | License | Commercial use | Derivative works (weights) |
+|---|---|---|---|
+| IDMT-SMT-Bass | CC BY-NC-ND 4.0 (assumed — contradictory, see above) | ✗ | ✗ |
+| MDB-bass-synth | CC BY-NC 4.0 | ✗ | ✓ |
+| Slakh2100 (planned) | CC BY 4.0 | ✓ | ✓ |
+
+**Everything currently on disk is non-commercial.** That is fine for research and
+architecture validation, which is all this repo does today, but it means no model
+trained on the current data can ship in a commercial product.
+
+Slakh2100 is the only source on the roadmap that is commercially clean, which is a
+second reason to reach it beyond scale. If a commercial path matters, the options
+are: train the shipping model on Slakh and/or self-rendered DadaGP audio and use
+the NC datasets only for evaluation and architecture selection, or get written
+clarification from the rights holders. Decide which before, not after, a model
+becomes load-bearing.
