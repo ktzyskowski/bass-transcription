@@ -134,18 +134,80 @@ Also cite MedleyDB itself:
 > "MedleyDB: A multitrack dataset for annotation-intensive MIR research." *ISMIR*,
 > 155–160, Taipei, Taiwan, 2014.
 
+## Slakh2100
+
+1710 synthesized multitracks (redux release), 145 hours, every mix guaranteed to
+contain bass. Audio was rendered from MIDI with 187 sampled instrument patches,
+so the MIDI describes the audio exactly and labels are free.
+
+This is the **training** set, and the only source here that is commercially
+clean. Two things it uniquely provides:
+
+- **Note-level ground truth** — MIDI carries onsets and offsets, not just a
+  contour, so Slakh is what eventually unlocks note segmentation and note-level
+  P/R/F. MDB-bass-synth can never do that.
+- **Mix and isolated stem for identical material**, which makes "does the bass
+  survive an arrangement" and "does source separation earn its place" controlled
+  experiments rather than guesses.
+
+### Download
+
+One 104.3 GB tarball, no per-track fetch. MD5 `f4b71b6c45ac9b506f59788456b3f0c4`.
+Unpacked as `.wav` it is ~500 GB, so **do not unpack it whole** — stream-filter
+to keep only what the bass pipeline needs (stems, MIDI, mixes, metadata):
+
+```sh
+curl -L "https://zenodo.org/records/4599666/files/slakh2100_flac_redux.tar.gz" \
+  | tar -xz -C data/raw/slakh2100 --wildcards \
+      '*/metadata.yaml' '*/mix.flac' '*/stems/*.flac' '*/MIDI/*.mid'
+```
+
+You still transfer 104 GB either way. Do this on an EC2 instance writing to S3
+rather than a laptop — see [aws.md](aws.md).
+
+Layout is `<root>/<split>/TrackXXXXX/`, splits `train`/`validation`/`test`, plus
+an `omitted` directory holding tracks whose MIDI duplicates another's (the redux
+release moves them aside so the same material cannot land on both sides of a
+split). The loader skips `omitted` unless asked for it.
+
+### Gotchas
+
+- **Bass MIDI is not guaranteed monophonic.** It comes from Lakh — real
+  transcriptions — which contain octave doubling and overlapping releases. The
+  loader collapses overlaps to the lowest sounding pitch and exposes
+  `polyphony_rate()`; the harness drops stems above 5% by default, since a
+  doubled-octave transcription has no single right answer to score against.
+- **Some tracks have more than one bass stem.** Each becomes its own item.
+  Mix-based evaluation filters to single-bass tracks automatically, because with
+  two basses sounding one reference contour cannot describe the mix.
+- **Not every stem in `metadata.yaml` was rendered.** The `audio_rendered` and
+  `midi_saved` flags are the dataset's own record of this; the loader trusts them.
+- **The reference grid is our choice**, unlike MDB-bass-synth's annotated 2.9 ms.
+  `REFERENCE_HOP_S` defaults to 10 ms, the mir_eval melody convention.
+
+### License
+
+**CC BY 4.0** — commercial use and derivative works both permitted. The only
+dataset here without a non-commercial restriction.
+
+### Citation
+
+> Manilow, E., Wichern, G., Seetharaman, P., and Le Roux, J. "Cutting Music Source
+> Separation Some Slakh: A Dataset to Study the Impact of Training Data Quality
+> and Quantity." *WASPAA*, 2019.
+
 ## Planned
 
 Not yet downloaded — see the staged data plan.
 
 - **IDMT-SMT-Bass-Single-Track** — 17 continuous basslines with onset/offset/pitch
-  plus string/fret ground truth. The bridge dataset: exercises note segmentation
-  and the full DP fingering pipeline end-to-end.
-- **Slakh2100** — 2100 multi-track songs, aligned MIDI, isolated bass stems and
-  full mixes. Synthetic and pitch-only (no tab). For scale and full-mix robustness.
-- **DadaGP + synthesis** — bass tracks from the Guitar Pro corpus (real string/fret
-  data) rendered through a bass VST, SynthTab-style, for large-scale (audio, tab)
-  pairs.
+  plus string/fret ground truth. Exercises the full DP fingering pipeline
+  end-to-end, but at 17 tracks it is a smoke test, not an eval set.
+- **Procedurally generated MIDI + synthesis** — renders bass through a soundfont
+  for unlimited self-labeling data. Its value is *distribution control*, not
+  volume: real-song corpora will not oversample the low register or slap-thumb,
+  where pyin's octave errors concentrate. Not a replacement for Slakh, which is
+  this same pipeline already built with better musical realism.
 
 Check each one's license independently. The IDMT-SMT-Bass situation says nothing
 about theirs.

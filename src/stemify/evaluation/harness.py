@@ -35,7 +35,7 @@ import numpy as np
 from stemify.baselines.base import PitchBaseline
 from stemify.baselines.pesto import PestoBaseline
 from stemify.baselines.pyin import PyinBaseline
-from stemify.data import mdb_bass_synth
+from stemify.data import mdb_bass_synth, slakh
 from stemify.data.idmt_smt_bass import index as idmt_index
 from stemify.evaluation.alignment import FrameSet, align
 from stemify.evaluation.metrics import Metric, PitchAccuracy, PitchConfusion
@@ -70,6 +70,42 @@ def mdb_items(root: str, source: str, limit: int | None) -> list[EvalItem]:
     for track in tracks:
         times, freqs = track.reference()
         items.append(EvalItem(track.name, track.audio(source), times, freqs))
+    return items
+
+
+def slakh_items(
+    root: str,
+    source: str,
+    limit: int | None,
+    splits: tuple[str, ...] = ("test",),
+    max_polyphony: float = 0.05,
+) -> list[EvalItem]:
+    """Slakh2100: the reference is derived from the MIDI that rendered the audio.
+
+    Defaults to the ``test`` split, because the whole point of Slakh is that it
+    is large enough to train on -- evaluating on ``train`` would quietly report
+    a number that means nothing once a model exists.
+
+    Bass stems whose MIDI is substantially polyphonic are dropped: this project
+    assumes one bass note at a time, and a doubled-octave transcription has no
+    single right answer to score against. ``max_polyphony`` is the tolerance for
+    incidental note overlap at releases.
+    """
+    stems = slakh.index(root, splits=splits, unambiguous_only=(source == "mix"))
+    if limit:
+        stems = stems[:limit]
+    items, skipped = [], 0
+    for stem in stems:
+        if stem.polyphony_rate() > max_polyphony:
+            skipped += 1
+            continue
+        times, freqs = stem.reference()
+        if freqs.size == 0 or not (freqs > 0).any():
+            continue
+        items.append(EvalItem(stem.name, stem.audio(source), times, freqs))
+    if skipped:
+        print(f"skipped {skipped} bass stems above {max_polyphony:.0%} polyphony",
+              file=sys.stderr)
     return items
 
 
@@ -110,6 +146,21 @@ def collect(baseline: PitchBaseline, items: list[EvalItem]) -> FrameSet:
 
 
 def report(baseline_name: str, dataset_name: str, frames: FrameSet) -> None:
+    # Refuse to print a table for an empty run. Every rate would come out 0.0%,
+    # which reads as "the baseline scored zero" rather than "nothing was
+    # evaluated" -- the two are indistinguishable in the output and only one of
+    # them is a result.
+    if not frames.track_names:
+        raise SystemExit(
+            f"No items to evaluate for {dataset_name}. Check the dataset root, "
+            "and whether filters (polyphony, split, limit) excluded everything."
+        )
+    if not frames.voiced.any():
+        raise SystemExit(
+            f"{dataset_name}: {len(frames.track_names)} items but no "
+            "reference-voiced frames. The reference contours are all silent."
+        )
+
     print(f"\n=== {baseline_name} on {dataset_name} "
           f"({len(frames.track_names)} items, {len(frames):,} frames) ===")
     for metric in METRICS:
@@ -139,13 +190,19 @@ def report(baseline_name: str, dataset_name: str, frames: FrameSet) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--baseline", choices=BASELINES, required=True)
-    ap.add_argument("--dataset", choices=["mdb", "idmt"], default="mdb")
+    ap.add_argument("--dataset", choices=["mdb", "slakh", "idmt"], default="mdb")
     ap.add_argument("--root", help="dataset root (defaults per dataset)")
     ap.add_argument(
         "--source",
         choices=["stem", "mix"],
         default="stem",
-        help="mdb only: isolated bass stem, or the full mix it sits in",
+        help="mdb/slakh only: isolated bass stem, or the full mix it sits in",
+    )
+    ap.add_argument(
+        "--split",
+        default="test",
+        help="slakh only: train/validation/test. Defaults to test -- slakh is a "
+        "training set, so evaluating on train reports a meaningless number.",
     )
     ap.add_argument(
         "--limit",
@@ -160,6 +217,10 @@ def main() -> None:
         root = args.root or "data/raw/mdb_bass_synth"
         items = mdb_items(root, args.source, args.limit)
         label = f"mdb-bass-synth ({args.source})"
+    elif args.dataset == "slakh":
+        root = args.root or "data/raw/slakh2100"
+        items = slakh_items(root, args.source, args.limit, splits=(args.split,))
+        label = f"slakh2100 {args.split} ({args.source})"
     else:
         root = args.root or "data/raw/idmt_smt_bass"
         items = idmt_items(root, args.limit)

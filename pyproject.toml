@@ -13,6 +13,7 @@ dependencies = [
     "mir-eval>=0.8.2",
     "numpy>=2.4.6",
     "pesto-pitch>=2.0.1",
+    "pretty-midi>=0.2.11",
     "sagemaker>=3.16.0",
     "soundfile>=0.14.0",
     "torch>=2.13.0",
