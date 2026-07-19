@@ -22,7 +22,8 @@ import librosa
 import numpy as np
 import torch
 
-from stemify.baselines.base import F0Contour, PitchBaseline
+from stemify.baselines.base import PitchBaseline
+from stemify.contour import Contour
 
 
 class PestoBaseline(PitchBaseline):
@@ -38,7 +39,7 @@ class PestoBaseline(PitchBaseline):
         self.step_size = step_size
         self.confidence_threshold = confidence_threshold
 
-    def predict_f0(self, path: str | Path) -> F0Contour:
+    def predict_f0(self, path: str | Path) -> Contour:
         import pesto  # deferred: importing pesto pulls in the torch model stack
 
         # Load at native sample rate to preserve the low-frequency content that
@@ -53,7 +54,7 @@ class PestoBaseline(PitchBaseline):
         confidence = confidence.detach().cpu().numpy()
         # Threshold confidence into voicing; unvoiced frames become 0 Hz.
         freqs = np.where(confidence >= self.confidence_threshold, pitch_hz, 0.0)
-        return F0Contour(times=times, freqs=freqs, confidence=confidence)
+        return Contour(times=times, freqs=freqs, confidence=confidence)
 
     def predict_pitch(self, path: str | Path) -> float | None:
         contour = self.predict_f0(path)

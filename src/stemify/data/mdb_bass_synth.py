@@ -37,11 +37,15 @@ immediately rather than silently yielding zero tracks.
 """
 
 import csv
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import librosa
 import numpy as np
+
+from stemify.contour import Contour
+from stemify.data.base import Dataset, EvalItem
 
 # Annotation hop, per the dataset documentation. Not used for parsing -- the
 # CSV carries explicit timestamps -- but recorded because it sets the reference
@@ -51,26 +55,38 @@ ANNOTATION_HOP_S = 128 / 44100
 
 
 @dataclass(frozen=True)
-class Track:
-    """One song: a bass stem, the full mix it came from, and their shared labels."""
+class Track(EvalItem):
+    """One song: a bass stem, the full mix it came from, and their shared labels.
 
-    name: str
+    ``source`` is fixed per item rather than passed to ``audio()``, so a dataset
+    configured for mixes cannot accidentally be scored against stems partway
+    through a run.
+    """
+
+    track_name: str
     stem_path: Path
     annotation_path: Path
     mix_path: Path | None = None
+    source: str = "stem"
 
-    def audio(self, source: str = "stem") -> Path:
-        """Path to evaluate against. ``stem`` isolates pitch tracking; ``mix``
-        additionally tests whether the bass is findable inside an arrangement."""
-        if source == "stem":
+    @property
+    def name(self) -> str:
+        return self.track_name
+
+    @property
+    def groups(self) -> dict[str, str]:
+        return {"source": self.source}
+
+    def audio(self) -> Path:
+        """``stem`` isolates pitch tracking; ``mix`` additionally tests whether
+        the bass is findable inside an arrangement."""
+        if self.source == "stem":
             return self.stem_path
-        if source == "mix":
-            if self.mix_path is None:
-                raise FileNotFoundError(f"{self.name}: no mix file found")
-            return self.mix_path
-        raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
+        if self.mix_path is None:
+            raise FileNotFoundError(f"{self.name}: no mix file found")
+        return self.mix_path
 
-    def reference(self) -> tuple[np.ndarray, np.ndarray]:
+    def reference(self) -> Contour:
         """Load the annotation as ``(times, freqs)``, 0 Hz where silent.
 
         This replaces the RMS-gated synthetic reference the IDMT harness had to
@@ -89,7 +105,7 @@ class Track:
                     continue  # tolerate a header line
                 times.append(t)
                 freqs.append(f)
-        return np.asarray(times), np.asarray(freqs)
+        return Contour(np.asarray(times), np.asarray(freqs))
 
     def duration(self) -> float:
         return librosa.get_duration(path=str(self.stem_path))
@@ -125,7 +141,12 @@ def index(root: str | Path) -> list[Track]:
             orphans.append(name)
             continue
         tracks.append(
-            Track(name=name, stem_path=stem, annotation_path=annotation, mix_path=mix)
+            Track(
+                track_name=name,
+                stem_path=stem,
+                annotation_path=annotation,
+                mix_path=mix,
+            )
         )
 
     if not tracks:
@@ -138,3 +159,36 @@ def index(root: str | Path) -> list[Track]:
     if orphans:
         print(f"warning: {len(orphans)} annotations without audio, e.g. {orphans[:3]}")
     return tracks
+
+
+class MdbDataset(Dataset):
+    """MDB-bass-synth, evaluated on either the isolated stem or the full mix.
+
+    The same annotations describe both, which is what makes stem-vs-mix a
+    controlled comparison rather than two unrelated numbers.
+    """
+
+    def __init__(
+        self,
+        root: str | Path,
+        source: str = "stem",
+        limit: int | None = None,
+    ) -> None:
+        if source not in ("stem", "mix"):
+            raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
+        self.source = source
+        tracks = index(root)
+        if limit:
+            tracks = tracks[:limit]
+        # Source is bound into each item at construction, so it cannot drift.
+        self._tracks = [replace(t, source=source) for t in tracks]
+
+    @property
+    def name(self) -> str:
+        return f"mdb-bass-synth ({self.source})"
+
+    def __iter__(self) -> Iterator[Track]:
+        return iter(self._tracks)
+
+    def __len__(self) -> int:
+        return len(self._tracks)

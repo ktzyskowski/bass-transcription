@@ -18,8 +18,20 @@ else.
 """
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+import librosa
+import numpy as np
+
+from stemify.contour import Contour
+from stemify.data.base import Dataset, EvalItem
+
+# Voicing is inferred, not annotated: a 10 ms grid gated at 40 dB below the
+# clip's own peak. See Note.reference for why this is the weakest reference here.
+REF_HOP_S = 0.01
+REF_FLOOR_DB = -40.0
 
 # Bass guitars, keyed by the {bass} field. BS_4 only appears in SLD/SLU.
 BASSES = {
@@ -83,7 +95,7 @@ _LONG = re.compile(
 
 
 @dataclass(frozen=True)
-class Note:
+class Note(EvalItem):
     """A single recorded note and its ground-truth labels."""
 
     path: Path
@@ -93,6 +105,21 @@ class Note:
     expression: str
     string: int
     fret: int
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    def audio(self) -> Path:
+        return self.path
+
+    @property
+    def groups(self) -> dict[str, str]:
+        return {
+            "string": str(self.string),
+            "plucking": self.plucking,
+            "expression": self.expression,
+        }
 
     @property
     def expression_parent(self) -> str | None:
@@ -111,6 +138,24 @@ class Note:
             return None
         open_midi = OPEN_STRING_MIDI.get(self.string)
         return None if open_midi is None else open_midi + self.fret
+
+    def reference(self) -> Contour:
+        """This note's labelled pitch, wherever the clip has energy.
+
+        Unlike the annotated datasets, IDMT has no voicing ground truth -- the
+        label says *what* is played, never *when* it sounds. So voicing is
+        inferred by gating on RMS, which cuts the decay tail off at an arbitrary
+        level and is the weakest reference in the project. It is fine here only
+        because every clip is one sustained note whose answer never changes.
+        """
+        if self.midi_pitch is None:
+            return Contour.empty()
+        audio, sr = librosa.load(self.path, sr=None, mono=True)
+        hop = max(1, round(sr * REF_HOP_S))
+        rms = librosa.feature.rms(y=audio, frame_length=hop * 4, hop_length=hop)[0]
+        times = librosa.times_like(rms, sr=sr, hop_length=hop)
+        voiced = librosa.amplitude_to_db(rms, ref=np.max) > REF_FLOOR_DB
+        return Contour.constant(librosa.midi_to_hz(self.midi_pitch), times, voiced)
 
 
 def parse_filename(path: Path) -> Note | None:
@@ -152,3 +197,34 @@ def index(root: str | Path, drop_duplicates: bool = True) -> list[Note]:
             continue
         notes.append(note)
     return notes
+
+
+class IdmtDataset(Dataset):
+    """IDMT-SMT-Bass isolated notes, restricted to those with a known pitch.
+
+    Only NO/VI/VIF/VIS are scoreable: harmonics, dead notes, bends and slides
+    are not pinned down by ``(string, fret)``, so there is no ground truth to
+    compare against and including them would score a baseline on a question the
+    dataset cannot answer.
+    """
+
+    def __init__(self, root: str | Path, limit: int | None = None) -> None:
+        self.root = Path(root)
+        if not self.root.exists():
+            raise FileNotFoundError(
+                f"{self.root} does not exist -- see docs/datasets.md for the fetch."
+            )
+        notes = [n for n in index(self.root) if n.midi_pitch is not None]
+        # Sorted order groups by expression, so a limit takes a slice of one
+        # technique rather than a sample. Callers get a smoke test, not a result.
+        self._notes = notes[:limit] if limit else notes
+
+    @property
+    def name(self) -> str:
+        return "idmt-smt-bass"
+
+    def __iter__(self) -> Iterator[Note]:
+        return iter(self._notes)
+
+    def __len__(self) -> int:
+        return len(self._notes)

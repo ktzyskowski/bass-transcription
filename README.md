@@ -27,12 +27,42 @@ unzip IDMT-SMT-BASS.zip -d idmt_smt_bass && rm IDMT-SMT-BASS.zip
 ## Layout
 
 ```text
-src/stemify/  installed package
-  data/         dataset loaders and feature extraction
-  baselines/    off-the-shelf pitch estimators to beat
-  evaluation/   harness, alignment, and metrics
-docs/         dataset provenance, licensing, download instructions
-data/         downloaded datasets (gitignored)
+src/stemify/
+  contour.py      Contour — the pitch-over-time type both sides speak
+  data/
+    base.py       Dataset / EvalItem — what a dataset must look like
+    *.py          one loader per dataset, each owning its own references
+  baselines/
+    base.py       PitchBaseline — predict_f0 and/or predict_pitch
+    *.py          off-the-shelf estimators to beat
+  evaluation/
+    run.py        Evaluation — binds dataset + baseline + metrics
+    alignment.py  resampling onto the reference grid; FrameSet pooling
+    report.py     Report — results as data, renderable and serialisable
+    metrics/      Metric.calculate(true, pred) -> MetricResult
+    harness.py    CLI
+docs/           provenance, licensing, AWS runbook
+data/           downloaded datasets (gitignored)
+```
+
+The evaluation pipeline is one sequence, and each stage belongs to exactly one
+owner:
+
+```text
+dataset  -> reference contour    the Dataset (never the runner)
+baseline -> estimate contour     the PitchBaseline
+         -> align onto ref grid  alignment.align
+         -> pool across items    FrameSet
+         -> score                the Metrics
+         -> Report               render() or write_json()
+```
+
+Adding a dataset is a `Dataset` subclass plus one line in `harness.DATASETS`.
+Adding a metric is a `Metric` subclass. Neither touches the other.
+
+```sh
+uv run python -m stemify.evaluation.harness --baseline pyin --dataset idmt
+uv run python -m stemify.evaluation.harness --baseline pesto --dataset slakh --source mix
 ```
 
 ## Licensing

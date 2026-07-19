@@ -10,7 +10,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.baselines.base import F0Contour, PitchBaseline
+from stemify.baselines.base import PitchBaseline
+from stemify.contour import Contour
 from stemify.data import features
 
 # Search range. The lower bound is the open low E (E1, ~41 Hz). The upper bound
@@ -29,7 +30,7 @@ class PyinBaseline(PitchBaseline):
         self.fmin = fmin
         self.fmax = fmax
 
-    def predict_f0(self, path: str | Path) -> F0Contour:
+    def predict_f0(self, path: str | Path) -> Contour:
         audio = features.load_audio(path)
         f0, _voiced_flag, voiced_prob = librosa.pyin(
             audio,
@@ -43,7 +44,7 @@ class PyinBaseline(PitchBaseline):
         )
         # pyin marks unvoiced frames with NaN; mir_eval wants 0.0.
         freqs = np.nan_to_num(f0, nan=0.0)
-        return F0Contour(times=times, freqs=freqs, confidence=voiced_prob)
+        return Contour(times=times, freqs=freqs, confidence=voiced_prob)
 
     def predict_pitch(self, path: str | Path) -> float | None:
         contour = self.predict_f0(path)

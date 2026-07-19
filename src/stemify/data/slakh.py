@@ -42,12 +42,16 @@ violates the premise and should probably be filtered out rather than trusted.
 """
 
 import warnings
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
 
 import numpy as np
 import yaml
+
+from stemify.contour import Contour
+from stemify.data.base import Dataset, EvalItem
 
 # Frame grid for the reference contour. 10 ms is the mir_eval melody convention
 # and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our
@@ -61,7 +65,7 @@ SPLITS = ("train", "validation", "test")
 
 
 @dataclass(frozen=True)
-class BassStem:
+class BassStem(EvalItem):
     """One rendered bass stem, its MIDI, and the mix it sits inside."""
 
     track: str  # e.g. "Track00042"
@@ -72,10 +76,19 @@ class BassStem:
     mix_path: Path
     program_name: str
     n_bass_stems: int  # how many bass stems the parent track has
+    source: str = "stem"
 
     @property
     def name(self) -> str:
         return f"{self.track}/{self.stem_id}"
+
+    @property
+    def groups(self) -> dict[str, str]:
+        return {
+            "split": self.split,
+            "source": self.source,
+            "program": self.program_name,
+        }
 
     @property
     def unambiguous(self) -> bool:
@@ -87,12 +100,8 @@ class BassStem:
         """
         return self.n_bass_stems == 1
 
-    def audio(self, source: str = "stem") -> Path:
-        if source == "stem":
-            return self.stem_path
-        if source == "mix":
-            return self.mix_path
-        raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
+    def audio(self) -> Path:
+        return self.stem_path if self.source == "stem" else self.mix_path
 
     @cached_property
     def _notes(self) -> list[tuple[float, float, int]]:
@@ -112,7 +121,7 @@ class BassStem:
         ]
         return sorted(notes)
 
-    def reference(self, hop_s: float = REFERENCE_HOP_S) -> tuple[np.ndarray, np.ndarray]:
+    def reference(self, hop_s: float = REFERENCE_HOP_S) -> Contour:
         """Frame-level ``(times, freqs)``, 0 Hz where no note sounds.
 
         Overlapping notes collapse to the lowest sounding pitch -- this is a
@@ -121,7 +130,7 @@ class BassStem:
         """
         notes = self._notes
         if not notes:
-            return np.zeros(0), np.zeros(0)
+            return Contour.empty()
 
         end = max(e for _, e, _ in notes)
         times = np.arange(0.0, end + hop_s, hop_s)
@@ -135,7 +144,7 @@ class BassStem:
         freqs = np.zeros_like(times)
         # 440 * 2^((p - 69) / 12), i.e. librosa.midi_to_hz without the import.
         freqs[sounding] = 440.0 * 2.0 ** ((pitches[sounding] - 69.0) / 12.0)
-        return times, freqs
+        return Contour(times, freqs)
 
     def polyphony_rate(self, hop_s: float = REFERENCE_HOP_S) -> float:
         """Fraction of sounding frames with more than one note active.
@@ -233,3 +242,57 @@ def index(
     if unambiguous_only:
         stems = [s for s in stems if s.unambiguous]
     return stems
+
+
+class SlakhDataset(Dataset):
+    """Slakh2100 bass stems, filtered to those the monophonic premise holds for.
+
+    Defaults to the ``test`` split. Slakh is large enough to train on, so
+    evaluating on ``train`` reports a number that stops meaning anything the
+    moment a model exists.
+
+    Stems whose MIDI is substantially polyphonic are dropped: a doubled-octave
+    transcription has no single right answer, and scoring against one would
+    manufacture octave errors that are the transcription's fault rather than the
+    model's -- especially misleading in a project whose central metric is the
+    octave-error rate.
+
+    The polyphony filter reads every candidate's MIDI, so construction is the
+    expensive part and iteration is cheap. Pass ``limit`` to cut that cost while
+    iterating.
+    """
+
+    def __init__(
+        self,
+        root: str | Path,
+        split: str = "test",
+        source: str = "stem",
+        limit: int | None = None,
+        max_polyphony: float = 0.05,
+    ) -> None:
+        if source not in ("stem", "mix"):
+            raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
+        self.split = split
+        self.source = source
+        stems = index(root, splits=(split,), unambiguous_only=(source == "mix"))
+        if limit:
+            stems = stems[:limit]
+
+        self.skipped_polyphonic = 0
+        kept = []
+        for stem in stems:
+            if stem.polyphony_rate() > max_polyphony:
+                self.skipped_polyphonic += 1
+                continue
+            kept.append(replace(stem, source=source))
+        self._stems = kept
+
+    @property
+    def name(self) -> str:
+        return f"slakh2100 {self.split} ({self.source})"
+
+    def __iter__(self) -> Iterator[BassStem]:
+        return iter(self._stems)
+
+    def __len__(self) -> int:
+        return len(self._stems)
