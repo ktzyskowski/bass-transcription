@@ -47,6 +47,7 @@ from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
 
+import librosa
 import numpy as np
 import yaml
 
@@ -58,6 +59,14 @@ from stemify.notes import NoteEvent
 # and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our
 # choice, since MIDI is event-based and has no native grid.
 REFERENCE_HOP_S = 0.01
+
+# Per-note voicing gate. A note stays voiced from onset until its energy falls
+# NOTE_DECAY_DB below that note's *own* attack peak (measured over the first
+# ATTACK_WINDOW_S). Relative to the note, not the track: a quiet note gets the
+# same proportional decay window as a loud one, where a track-relative floor
+# would gate the quiet note out early.
+NOTE_DECAY_DB = 40.0
+ATTACK_WINDOW_S = 0.05
 
 # Slakh's instrument taxonomy labels bass stems with this inst_class.
 BASS_CLASS = "Bass"
@@ -140,31 +149,59 @@ class BassStem(EvalItem):
         ]
         return sorted(notes)
 
-    def reference(self, hop_s: float = REFERENCE_HOP_S) -> Contour:
-        """Frame-level ``(times, freqs)``, 0 Hz where no note sounds.
+    def reference(
+        self, hop_s: float = REFERENCE_HOP_S, decay_db: float = NOTE_DECAY_DB
+    ) -> Contour:
+        """Frame-level ``(times, freqs)``, 0 Hz where no bass sounds.
 
-        Overlapping notes collapse to the lowest sounding pitch -- this is a
-        bass line, and the lowest voice is the one a bass tracker should follow.
-        See ``polyphony_rate`` for how often that collapse is doing real work.
+        Voicing is gated **per note against the note's own attack**, not read
+        straight from MIDI note-off. A rendered bass note keeps sounding through
+        its decay after MIDI says it ended -- measured, ~31% of MIDI-silent
+        frames still carry audible bass -- so pure note-on/off voicing is ~30%
+        too tight and charges a tracker a false alarm for correctly following a
+        dying note. Each note is voiced across its MIDI span and then through its
+        decay until its energy falls ``decay_db`` below that note's own attack
+        peak (or the next note starts). Per-note rather than track-relative so a
+        quiet note gets the same proportional decay window as a loud one.
+
+        The gate reads the *stem* even when the mix will be scored, because this
+        is ground truth about the bass, independent of what a baseline listens
+        to. Overlapping notes collapse to the lowest voice (``np.fmin``).
         """
         notes = self._notes
         if not notes:
             return Contour.empty()
 
-        end = max(e for _, e, _ in notes)
-        times = np.arange(0.0, end + hop_s, hop_s)
-        # MIDI pitch per frame; NaN reads as silence and keeps np.fmin simple.
-        pitches = np.full(times.shape, np.nan)
-        for start, stop, pitch in notes:
-            lo, hi = np.searchsorted(times, [start, stop])
-            pitches[lo:hi] = np.fmin(pitches[lo:hi], pitch)
+        audio, sr = librosa.load(self.stem_path, sr=None, mono=True)
+        hop = max(1, round(sr * hop_s))
+        rms = librosa.feature.rms(y=audio, frame_length=hop * 4, hop_length=hop)[0]
+        # The audio grid may run past the last note-off -- that overhang is the
+        # decay this gate exists to keep, so times come from the audio.
+        times = librosa.times_like(rms, sr=sr, hop_length=hop)
+        energy_db = librosa.amplitude_to_db(rms, ref=np.max)
+        attack_frames = max(1, round(ATTACK_WINDOW_S / hop_s))
+        onsets = [n[0] for n in notes]
 
-        sounding = ~np.isnan(pitches)
+        midi = np.full(times.shape, np.nan)
+        for i, (start, end, pitch) in enumerate(notes):
+            lo = int(np.searchsorted(times, start))
+            # A note owns frames up to the next onset; its decay lives in there.
+            nxt = onsets[i + 1] if i + 1 < len(notes) else times[-1] + hop_s
+            hi = int(np.searchsorted(times, nxt))
+            if hi <= lo:
+                continue
+            peak_db = energy_db[lo : min(lo + attack_frames, hi)].max()
+            off = int(np.searchsorted(times, end))
+            # Voiced across the MIDI span (precise onsets), then through decay
+            # while energy stays within decay_db of this note's own attack.
+            active = np.arange(lo, hi) < off
+            seg_voiced = active | (energy_db[lo:hi] > peak_db - decay_db)
+            vals = np.where(seg_voiced, pitch - BASS_TRANSPOSE, np.nan)
+            midi[lo:hi] = np.fmin(midi[lo:hi], vals)
+
         freqs = np.zeros_like(times)
-        # 440 * 2^((p - 69) / 12), i.e. librosa.midi_to_hz without the import.
-        freqs[sounding] = 440.0 * 2.0 ** (
-            (pitches[sounding] - BASS_TRANSPOSE - 69.0) / 12.0
-        )
+        sounding = ~np.isnan(midi)
+        freqs[sounding] = 440.0 * 2.0 ** ((midi[sounding] - 69.0) / 12.0)
         return Contour(times, freqs)
 
     def reference_notes(self) -> list[NoteEvent]:
