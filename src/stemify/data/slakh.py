@@ -345,12 +345,22 @@ class SlakhDataset(Dataset):
         source: str = "stem",
         limit: int | None = None,
         max_polyphony: float = 0.05,
+        unambiguous_only: bool | None = None,
     ) -> None:
         if source not in ("stem", "mix"):
             raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
         self.split = split
         self.source = source
-        stems = index(root, splits=(split,), unambiguous_only=(source == "mix"))
+        # Mixes *require* single-bass tracks -- with two basses sounding, one
+        # reference contour cannot describe the mix. Stems do not, so the two
+        # sources otherwise yield different track sets (147 vs 124 on test),
+        # which would silently make a stem-vs-mix comparison uncontrolled.
+        # Pass unambiguous_only=True explicitly to hold the set fixed across
+        # conditions.
+        if unambiguous_only is None:
+            unambiguous_only = source == "mix"
+        self.unambiguous_only = unambiguous_only
+        stems = index(root, splits=(split,), unambiguous_only=unambiguous_only)
         if limit:
             stems = stems[:limit]
 
