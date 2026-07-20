@@ -2,7 +2,7 @@
 
 A ``Metric`` receives two frame-aligned pitch arrays and returns a
 ``MetricResult``. It does no resampling, no voicing inference, no aggregation --
-``Evaluation`` has already done all of that (see ``stemify.evaluation.evaluation``).
+``FrameEvaluation`` has already done all of that (see ``stemify.evaluation.frame``).
 That is the whole point of the split: metrics stay stateless and comparable, and
 alignment is implemented once rather than once per metric.
 
@@ -14,7 +14,7 @@ The contract for ``calculate(true, pred)``:
     reference defines where questions get asked, the estimate is resampled onto
     it
 
-Aggregation across a dataset is *not* a metric concern. ``Evaluation`` pools frames
+Aggregation across a dataset is *not* a metric concern. ``FrameEvaluation`` pools frames
 from every track into one pair of arrays and calls ``calculate`` once, which
 makes results frame-weighted by construction. Per-group breakdowns (per track,
 per string) are the same call on a boolean-masked subset. There is deliberately

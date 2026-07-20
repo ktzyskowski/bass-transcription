@@ -28,6 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from stemify.contour import Contour
+from stemify.notes import NoteEvent
 
 
 class EvalItem(ABC):
@@ -45,6 +46,17 @@ class EvalItem(ABC):
     @abstractmethod
     def reference(self) -> Contour:
         """Ground-truth pitch over time. Built on demand, not at index time."""
+
+    def reference_notes(self) -> list[NoteEvent]:
+        """Ground-truth note events, for note-level evaluation.
+
+        Optional: only datasets with note-native truth (Slakh's MIDI, IDMT's
+        one-note clips) implement this. A frame-annotated dataset like
+        MDB-bass-synth has no note boundaries to report and stays frame-level.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no note-level reference"
+        )
 
     @property
     def groups(self) -> dict[str, str]:

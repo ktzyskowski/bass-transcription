@@ -15,20 +15,10 @@ requires it yet.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 
 from stemify.contour import Contour
-
-
-@dataclass(frozen=True)
-class NoteEvent:
-    """A detected note, for the future note-level transcription stages."""
-
-    onset: float  # seconds
-    offset: float  # seconds
-    midi_pitch: float
-    confidence: float = 1.0
+from stemify.notes import NoteEvent
 
 
 class PitchBaseline(ABC):

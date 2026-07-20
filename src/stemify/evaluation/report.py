@@ -1,27 +1,34 @@
-"""A run's results as data, not as printed output.
+"""The shared surface of an evaluation result.
 
-The previous harness printed and returned nothing, which meant a result existed
-only in a terminal scrollback. That is fine while iterating by hand and useless
-the moment you want to compare two baselines, track RPA across commits, or read
-back what a SageMaker job produced. A ``Report`` is serialisable, so a run can be
-written to S3 next to the model it evaluated.
+A run's results are data, not printed output: the previous harness printed and
+returned nothing, so a result existed only in a scrollback -- impossible to diff
+across runs or read back from a stored job. Every report is therefore
+serialisable and renderable.
 
-Rendering stays here rather than in the metrics: a metric knows how to format
-*itself*, a report knows how to lay out a whole run.
+Frame-level and note-level evaluations produce different reports (``FrameReport``
+in ``frame``, ``NoteReport`` in ``note``) -- they carry different numbers and lay
+themselves out differently. What they share is this surface: ``render`` for a
+human, ``to_dict`` for a machine, and ``write_json`` on top of ``to_dict``. The
+base supplies ``write_json`` once so neither subclass repeats it, and lets a
+caller (the CLI, a comparison script) hold either report behind one type.
+
+The base is intentionally thin. Aggregation and formatting are level-specific and
+live with each subclass; forcing them into a shared template would abstract over
+almost nothing, since a frame report pools metric results by group while a note
+report pools tp/fp/fn counts.
 """
 
 import json
-from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from stemify.evaluation.metrics.base import MetricResult
 
-
-def _jsonable(value: Any) -> Any:
-    """Convert numpy types to something ``json`` will accept."""
+def jsonable(value: Any) -> Any:
+    """Convert numpy scalars/arrays to something ``json`` accepts. Shared by both
+    report types, which both serialise numbers that may arrive as numpy dtypes."""
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, (np.integer, np.floating)):
@@ -29,98 +36,20 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-@dataclass(frozen=True)
-class Report:
-    """What one baseline scored on one dataset, overall and by group."""
+class Report(ABC):
+    """What one run scored, as a diffable, renderable object.
 
-    baseline: str
-    dataset: str
-    n_items: int
-    n_frames: int
-    overall: list[MetricResult]
-    # How the audio was prepared before the baseline heard it. Defaulted so
-    # existing callers keep working, but always recorded, because a result is
-    # not interpretable without knowing whether it came from a clean stem or a
-    # separated one.
-    transform: str = "identity"
-    breakdowns: dict[str, dict[str, list[MetricResult]]] = field(default_factory=dict)
-    per_item: list[tuple[str, dict[str, float]]] = field(default_factory=list)
+    Subclasses implement ``render`` (human-readable) and ``to_dict`` (a plain
+    JSON-able dict); ``write_json`` comes for free from ``to_dict``.
+    """
 
-    def scalar(self, metric: str, key: str) -> float | None:
-        """One number by name, for comparing runs without parsing text."""
-        for result in self.overall:
-            if result.name == metric:
-                return result.scalars.get(key)
-        return None
+    @abstractmethod
+    def render(self, worst: int = 10) -> str:
+        """A human-readable summary. ``worst`` bounds the worst-items tail."""
 
+    @abstractmethod
     def to_dict(self) -> dict:
-        """Serialisable form. Arrays are kept -- a confusion matrix is small and
-        is the part you would want to plot later from a stored run."""
-        return {
-            "baseline": self.baseline,
-            "dataset": self.dataset,
-            "transform": self.transform,
-            "n_items": self.n_items,
-            "n_frames": self.n_frames,
-            "overall": {
-                r.name: {
-                    "scalars": {k: _jsonable(v) for k, v in r.scalars.items()},
-                    "arrays": {k: _jsonable(v) for k, v in r.arrays.items()},
-                }
-                for r in self.overall
-            },
-            "breakdowns": {
-                key: {
-                    value: {
-                        r.name: {k: _jsonable(v) for k, v in r.scalars.items()}
-                        for r in results
-                    }
-                    for value, results in buckets.items()
-                }
-                for key, buckets in self.breakdowns.items()
-            },
-            "per_item": [
-                {"name": name, **{k: _jsonable(v) for k, v in scalars.items()}}
-                for name, scalars in self.per_item
-            ],
-        }
+        """A plain dict suitable for ``json.dumps`` -- the machine-readable form."""
 
     def write_json(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), indent=2))
-
-    def render(self, worst: int = 10) -> str:
-        lines = [
-            f"\n=== {self.baseline} on {self.dataset} "
-            f"({self.n_items:,} items, {self.n_frames:,} frames) ===",
-        ]
-        if self.transform != "identity":
-            lines.append(f"    audio preprocessed by: {self.transform}")
-        for result in self.overall:
-            lines += [f"\n{result.name}", result.render()]
-
-        for key, buckets in self.breakdowns.items():
-            lines.append(f"\nby {key}")
-            lines.append(f"  {key:<14} {'n':>9} {'RPA':>8} {'RCA':>8} {'gap':>8}")
-            for value, results in buckets.items():
-                scalars = next(
-                    (r.scalars for r in results if r.name == "pitch-accuracy"), None
-                )
-                if scalars is None:
-                    continue
-                lines.append(
-                    f"  {value[:14]:<14} {scalars['n_voiced']:>9,.0f} "
-                    f"{scalars['rpa']:>8.1%} {scalars['rca']:>8.1%} "
-                    f"{scalars['octave_gap']:>8.1%}"
-                )
-
-        # A good aggregate can hide a handful of items the baseline fails
-        # outright, which is a different problem from being uniformly mediocre.
-        if len(self.per_item) > 1 and worst:
-            ranked = sorted(self.per_item, key=lambda pair: pair[1]["rpa"])[:worst]
-            lines.append(f"\nworst {len(ranked)} items by RPA")
-            lines.append(f"  {'RPA':>8} {'oct-gap':>8}  item")
-            for name, scalars in ranked:
-                lines.append(
-                    f"  {scalars['rpa']:>8.1%} {scalars['octave_gap']:>8.1%}  {name[:50]}"
-                )
-        return "\n".join(lines)

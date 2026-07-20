@@ -2,20 +2,16 @@
 
     uv run python -m stemify.evaluation.cli --baseline pyin --dataset idmt
     uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --source mix
-    uv run python -m stemify.evaluation.cli --baseline pesto --dataset mdb --json out.json
+    uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --level note
 
 This module is only argument parsing. The work is:
 
-    Evaluation(dataset, baseline).run() -> Report
+    FrameEvaluation(dataset, baseline).run() -> FrameReport   (--level frame)
+    NoteEvaluation(dataset, baseline).run()  -> NoteReport    (--level note)
 
 Adding a dataset means writing a ``Dataset`` subclass and adding one line to
-``DATASETS`` -- the runner, the metrics and the report need no changes, because
+``DATASETS`` -- the runners, the metrics and the reports need no changes, because
 a dataset owns how its own references are built.
-
-Replaces the old evaluation/pitch.py, whose note-level accuracy on isolated
-notes was RPA/RCA at a different granularity and whose per-string and
-per-plucking tables are now ``Report`` breakdowns. Baselines that only answer
-with a single pitch per clip (basic-pitch) still work: see ``Evaluation._estimate``.
 """
 
 import argparse
@@ -30,7 +26,7 @@ from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
-from stemify.evaluation import Evaluation
+from stemify.evaluation import FrameEvaluation, NoteEvaluation
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 BASELINES: dict[str, type[PitchBaseline]] = {
@@ -109,7 +105,16 @@ def main() -> None:
         type=int,
         default=1,
         help="process-pool width for scoring. Near-linear speedup on CPU-bound "
-        "conditions (pyin). Keep at 1 for --separate demucs on a cold cache.",
+        "conditions (pyin). Frame-level only. Keep at 1 for --separate demucs "
+        "on a cold cache.",
+    )
+    ap.add_argument(
+        "--level",
+        choices=["frame", "note"],
+        default="frame",
+        help="frame: pitch per instant (RPA/RCA/Overall). note: discrete note "
+        "events (precision/recall/F1), which needs a note-native dataset "
+        "(slakh, idmt). Frame-level separation flags do not apply to note.",
     )
     ap.add_argument("--json", type=Path, help="also write the report here")
     args = ap.parse_args()
@@ -121,15 +126,19 @@ def main() -> None:
         DemucsSeparator() if args.separate == "demucs" else Identity()
     )
     try:
-        evaluation = Evaluation(
-            dataset=build_dataset(args),
-            baseline=BASELINES[args.baseline](),
-            transform=transform,
-            group_by=args.group_by,
-            workers=args.workers,
-        )
-        report = evaluation.run()
-    except (FileNotFoundError, ValueError) as exc:
+        dataset = build_dataset(args)
+        baseline = BASELINES[args.baseline]()
+        if args.level == "note":
+            report = NoteEvaluation(dataset, baseline).run()
+        else:
+            report = FrameEvaluation(
+                dataset=dataset,
+                baseline=baseline,
+                transform=transform,
+                group_by=args.group_by,
+                workers=args.workers,
+            ).run()
+    except (FileNotFoundError, ValueError, NotImplementedError) as exc:
         raise SystemExit(str(exc)) from exc
 
     print(report.render())

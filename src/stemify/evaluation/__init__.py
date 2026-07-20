@@ -1,33 +1,40 @@
-"""Scoring a pitch baseline against a dataset.
+"""Scoring a pitch baseline against a dataset, frame-level and note-level.
 
-    from stemify.evaluation import Evaluation
-    report = Evaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
+    from stemify.evaluation import FrameEvaluation, NoteEvaluation
+    frame = FrameEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
+    notes = NoteEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
 
-``Evaluation`` and ``Report`` are re-exported here so callers never reach into a
-submodule: a notebook, a test, or a SageMaker entry point imports them straight
-from the package.
+Two parallel harnesses, same shape (dataset + baseline -> a ``Report``), different
+question:
 
-The module is named after the class it holds. ``stemify.evaluation.evaluation``
-does repeat itself, but that path is written exactly once -- in the re-export
-below -- because Python code imports the class, not the module. The alternative
-was naming the module after a verb (``run.py``), which reads fine in an import
-line and tells you nothing about what is inside. The stdlib makes the same
-trade in ``datetime.datetime``.
+    frame.py  FrameEvaluation -> FrameReport   "what pitch at each instant"
+    note.py   NoteEvaluation  -> NoteReport     "did you find the right notes"
 
-Submodules, where the work lives:
+They are separate rather than unified because the data flow genuinely differs --
+frame pooling and per-frame metrics on one side, note-interval matching and
+count pooling on the other. What they share is the ``Report`` surface (render,
+to_dict, write_json), so a caller can hold either behind one type.
 
-    evaluation.py  Evaluation -- binds dataset + baseline + metrics
+Both are re-exported here so callers never reach into a submodule. Supporting
+pieces stay in their modules:
+
+    report.py      Report -- the shared render/to_dict/write_json surface
     alignment.py   resampling onto the reference grid, and FrameSet pooling
-    report.py      results as data
-    metrics/       Metric.calculate(true, pred) -> MetricResult
+    metrics/       Metric.calculate(true, pred) -> MetricResult   (frame-level)
+    ../segmentation.py  Segmenter -- contour -> notes, for the note harness
     cli.py         argument parsing
 
-Nothing here imports from the package root, so these re-exports cannot create a
-cycle. Keep it that way: a submodule should import ``stemify.evaluation.report``,
-never ``stemify.evaluation``.
+Nothing here imports from the package root, so these re-exports cannot cycle.
 """
 
-from stemify.evaluation.evaluation import Evaluation
+from stemify.evaluation.frame import FrameEvaluation, FrameReport
+from stemify.evaluation.note import NoteEvaluation, NoteReport
 from stemify.evaluation.report import Report
 
-__all__ = ["Evaluation", "Report"]
+__all__ = [
+    "FrameEvaluation",
+    "FrameReport",
+    "NoteEvaluation",
+    "NoteReport",
+    "Report",
+]

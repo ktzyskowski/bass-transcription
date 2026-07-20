@@ -52,6 +52,7 @@ import yaml
 
 from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
+from stemify.notes import NoteEvent
 
 # Frame grid for the reference contour. 10 ms is the mir_eval melody convention
 # and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our
@@ -165,6 +166,18 @@ class BassStem(EvalItem):
             (pitches[sounding] - BASS_TRANSPOSE - 69.0) / 12.0
         )
         return Contour(times, freqs)
+
+    def reference_notes(self) -> list[NoteEvent]:
+        """The MIDI notes as events, octave-corrected like ``reference``.
+
+        MIDI is note-native, so this is the truth in its original form rather
+        than a segmentation of a contour -- which is exactly why Slakh, not
+        MDB-bass-synth, is the dataset for note-level evaluation.
+        """
+        return [
+            NoteEvent(onset=start, offset=end, midi_pitch=pitch - BASS_TRANSPOSE)
+            for start, end, pitch in self._notes
+        ]
 
     def polyphony_rate(self, hop_s: float = REFERENCE_HOP_S) -> float:
         """Fraction of sounding frames with more than one note active.

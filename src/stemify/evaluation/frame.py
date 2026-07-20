@@ -1,9 +1,10 @@
-"""Bind a dataset, a baseline and some metrics together, and run them.
+"""Frame-level evaluation: bind a dataset, a baseline and metrics, and run them.
 
-    Evaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
+    FrameEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
 
-Everything dataset-specific lives behind ``Dataset``; everything metric-specific
-lives behind ``Metric``. This module only sequences them:
+Asks "what pitch at each instant". Everything dataset-specific lives behind
+``Dataset``, everything metric-specific behind ``Metric``; this module only
+sequences them:
 
     for each item:  reference -> predict -> align
     pool all frames
@@ -12,13 +13,18 @@ lives behind ``Metric``. This module only sequences them:
 A baseline that only implements ``predict_pitch`` is not a special case here.
 Its single answer becomes a contour held across the reference's voiced frames,
 so it flows through the same alignment and the same metrics as a frame-level
-tracker -- which is what lets note-level and frame-level baselines appear in one
-comparison table.
+tracker.
+
+The note-level counterpart is ``stemify.evaluation.note`` -- same shape
+(dataset + baseline -> a ``Report``), different question ("did you find the right
+notes") and a genuinely different data flow (interval matching, not frame
+pooling), which is why the two are separate modules rather than one.
 """
 
 import sys
 from collections.abc import Iterable
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, field
 
 import librosa
 import numpy as np
@@ -28,10 +34,106 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.alignment import FrameSet, ItemRef, align
 from stemify.evaluation.metrics import Metric, PitchAccuracy, PitchConfusion
-from stemify.evaluation.report import Report
+from stemify.evaluation.metrics.base import MetricResult
+from stemify.evaluation.report import Report, jsonable
 from stemify.transforms import AudioTransform, Identity
 
 DEFAULT_METRICS: tuple[Metric, ...] = (PitchAccuracy(), PitchConfusion())
+
+
+@dataclass(frozen=True)
+class FrameReport(Report):
+    """Frame-level result: metric outputs overall, by group, and per item."""
+
+    baseline: str
+    dataset: str
+    n_items: int
+    n_frames: int
+    overall: list[MetricResult]
+    # How the audio was prepared before the baseline heard it. Defaulted so
+    # existing callers keep working, but always recorded, because a result is
+    # not interpretable without knowing whether it came from a clean stem or a
+    # separated one.
+    transform: str = "identity"
+    breakdowns: dict[str, dict[str, list[MetricResult]]] = field(default_factory=dict)
+    per_item: list[tuple[str, dict[str, float]]] = field(default_factory=list)
+
+    def scalar(self, metric: str, key: str) -> float | None:
+        """One number by name, for comparing runs without parsing text."""
+        for result in self.overall:
+            if result.name == metric:
+                return result.scalars.get(key)
+        return None
+
+    def to_dict(self) -> dict:
+        """Serialisable form. Arrays are kept -- a confusion matrix is small and
+        is the part you would want to plot later from a stored run."""
+        return {
+            "baseline": self.baseline,
+            "dataset": self.dataset,
+            "transform": self.transform,
+            "level": "frame",
+            "n_items": self.n_items,
+            "n_frames": self.n_frames,
+            "overall": {
+                r.name: {
+                    "scalars": {k: jsonable(v) for k, v in r.scalars.items()},
+                    "arrays": {k: jsonable(v) for k, v in r.arrays.items()},
+                }
+                for r in self.overall
+            },
+            "breakdowns": {
+                key: {
+                    value: {
+                        r.name: {k: jsonable(v) for k, v in r.scalars.items()}
+                        for r in results
+                    }
+                    for value, results in buckets.items()
+                }
+                for key, buckets in self.breakdowns.items()
+            },
+            "per_item": [
+                {"name": name, **{k: jsonable(v) for k, v in scalars.items()}}
+                for name, scalars in self.per_item
+            ],
+        }
+
+    def render(self, worst: int = 10) -> str:
+        lines = [
+            f"\n=== {self.baseline} on {self.dataset} "
+            f"({self.n_items:,} items, {self.n_frames:,} frames) ===",
+        ]
+        if self.transform != "identity":
+            lines.append(f"    audio preprocessed by: {self.transform}")
+        for result in self.overall:
+            lines += [f"\n{result.name}", result.render()]
+
+        for key, buckets in self.breakdowns.items():
+            lines.append(f"\nby {key}")
+            lines.append(f"  {key:<14} {'n':>9} {'RPA':>8} {'RCA':>8} {'gap':>8}")
+            for value, results in buckets.items():
+                scalars = next(
+                    (r.scalars for r in results if r.name == "pitch-accuracy"), None
+                )
+                if scalars is None:
+                    continue
+                lines.append(
+                    f"  {value[:14]:<14} {scalars['n_voiced']:>9,.0f} "
+                    f"{scalars['rpa']:>8.1%} {scalars['rca']:>8.1%} "
+                    f"{scalars['octave_gap']:>8.1%}"
+                )
+
+        # A good aggregate can hide a handful of items the baseline fails
+        # outright, which is a different problem from being uniformly mediocre.
+        if len(self.per_item) > 1 and worst:
+            ranked = sorted(self.per_item, key=lambda pair: pair[1]["rpa"])[:worst]
+            lines.append(f"\nworst {len(ranked)} items by RPA")
+            lines.append(f"  {'RPA':>8} {'oct-gap':>8}  item")
+            for name, scalars in ranked:
+                lines.append(
+                    f"  {scalars['rpa']:>8.1%} {scalars['octave_gap']:>8.1%}  {name[:50]}"
+                )
+        return "\n".join(lines)
 
 
 def _estimate_contour(
@@ -65,7 +167,7 @@ def _evaluate_item(
     concrete types here do. A GPU transform is the exception: with a cold cache
     each worker would load its own model and contend for one device, so
     parallelism is for the CPU-bound conditions (pyin on stems/mixes) or a
-    warm-cache Demucs pass, not cold separation. See ``Evaluation.collect``.
+    warm-cache Demucs pass, not cold separation. See ``FrameEvaluation.collect``.
     """
     baseline, transform, item = payload
     reference = item.reference()
@@ -75,8 +177,8 @@ def _evaluate_item(
     return ItemRef(item.name, item.groups), true, pred
 
 
-class Evaluation:
-    """One baseline, one dataset, one set of metrics."""
+class FrameEvaluation:
+    """One baseline, one dataset, one set of metrics, scored per frame."""
 
     def __init__(
         self,
@@ -144,7 +246,7 @@ class Evaluation:
             print(file=sys.stderr)
         return FrameSet.from_items(parts)
 
-    def run(self) -> Report:
+    def run(self) -> FrameReport:
         frames = self.collect()
 
         # Refuse to build a report for an empty run. Every rate would come out
@@ -183,7 +285,7 @@ class Evaluation:
             if sub.voiced.any():
                 per_item.append((ref.name, accuracy.calculate(sub.true, sub.pred).scalars))
 
-        return Report(
+        return FrameReport(
             baseline=self.baseline.name,
             dataset=self.dataset.name,
             transform=self.transform.name,
