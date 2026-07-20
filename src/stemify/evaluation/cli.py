@@ -31,6 +31,7 @@ from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
 from stemify.evaluation import Evaluation
+from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 BASELINES: dict[str, type[PitchBaseline]] = {
     "pyin": PyinBaseline,
@@ -95,16 +96,28 @@ def main() -> None:
         nargs="*",
         help="breakdown keys (default: whatever the dataset's items declare)",
     )
+    ap.add_argument(
+        "--separate",
+        choices=["none", "demucs"],
+        default="none",
+        help="preprocess audio through a source separator before the baseline "
+        "hears it. 'demucs' is the deployment condition; 'none' is the clean "
+        "upper bound. Results are cached, so repeat runs are free.",
+    )
     ap.add_argument("--json", type=Path, help="also write the report here")
     args = ap.parse_args()
 
     # Both failure modes here are the user's situation, not a bug: a dataset
     # that was never downloaded, or filters that excluded everything. A
     # traceback would bury the one sentence that says which.
+    transform: AudioTransform = (
+        DemucsSeparator() if args.separate == "demucs" else Identity()
+    )
     try:
         evaluation = Evaluation(
             dataset=build_dataset(args),
             baseline=BASELINES[args.baseline](),
+            transform=transform,
             group_by=args.group_by,
         )
         report = evaluation.run()

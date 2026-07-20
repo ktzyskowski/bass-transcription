@@ -28,6 +28,7 @@ from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.alignment import FrameSet, ItemRef, align
 from stemify.evaluation.metrics import Metric, PitchAccuracy, PitchConfusion
 from stemify.evaluation.report import Report
+from stemify.transforms import AudioTransform, Identity
 
 DEFAULT_METRICS: tuple[Metric, ...] = (PitchAccuracy(), PitchConfusion())
 
@@ -40,19 +41,25 @@ class Evaluation:
         dataset: Dataset,
         baseline: PitchBaseline,
         metrics: Iterable[Metric] = DEFAULT_METRICS,
+        transform: AudioTransform | None = None,
         group_by: Iterable[str] | None = None,
         progress: bool = True,
     ) -> None:
         self.dataset = dataset
         self.baseline = baseline
         self.metrics = list(metrics)
+        # Preprocessing between the dataset's audio and the baseline's ears --
+        # source separation, principally. Identity rather than None so every
+        # report carries a transform label and the three-condition comparison
+        # differs only in configuration.
+        self.transform = transform or Identity()
         # None means "whatever the items declare"; an explicit list narrows it.
         self.group_by = list(group_by) if group_by is not None else None
         self.progress = progress
 
     def _estimate(self, item: EvalItem, reference: Contour) -> Contour:
         """The baseline's answer, as a contour either way."""
-        path = item.audio()
+        path = self.transform.apply(item.audio())
         if self.baseline.is_frame_level:
             return self.baseline.predict_f0(path)
 
@@ -125,6 +132,7 @@ class Evaluation:
         return Report(
             baseline=self.baseline.name,
             dataset=self.dataset.name,
+            transform=self.transform.name,
             n_items=len(frames.items),
             n_frames=len(frames),
             overall=[m.calculate(frames.true, frames.pred) for m in self.metrics],

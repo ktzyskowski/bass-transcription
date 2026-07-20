@@ -38,6 +38,11 @@ class Report:
     n_items: int
     n_frames: int
     overall: list[MetricResult]
+    # How the audio was prepared before the baseline heard it. Defaulted so
+    # existing callers keep working, but always recorded, because a result is
+    # not interpretable without knowing whether it came from a clean stem or a
+    # separated one.
+    transform: str = "identity"
     breakdowns: dict[str, dict[str, list[MetricResult]]] = field(default_factory=dict)
     per_item: list[tuple[str, dict[str, float]]] = field(default_factory=list)
 
@@ -54,6 +59,7 @@ class Report:
         return {
             "baseline": self.baseline,
             "dataset": self.dataset,
+            "transform": self.transform,
             "n_items": self.n_items,
             "n_frames": self.n_frames,
             "overall": {
@@ -85,8 +91,10 @@ class Report:
     def render(self, worst: int = 10) -> str:
         lines = [
             f"\n=== {self.baseline} on {self.dataset} "
-            f"({self.n_items:,} items, {self.n_frames:,} frames) ==="
+            f"({self.n_items:,} items, {self.n_frames:,} frames) ===",
         ]
+        if self.transform != "identity":
+            lines.append(f"    audio preprocessed by: {self.transform}")
         for result in self.overall:
             lines += [f"\n{result.name}", result.render()]
 
