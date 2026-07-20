@@ -3,6 +3,10 @@
 Datasets live under `data/`, which is gitignored — nothing here is checked in, so
 each machine downloads its own copy.
 
+Two cross-cutting sections at the bottom are worth reading before trusting any
+number produced from this data: [what each dataset fakes](#what-each-dataset-fakes)
+and the [licensing summary](#licensing-summary).
+
 ## IDMT-SMT-Bass
 
 ~4800 isolated bass notes, 44.1 kHz / 24-bit mono WAV. Used to validate the
@@ -102,9 +106,26 @@ survives a full arrangement.
 
 ### Download
 
-**No scriptable fetch** — the download sits behind an email form at
-<https://synthdatasets.weebly.com/mdb-bass-synth.html>. Request it, unpack under
-`data/raw/mdb_bass_synth`, then verify the layout:
+**No scriptable fetch, no mirror.** Access is a request form at
+<https://synthdatasets.weebly.com/mdb-bass-synth-download.html>, which asks for:
+
+- name
+- affiliation (university, company, institute)
+- email
+- **intended use** — "what you plan to use the dataset for"
+- agreement to the terms
+
+The link comes back by email; there is no Zenodo copy to `wget`.
+
+A note on the intended-use field: the license is **CC BY-NC**, and this repo uses
+the dataset strictly as a held-out evaluation set for architecture validation —
+never as training data for a shipping model (see
+[what each dataset fakes](#what-each-dataset-fakes) for the separate technical
+reason). Say that. It is both true and consistent with the terms; describing
+broader commercial intent would be neither.
+
+Once the archive arrives, unpack under `data/raw/mdb_bass_synth` and verify the
+layout:
 
 ```sh
 uv run python -c "from stemify.data.mdb_bass_synth import index; ts=index('data/raw/mdb_bass_synth'); print(len(ts), ts[0])"
@@ -201,16 +222,100 @@ dataset here without a non-commercial restriction.
 Not yet downloaded — see the staged data plan.
 
 - **IDMT-SMT-Bass-Single-Track** — 17 continuous basslines with onset/offset/pitch
-  plus string/fret ground truth. Exercises the full DP fingering pipeline
-  end-to-end, but at 17 tracks it is a smoke test, not an eval set.
-- **Procedurally generated MIDI + synthesis** — renders bass through a soundfont
-  for unlimited self-labeling data. Its value is *distribution control*, not
-  volume: real-song corpora will not oversample the low register or slap-thumb,
-  where pyin's octave errors concentrate. Not a replacement for Slakh, which is
-  this same pipeline already built with better musical realism.
+  plus string/fret ground truth. Higher priority than its size suggests: it is
+  the only source of genuinely real, continuous bass *audio*, which makes it the
+  final check that synthetic timbre has not fooled us. Still 17 tracks, so a
+  sanity check rather than a benchmark — see
+  [what each dataset fakes](#what-each-dataset-fakes).
+- **Re-rendering Slakh's own bass MIDI** through several soundfonts. Slakh's
+  weakness is timbre: 187 fixed patches. Re-rendering multiplies timbre diversity
+  on MIDI whose quality is already vetted, needs no new dataset, and can be
+  validated against Slakh's own professional render of the same notes — paired
+  ground truth for how much a cheaper pipeline degrades. Do this before building
+  any larger synthesis corpus.
+- **Lakh Clean MIDI + synthesis** — >17,000 MIDI files, CC BY 4.0, filenames
+  giving artist and title. Slakh drew from `lmd_matched` (45,129 files) and kept
+  2,100, a 4.7% yield, but only because it required piano *and* bass *and* guitar
+  *and* drums for source-separation work. A bass-only filter is far weaker, so
+  the yield here would be much higher. Two traps: Lakh contains many duplicate
+  transcriptions of the same song, so dedupe and split by *artist*; and rendering
+  both bass and accompaniment from the same sample libraries produces mixes that
+  Demucs separates unrealistically well, biasing any separation artifacts learned
+  from them.
+- **Procedurally generated MIDI + synthesis** — unlimited self-labeling data. Its
+  value is *distribution control*, not volume: real-song corpora will not
+  oversample the low register or slap-thumb, where pyin's octave errors
+  concentrate. Weakest option for musical realism, which matters more for a model
+  using attention over musical context than for a frame-wise CNN.
 
 Check each one's license independently. The IDMT-SMT-Bass situation says nothing
 about theirs.
+
+## What each dataset fakes
+
+**Every dataset here is synthetic on at least one axis.** None of them is ground
+truth about real bass in real music, and the useful discipline is knowing which
+axis each one fakes rather than picking one to trust.
+
+Three things can independently be real or synthetic: who played it, what the bass
+actually sounds like, and what surrounds it in the mix.
+
+| dataset | performance | bass timbre | surrounding mix |
+|---|---|---|---|
+| IDMT-SMT-Bass | real player | **real recording** | none — isolated notes |
+| IDMT Single-Track | real player | **real recording** | none — isolated bassline |
+| MDB-bass-synth | real player | resynthesized | **real recording** |
+| Slakh2100 | MIDI | sampled library | sampled library |
+
+### MDB-bass-synth is more real than "synth" suggests, and less real than "recording"
+
+The bass you hear is computer-generated — that is the entire point, since it is
+what makes the f0 annotation exact. But:
+
+- the **performance** is a real bassist, so pitch trajectory, timing, vibrato and
+  dynamics all come from a human take
+- the synthesis is **wide-band harmonic modelling** estimating frequency,
+  amplitude *and phase* of every harmonic, not a sine sum, so timbre and dynamics
+  are largely preserved
+- **every other stem in the mix is the untouched original recording**
+- the authors validated that pitch algorithms score *statistically
+  indistinguishable* on the resynthesized mixes versus the original manually
+  annotated ones
+
+That validation is what makes it usable as a reality check. It was established
+for evaluation with 2017-era algorithms, though, and a modern neural model could
+plausibly latch onto resynthesis artifacts in a way pyin cannot. **Use it for
+evaluation; do not train on it.**
+
+### The gap this leaves
+
+Look at the last two columns of the table. **No dataset available to us has real
+bass timbre inside a real mixture with reliable f0 labels.** Each satisfies
+exactly one:
+
+- MDB-bass-synth — real mixture, synthesized bass inside it
+- IDMT — real bass audio, no mixture at all
+
+So "does this work on real music?" has no single-dataset answer, and any claim
+has to triangulate. Two consequences:
+
+- **IDMT-SMT-Bass-Single-Track matters more than its size suggests.** 17 tracks
+  is far too few for a trustworthy metric, but it is the only source of genuinely
+  real, continuous bass audio with real annotations — and the only one carrying
+  string/fret ground truth. Treat it as the final "did synthetic timbre fool us?"
+  check, not as a benchmark.
+- **Closing the gap properly means annotating real songs by hand**, or accepting
+  that every reported number carries a synthetic caveat. Better to state the
+  caveat than to let a clean-looking number imply it is not there.
+
+### How this shapes dataset roles
+
+| dataset | role |
+|---|---|
+| Slakh2100 | training — the only source with volume and a clean license |
+| MDB-bass-synth | held-out evaluation — never training, per above |
+| IDMT-SMT-Bass | unit-test scale sanity checks on clean isolated signal |
+| IDMT Single-Track | final real-audio sanity check, not a benchmark |
 
 ## Licensing summary
 
