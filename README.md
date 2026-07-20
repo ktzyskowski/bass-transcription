@@ -43,7 +43,7 @@ src/stemify/
     report.py     Report — results as data, renderable and serialisable
     metrics/      Metric.calculate(true, pred) -> MetricResult
     cli.py        argument parsing, nothing else
-docs/           provenance, licensing, AWS runbook
+docs/           evaluation protocol, provenance, licensing, AWS runbook
 data/           downloaded datasets (gitignored)
 ```
 
