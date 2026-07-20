@@ -26,13 +26,23 @@ import numpy as np
 
 from stemify.evaluation.metrics.base import Metric, MetricResult
 
-# 4-string bass in standard tuning: E1 (open low E) to G#3 at the 12th fret of
-# the G string. Real recordings exceed this -- 5-string basses reach B0 (23) and
-# drop tunings go lower -- so anything outside is counted rather than clipped,
-# which keeps a range mismatch visible instead of silently folding it into the
-# edge classes.
-MIDI_MIN = 28
-MIDI_MAX = 56
+# The physical range of a 5-string bass with 24 frets: B0 (open low B) to G4
+# (24th fret of the G string). Chosen from instrument physics rather than fitted
+# to a dataset, but it does cover 99.97% of MDB-bass-synth's 3.6M reference
+# frames -- and widening further to 21-72 covers no more, so the extra classes
+# would be dead weight.
+#
+# This replaces an earlier 28-56 (4-string, 12th fret) which excluded 1.75% of
+# MDB and would have been badly wrong for Slakh, whose bass MIDI reaches 67.
+#
+# The bounds are deliberately *fixed* rather than derived per dataset: a
+# confusion matrix whose axes change between runs cannot be compared across
+# them. Anything outside is counted in ``out_of_range_rate`` rather than clipped
+# into the edge classes, so a mismatch stays visible. The delta histogram --
+# the diagnostic that actually matters -- spans every answered frame regardless
+# of these bounds.
+MIDI_MIN = 23
+MIDI_MAX = 67
 
 HARMONIC_LABELS = {
     0: "correct",
