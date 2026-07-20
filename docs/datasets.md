@@ -175,7 +175,7 @@ split). The loader skips `omitted` unless asked for it.
 - **Bass MIDI is not guaranteed monophonic.** It comes from Lakh — real
   transcriptions — which contain octave doubling and overlapping releases. The
   loader collapses overlaps to the lowest sounding pitch and exposes
-  `polyphony_rate()`; the harness drops stems above 5% by default, since a
+  `polyphony_rate()`; `SlakhDataset` drops stems above 5% by default, since a
   doubled-octave transcription has no single right answer to score against.
 - **Some tracks have more than one bass stem.** Each becomes its own item.
   Mix-based evaluation filters to single-bass tracks automatically, because with

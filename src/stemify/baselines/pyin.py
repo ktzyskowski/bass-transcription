@@ -10,9 +10,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+from stemify import features
 from stemify.baselines.base import PitchBaseline
 from stemify.contour import Contour
-from stemify.data import features
 
 # Search range. The lower bound is the open low E (E1, ~41 Hz). The upper bound
 # sits an octave above the dataset's highest label (G#3) on purpose: it lets

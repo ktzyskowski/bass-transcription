@@ -42,7 +42,7 @@ Standard. Terminate the instance afterwards; the EBS volume is transient.
 Keep the *unpruned* set out of S3 rather than paying to store stems that only
 matter if this project later needs other instruments.
 
-## Stage 2 — run the harness on EC2
+## Stage 2 — run the evaluation on EC2
 
 The evaluation is CPU-bound and embarrassingly parallel across tracks. pyin runs
 at ~0.14 s per IDMT note; a full Slakh test split is meaningfully larger, so size
@@ -52,7 +52,7 @@ the box by core count and expect to want `--limit` while iterating.
 git clone <repo> && cd stemify-ml
 uv sync
 aws s3 sync s3://stemify-data/slakh2100/ data/raw/slakh2100/
-uv run python -m stemify.evaluation.harness --baseline pyin --dataset slakh --split test
+uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --split test
 ```
 
 Attach an instance role with `s3:GetObject` on the bucket rather than putting

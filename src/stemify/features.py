@@ -1,8 +1,20 @@
-"""CQT feature extraction for bass audio.
+"""Audio to model input: loading, and the CQT front-end.
+
+This lives outside ``data/`` on purpose. A dataset loader answers "what
+recordings exist and what is true of them"; this answers "how does a waveform
+become something a model can consume", which is the same regardless of which
+dataset the waveform came from.
 
 The CQT is log-frequency spaced, so a pitch change is a fixed shift along the
 frequency axis regardless of register -- which is what lets a convolutional
 model share weights across pitches.
+
+**Status:** ``load_audio`` is used by the pyin baseline. ``cqt`` and
+``midi_to_bin`` have no callers yet -- they are the front-end for the CNN that
+does not exist. They are kept rather than deleted because the constants encode
+decisions that would otherwise have to be re-derived (why 3 bins per semitone,
+why 6 octaves starting a semitone below the open low E), and that reasoning is
+the expensive part, not the code.
 """
 
 from pathlib import Path

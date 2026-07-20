@@ -89,7 +89,7 @@ class Track(EvalItem):
     def reference(self) -> Contour:
         """Load the annotation as ``(times, freqs)``, 0 Hz where silent.
 
-        This replaces the RMS-gated synthetic reference the IDMT harness had to
+        This replaces the RMS-gated synthetic reference IDMT has to
         construct: here voicing is annotated rather than inferred, so silence
         between notes is ground truth instead of a threshold guess.
         """

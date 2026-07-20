@@ -1,7 +1,7 @@
 """What every dataset must look like to be evaluable.
 
 Previously each loader exposed its own type and its own module-level ``index()``,
-and the harness bridged them with one adapter function per dataset plus a branch
+and the runner bridged them with one adapter function per dataset plus a branch
 in ``main``. Adding a dataset meant editing the runner in three places -- and for
 IDMT, the runner also had to know *how to build that dataset's reference*, which
 is dataset knowledge sitting in the wrong file.

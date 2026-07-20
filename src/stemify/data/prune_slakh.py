@@ -20,9 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-import yaml
-
-from stemify.data.slakh import BASS_CLASS
+from stemify.data.slakh import bass_stem_ids, read_metadata
 
 
 def prunable(track_dir: Path) -> list[Path]:
@@ -30,21 +28,16 @@ def prunable(track_dir: Path) -> list[Path]:
 
     Returns an empty list -- rather than every stem -- when the metadata is
     missing or unreadable, so a malformed track is skipped instead of stripped.
+
+    ``require_rendered=False`` deliberately keeps every stem the dataset calls
+    bass, including any whose render flags say it was never produced. Indexing
+    is stricter, but the asymmetry is the safe direction: the worst case here is
+    keeping a file nothing reads, where the worst case the other way is deleting
+    bass audio that a metadata quirk mislabelled.
     """
-    meta_path = track_dir / "metadata.yaml"
-    if not meta_path.exists():
+    if not read_metadata(track_dir):
         return []
-    try:
-        with meta_path.open() as fh:
-            meta = yaml.safe_load(fh) or {}
-    except yaml.YAMLError:
-        return []
-
-    stems = meta.get("stems")
-    if not stems:
-        return []
-
-    keep = {sid for sid, info in stems.items() if info.get("inst_class") == BASS_CLASS}
+    keep = bass_stem_ids(track_dir, require_rendered=False)
     return [
         path
         for path in sorted((track_dir / "stems").glob("*.flac"))

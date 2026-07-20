@@ -168,28 +168,64 @@ class BassStem(EvalItem):
         return float((active[sounding] > 1).mean())
 
 
-def _bass_stems(track_dir: Path, split: str) -> list[BassStem]:
+def read_metadata(track_dir: Path) -> dict:
+    """A track's ``metadata.yaml`` stem table, or ``{}`` if unreadable.
+
+    Returning empty on failure is deliberate: callers treat "no metadata" as
+    "this track has no identifiable bass", which is the safe reading for both
+    indexing (skip it) and pruning (delete nothing).
+    """
     meta_path = track_dir / "metadata.yaml"
     if not meta_path.exists():
-        return []
-    with meta_path.open() as fh:
-        meta = yaml.safe_load(fh) or {}
+        return {}
+    try:
+        with meta_path.open() as fh:
+            meta = yaml.safe_load(fh) or {}
+    except yaml.YAMLError:
+        return {}
+    return meta.get("stems") or {}
 
-    mix = track_dir / "mix.flac"
-    found = []
-    for stem_id, info in (meta.get("stems") or {}).items():
+
+def bass_stem_ids(track_dir: Path, require_rendered: bool = True) -> set[str]:
+    """Stem ids in ``track_dir`` that hold bass.
+
+    The single definition of "which stems are bass", used both by ``index`` and
+    by the pruning tool. These previously disagreed -- pruning matched on
+    ``inst_class`` alone while indexing also required the render flags -- which
+    meant a change to one silently failed to reach the other.
+
+    ``require_rendered`` is what separates the two callers. Indexing wants only
+    stems with audio on disk. Pruning wants every stem the dataset *calls* bass,
+    including ones that were never rendered, so that a metadata quirk can never
+    cause real bass audio to be deleted.
+    """
+    stems = read_metadata(track_dir)
+    ids = set()
+    for stem_id, info in stems.items():
         if info.get("inst_class") != BASS_CLASS or info.get("is_drum"):
             continue
         # Not every stem in the metadata was actually rendered or saved; the
         # flags are the dataset's own record of that, and trusting them avoids
         # a pile of missing-file errors deep in a training run.
-        if info.get("audio_rendered") is False or info.get("midi_saved") is False:
+        if require_rendered and (
+            info.get("audio_rendered") is False or info.get("midi_saved") is False
+        ):
             continue
+        ids.add(stem_id)
+    return ids
+
+
+def _bass_stems(track_dir: Path, split: str) -> list[BassStem]:
+    stems = read_metadata(track_dir)
+    mix = track_dir / "mix.flac"
+    found = []
+    for stem_id in sorted(bass_stem_ids(track_dir)):
         stem_path = track_dir / "stems" / f"{stem_id}.flac"
         midi_path = track_dir / "MIDI" / f"{stem_id}.mid"
         if not (stem_path.exists() and midi_path.exists()):
             continue
-        found.append((stem_id, stem_path, midi_path, info.get("midi_program_name", "")))
+        program = stems.get(stem_id, {}).get("midi_program_name", "")
+        found.append((stem_id, stem_path, midi_path, program))
 
     return [
         BassStem(

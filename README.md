@@ -29,6 +29,7 @@ unzip IDMT-SMT-BASS.zip -d idmt_smt_bass && rm IDMT-SMT-BASS.zip
 ```text
 src/stemify/
   contour.py      Contour — the pitch-over-time type both sides speak
+  features.py     audio -> model input (CQT front-end; not yet consumed)
   data/
     base.py       Dataset / EvalItem — what a dataset must look like
     *.py          one loader per dataset, each owning its own references
@@ -40,7 +41,7 @@ src/stemify/
     alignment.py  resampling onto the reference grid; FrameSet pooling
     report.py     Report — results as data, renderable and serialisable
     metrics/      Metric.calculate(true, pred) -> MetricResult
-    harness.py    CLI
+    cli.py        argument parsing, nothing else
 docs/           provenance, licensing, AWS runbook
 data/           downloaded datasets (gitignored)
 ```
@@ -57,12 +58,12 @@ baseline -> estimate contour     the PitchBaseline
          -> Report               render() or write_json()
 ```
 
-Adding a dataset is a `Dataset` subclass plus one line in `harness.DATASETS`.
+Adding a dataset is a `Dataset` subclass plus one line in `cli.DATASETS`.
 Adding a metric is a `Metric` subclass. Neither touches the other.
 
 ```sh
-uv run python -m stemify.evaluation.harness --baseline pyin --dataset idmt
-uv run python -m stemify.evaluation.harness --baseline pesto --dataset slakh --source mix
+uv run python -m stemify.evaluation.cli --baseline pyin --dataset idmt
+uv run python -m stemify.evaluation.cli --baseline pesto --dataset slakh --source mix
 ```
 
 ## Licensing

@@ -1,8 +1,8 @@
 """Command-line entry point for evaluating a baseline on a dataset.
 
-    uv run python -m stemify.evaluation.harness --baseline pyin --dataset idmt
-    uv run python -m stemify.evaluation.harness --baseline pyin --dataset slakh --source mix
-    uv run python -m stemify.evaluation.harness --baseline pesto --dataset mdb --json out.json
+    uv run python -m stemify.evaluation.cli --baseline pyin --dataset idmt
+    uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --source mix
+    uv run python -m stemify.evaluation.cli --baseline pesto --dataset mdb --json out.json
 
 This module is only argument parsing. The work is:
 
