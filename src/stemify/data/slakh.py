@@ -168,6 +168,27 @@ class BassStem(EvalItem):
         return float((active[sounding] > 1).mean())
 
 
+# The tarball unpacks into a directory of its own, so extracting it into
+# data/raw/slakh2100 yields data/raw/slakh2100/slakh2100_flac_redux/<split>/...
+# Everyone gets this wrong once; descend automatically rather than making the
+# configured root depend on how the archive happened to be unpacked.
+ARCHIVE_DIR = "slakh2100_flac_redux"
+
+
+def resolve_root(root: str | Path) -> Path:
+    """The directory that actually holds the split folders."""
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(
+            f"{root} does not exist. Slakh2100 is a single 104 GB tarball from "
+            "https://zenodo.org/records/4599666 -- see docs/datasets.md."
+        )
+    nested = root / ARCHIVE_DIR
+    if nested.is_dir() and not any((root / s).is_dir() for s in SPLITS):
+        return nested
+    return root
+
+
 def read_metadata(track_dir: Path) -> dict:
     """A track's ``metadata.yaml`` stem table, or ``{}`` if unreadable.
 
@@ -222,7 +243,12 @@ def _bass_stems(track_dir: Path, split: str) -> list[BassStem]:
     for stem_id in sorted(bass_stem_ids(track_dir)):
         stem_path = track_dir / "stems" / f"{stem_id}.flac"
         midi_path = track_dir / "MIDI" / f"{stem_id}.mid"
-        if not (stem_path.exists() and midi_path.exists()):
+        # Only the MIDI is universally required -- it is the reference, so
+        # without it there is nothing to score against. The stem audio is
+        # needed for source="stem" and never read for source="mix", so
+        # requiring it here would discard tracks that are perfectly usable for
+        # mix evaluation. SlakhDataset applies the source-specific check.
+        if not midi_path.exists():
             continue
         program = stems.get(stem_id, {}).get("midi_program_name", "")
         found.append((stem_id, stem_path, midi_path, program))
@@ -252,13 +278,7 @@ def index(
     A track with two bass stems yields two entries. Pass ``unambiguous_only`` to
     keep only single-bass tracks, which is what mix-based evaluation needs.
     """
-    root = Path(root)
-    if not root.exists():
-        raise FileNotFoundError(
-            f"{root} does not exist. Slakh2100 is a single 104 GB tarball from "
-            "https://zenodo.org/records/4599666 -- see docs/datasets.md for the "
-            "stream-filtered fetch that avoids storing all of it."
-        )
+    root = resolve_root(root)
 
     stems: list[BassStem] = []
     for split in splits:
@@ -313,6 +333,13 @@ class SlakhDataset(Dataset):
         stems = index(root, splits=(split,), unambiguous_only=(source == "mix"))
         if limit:
             stems = stems[:limit]
+
+        # Stem audio is only required when it is what gets listened to.
+        self.skipped_missing_audio = 0
+        if source == "stem":
+            present = [s for s in stems if s.stem_path.exists()]
+            self.skipped_missing_audio = len(stems) - len(present)
+            stems = present
 
         self.skipped_polyphonic = 0
         kept = []
