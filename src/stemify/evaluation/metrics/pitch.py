@@ -5,17 +5,42 @@
   - **RCA** (raw chroma accuracy): the same with octaves folded out. Right pitch
     class, any octave.
 
-**Their gap is the octave-error rate**, and on bass that is the number that
-matters: the fundamental is often quieter than its own harmonics, so a tracker
-locks onto 2x or 3x f0 and is confidently wrong by exactly 12 or 19 semitones.
-A low RPA with a high RCA is not a pitch problem, it is an octave problem --
-a targeted fix (octave-aware loss, harmonic-aware input) rather than a
-data-volume one. See docs/pitch-primer.md.
+**Their gap is the octave-error rate.** The theory behind expecting it to matter:
+a bass fundamental is often quieter than its own harmonics, so a tracker locks
+onto 2x or 3x f0 and is confidently wrong by exactly 12 or 19 semitones. A low
+RPA with a high RCA would be an octave problem rather than a pitch one, wanting
+a targeted fix (octave-aware loss, harmonic-aware input) rather than more data.
+
+**Measured, that theory has not held here.** pyin's octave gap is 0.1% on IDMT
+isolated notes, 0.3% on clean MDB stems, 5.4% on raw mixes, and 1.1% after
+Demucs separation -- everywhere a small fraction of the error budget. The ~46%
+figure in docs/pitch-primer.md is an artifact of naive CQT peak-picking, not a
+property of the task, and pyin's internal octave logic already defeats it. The
+dominant failure on mixes is instead **voicing collapse**: recall fell 96.8% to
+61.8% while the octave gap barely moved. Keep reporting the gap, but do not
+design around it without re-measuring.
 
 Voicing is reported alongside because RPA and RCA are computed over
 reference-voiced frames only: a baseline that declines to answer is not
 penalised by them, so accuracy is uninterpretable without knowing how often it
 answered at all.
+
+**Overall Accuracy** exists because RPA and RCA are structurally blind to an
+entire class of error. Their denominator is reference-*voiced* frames, so what
+happens during rests is simply not counted -- a model that hallucinates a pitch
+through every silence scores *identical* RPA and RCA to one that correctly says
+nothing. Overall Accuracy counts every frame, crediting a correct silence the
+same as a correct pitch, and is therefore the number closest to "would the
+transcription be right".
+
+The two are companions, not substitutes. RPA answers "can you name the pitch",
+Overall answers "are you right about what is happening". Their divergence is
+itself the diagnostic: on MDB-bass-synth, Demucs-separated audio sits 6.8 points
+below the clean stem under RPA but 16.2 points below under Overall, because
+separation leaves bass-like residue in the rests that RPA cannot see. Note also
+that Overall is denominator-sensitive -- a sparse bassline weights silence
+handling more heavily than a busy one -- so it is not comparable across datasets
+with different voiced fractions.
 """
 
 import mir_eval
@@ -31,9 +56,11 @@ class PitchAccuracyResult(MetricResult):
         s = self.scalars
         return "\n".join(
             [
-                f"  frames (reference-voiced)    {s['n_voiced']:>9,.0f}",
+                f"  frames (total / voiced)      "
+                f"{s['n_frames']:>9,.0f} / {s['n_voiced']:,.0f}",
                 f"  RPA (exact)                  {s['rpa']:>9.1%}",
                 f"  RCA (octave-invariant)       {s['rca']:>9.1%}",
+                f"  Overall (incl. silence)      {s['overall']:>9.1%}",
                 f"  octave-error gap             {s['octave_gap']:>9.1%}",
                 f"  voicing recall               {s['voicing_recall']:>9.1%}",
                 f"  voicing false alarm          {s['voicing_false_alarm']:>9.1%}",
@@ -63,6 +90,9 @@ class PitchAccuracy(Metric):
         args = (ref_voicing, ref_cent, est_voicing, est_cent)
         rpa = mir_eval.melody.raw_pitch_accuracy(*args, cent_tolerance=self.cent_tolerance)
         rca = mir_eval.melody.raw_chroma_accuracy(*args, cent_tolerance=self.cent_tolerance)
+        overall = mir_eval.melody.overall_accuracy(
+            *args, cent_tolerance=self.cent_tolerance
+        )
         recall, false_alarm = mir_eval.melody.voicing_measures(
             ref_voicing, est_voicing
         )
@@ -70,9 +100,11 @@ class PitchAccuracy(Metric):
         return PitchAccuracyResult(
             name=self.name,
             scalars={
+                "n_frames": float(ref_voicing.size),
                 "n_voiced": float(ref_voicing.sum()),
                 "rpa": float(rpa),
                 "rca": float(rca),
+                "overall": float(overall),
                 "octave_gap": float(rca - rpa),
                 "voicing_recall": float(recall),
                 "voicing_false_alarm": float(false_alarm),
