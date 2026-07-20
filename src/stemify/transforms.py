@@ -33,6 +33,24 @@ import numpy as np
 DEFAULT_CACHE = Path("data/cache/transforms")
 
 
+def _best_device() -> str:
+    """The fastest accelerator torch can reach here.
+
+    Deliberately not delegated to the library: Demucs defaults to ``"cpu"`` and
+    never probes for an accelerator, so anything relying on its default runs on
+    CPU without saying so.
+    """
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - torch is a hard dependency
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 class AudioTransform(ABC):
     """A cached audio-to-audio operation."""
 
@@ -131,13 +149,28 @@ class DemucsSeparator(AudioTransform):
         super().__init__(cache_dir)
         self.model = model
         self.stem = stem
-        # None lets Demucs choose; it prefers CUDA, then MPS, then CPU.
-        self.device = device
+        # Demucs itself defaults to "cpu" -- it does *not* auto-select an
+        # accelerator -- so leaving this unset silently gives up a large
+        # speedup. On an M-series Mac, MPS measured 14x realtime against CPU's
+        # 4.4x on a 171 s track.
+        self.device = device or _best_device()
         self._separator = None
 
     @property
     def name(self) -> str:
-        # Model and stem both change the output, so both belong in the key.
+        # Model and stem change the output, so both belong in the key. The
+        # *device* deliberately does not, even though CPU and MPS produce
+        # measurably different waveforms (~20 dB SNR between them on a real
+        # track, spread throughout rather than an offset). Metrics computed
+        # from either agree to within 0.1 percentage points -- the divergence
+        # lives in low-level detail of the separation residual, which does not
+        # move where pitch is or whether it is detectable. Keying on device
+        # would mean re-separating an entire corpus after switching hardware,
+        # for a difference the metrics cannot see.
+        #
+        # Caveat: that equivalence is established for *pitch evaluation*. If
+        # separated audio is ever used as neural training data, re-check it
+        # rather than assuming it carries over.
         return f"demucs-{self.model}-{self.stem}"
 
     def _load(self):
@@ -148,10 +181,7 @@ class DemucsSeparator(AudioTransform):
                 raise ImportError(
                     "demucs is not installed. Add it with `uv add demucs`."
                 ) from exc
-            kwargs = {"model": self.model}
-            if self.device is not None:
-                kwargs["device"] = self.device
-            self._separator = Separator(**kwargs)
+            self._separator = Separator(model=self.model, device=self.device)
         return self._separator
 
     def _run(self, source: Path, dest: Path) -> None:

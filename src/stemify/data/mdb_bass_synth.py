@@ -30,13 +30,21 @@ form, so there is no scriptable fetch). License is **CC BY-NC 4.0** -- non-
 commercial, but unlike IDMT-SMT-Bass there is no ND clause, so trained weights
 are not themselves a licensing problem. See docs/datasets.md.
 
-Layout note: the directory names below are inferred from the dataset
-description, not from an unpacked copy. ``index()`` discovers files by pattern
-and raises with a listing of what it actually found, so a mismatch surfaces
-immediately rather than silently yielding zero tracks.
+Layout, verified against an unpacked copy and the archive's README::
+
+    MDB-bass-synth/
+        annotation_bass/<artist>_<song>_STEM_<id>.RESYN.csv
+        audio_bass/<artist>_<song>_STEM_<id>.RESYN.wav      mono
+        audio_mix/<artist>_<song>_MIX_basssynth.wav         stereo
+
+Flat folders by file type, not a directory per track. Note that the three files
+for one track do **not** share a common prefix: the mix drops the
+``_STEM_<id>.RESYN`` component the other two carry, so they are paired by
+stripping it rather than by globbing a shared stem.
 """
 
 import csv
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -52,6 +60,12 @@ from stemify.data.base import Dataset, EvalItem
 # grid every baseline gets resampled onto, and it is far finer than any
 # baseline's native rate (pyin ~23 ms, PESTO 10 ms).
 ANNOTATION_HOP_S = 128 / 44100
+
+# The archive's own layout, per its README -- flat folders by file type rather
+# than a directory per track.
+ANNOTATION_DIR = "annotation_bass"
+BASS_DIR = "audio_bass"
+MIX_DIR = "audio_mix"
 
 
 @dataclass(frozen=True)
@@ -111,51 +125,58 @@ class Track(EvalItem):
         return librosa.get_duration(path=str(self.stem_path))
 
 
-def _find_audio(root: Path, name: str) -> tuple[Path | None, Path | None]:
-    """Locate the stem and mix wavs belonging to ``name``.
-
-    Matches on the annotation's basename rather than a fixed directory layout,
-    since the published archive's folder names are unverified.
-    """
-    candidates = [p for p in root.rglob(f"{name}*.wav")]
-    mix = next((p for p in candidates if "MIX" in p.stem.upper()), None)
-    stem = next((p for p in candidates if "MIX" not in p.stem.upper()), None)
-    return stem, mix
+# The annotation and bass filenames carry a stem id; the mix filename does not.
+# Stripping it yields the <artist>_<songtitle> key the three files share.
+_ANNOTATION = re.compile(r"^(?P<song>.+)_STEM_(?P<stem_id>\d+)\.RESYN$")
 
 
 def index(root: str | Path) -> list[Track]:
-    """Index every annotated track under ``root``."""
+    """Index every annotated track under ``root``.
+
+    Driven by the naming conventions in the archive's own README rather than by
+    pattern-matching, since the three files for one track do *not* share a
+    common prefix -- the mix drops the ``_STEM_<id>.RESYN`` part that the bass
+    and annotation both carry.
+    """
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(
-            f"{root} does not exist. MDB-bass-synth is downloaded manually from "
-            "https://synthdatasets.weebly.com/mdb-bass-synth.html -- see docs/datasets.md"
+            f"{root} does not exist. MDB-bass-synth is requested via the form at "
+            "https://synthdatasets.weebly.com/mdb-bass-synth-download.html -- "
+            "see docs/datasets.md"
+        )
+
+    annotations = sorted((root / ANNOTATION_DIR).glob("*.csv"))
+    if not annotations:
+        present = sorted(p.name for p in root.iterdir()) if root.is_dir() else []
+        raise FileNotFoundError(
+            f"No annotations in {root / ANNOTATION_DIR}. Contents of {root}: "
+            f"{present or 'empty'}. Expected the archive's own layout: "
+            f"{ANNOTATION_DIR}/, {BASS_DIR}/, {MIX_DIR}/."
         )
 
     tracks: list[Track] = []
     orphans: list[str] = []
-    for annotation in sorted(root.rglob("*.csv")):
-        name = annotation.stem
-        stem, mix = _find_audio(root, name)
-        if stem is None:
-            orphans.append(name)
+    for annotation in annotations:
+        match = _ANNOTATION.match(annotation.stem)
+        if match is None:
+            orphans.append(annotation.name)
+            continue
+        song = match["song"]
+        stem_path = root / BASS_DIR / f"{annotation.stem}.wav"
+        mix_path = root / MIX_DIR / f"{song}_MIX_basssynth.wav"
+        if not stem_path.exists():
+            orphans.append(annotation.name)
             continue
         tracks.append(
             Track(
-                track_name=name,
-                stem_path=stem,
+                track_name=song,
+                stem_path=stem_path,
                 annotation_path=annotation,
-                mix_path=mix,
+                mix_path=mix_path if mix_path.exists() else None,
             )
         )
 
-    if not tracks:
-        found = sorted({p.suffix for p in root.rglob("*") if p.is_file()})
-        raise FileNotFoundError(
-            f"No annotated tracks under {root}. File types present: {found or 'none'}. "
-            "The loader pairs each *.csv with a *.wav sharing its basename; if the "
-            "published archive names them differently, fix _find_audio()."
-        )
     if orphans:
         print(f"warning: {len(orphans)} annotations without audio, e.g. {orphans[:3]}")
     return tracks
