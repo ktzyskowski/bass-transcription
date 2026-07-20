@@ -137,11 +137,18 @@ implementation:
    | 200 c | 97.0% |
 
    Loosening 50 → 100 is worth **+4.8 points**. Always state the tolerance.
-4. **Discrete classifier vs continuous estimator.** A classifier predicting
-   semitone classes can only land exactly on the grid, so a reference note
-   sitting 40 cents flat is unreachable for it but comfortably in tolerance for
-   a continuous tracker. This is a structural handicap in any cents-based
-   metric, worth several points, and it is not a modelling deficiency.
+4. **Discrete classifier vs continuous estimator.** Measured rather than
+   assumed, because the intuition here is misleading. Deviation from the
+   *nearest* semitone is bounded at 50 cents by definition, so **at our 50-cent
+   tolerance a semitone classifier is not handicapped at all** — picking the
+   right semitone always passes.
+
+   It does bite at tighter tolerances and on precision. Across 971,529
+   MDB reference frames, real bass sits a median **13.6 cents** off the semitone
+   grid, and **27.7% of frames are more than 25 cents off** — all fine at 50 c,
+   all failures at 25 c. So a discrete classifier's median-cents figure will be
+   roughly 13-14 against a continuous tracker's ~6, without any RPA difference
+   at the default tolerance.
 5. **Denominator** — reference-voiced frames only (RPA/RCA) vs all frames
    (Overall). Reporting Overall as "accuracy" against someone's RPA compares
    different quantities.
