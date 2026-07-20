@@ -18,6 +18,7 @@ comparison table.
 
 import sys
 from collections.abc import Iterable
+from concurrent.futures import ProcessPoolExecutor
 
 import librosa
 import numpy as np
@@ -33,6 +34,47 @@ from stemify.transforms import AudioTransform, Identity
 DEFAULT_METRICS: tuple[Metric, ...] = (PitchAccuracy(), PitchConfusion())
 
 
+def _estimate_contour(
+    baseline: PitchBaseline,
+    transform: AudioTransform,
+    item: EvalItem,
+    reference: Contour,
+) -> Contour:
+    """The baseline's answer for one item, as a contour either way.
+
+    A free function rather than a method so it is reachable from a worker
+    process: ``collect`` can hand ``(baseline, transform, item)`` to a pool and
+    the worker reconstructs the estimate here.
+    """
+    path = transform.apply(item.audio())
+    if baseline.is_frame_level:
+        return baseline.predict_f0(path)
+    midi = baseline.predict_pitch(path)
+    if midi is None:
+        return Contour(reference.times, np.zeros_like(reference.freqs))
+    return Contour.constant(librosa.midi_to_hz(midi), reference.times, reference.voiced)
+
+
+def _evaluate_item(
+    payload: tuple[PitchBaseline, AudioTransform, EvalItem],
+) -> tuple[ItemRef, np.ndarray, np.ndarray] | None:
+    """Score one item to pooled arrays. Returns None for a silent reference.
+
+    The pool's unit of work. Everything it touches -- the baseline, the
+    transform, the item, and the returned arrays -- must pickle, which the
+    concrete types here do. A GPU transform is the exception: with a cold cache
+    each worker would load its own model and contend for one device, so
+    parallelism is for the CPU-bound conditions (pyin on stems/mixes) or a
+    warm-cache Demucs pass, not cold separation. See ``Evaluation.collect``.
+    """
+    baseline, transform, item = payload
+    reference = item.reference()
+    if reference.is_silent:
+        return None
+    true, pred = align(reference, _estimate_contour(baseline, transform, item, reference))
+    return ItemRef(item.name, item.groups), true, pred
+
+
 class Evaluation:
     """One baseline, one dataset, one set of metrics."""
 
@@ -44,6 +86,7 @@ class Evaluation:
         transform: AudioTransform | None = None,
         group_by: Iterable[str] | None = None,
         progress: bool = True,
+        workers: int = 1,
     ) -> None:
         self.dataset = dataset
         self.baseline = baseline
@@ -56,36 +99,47 @@ class Evaluation:
         # None means "whatever the items declare"; an explicit list narrows it.
         self.group_by = list(group_by) if group_by is not None else None
         self.progress = progress
+        # Process-pool width for collect(). The per-item work is independent and
+        # CPU-bound (pyin runs at ~1x realtime on long tracks, single-threaded),
+        # so this is close to linear in core count. Leave at 1 for a GPU
+        # transform on a cold cache -- one device does not parallelise across
+        # processes; pre-warm the cache instead.
+        self.workers = max(1, workers)
 
     def _estimate(self, item: EvalItem, reference: Contour) -> Contour:
         """The baseline's answer, as a contour either way."""
-        path = self.transform.apply(item.audio())
-        if self.baseline.is_frame_level:
-            return self.baseline.predict_f0(path)
-
-        midi = self.baseline.predict_pitch(path)
-        if midi is None:
-            return Contour(reference.times, np.zeros_like(reference.freqs))
-        return Contour.constant(
-            librosa.midi_to_hz(midi), reference.times, reference.voiced
-        )
+        return _estimate_contour(self.baseline, self.transform, item, reference)
 
     def collect(self) -> FrameSet:
         """Predict and align every item, pooling the result."""
+        items = list(self.dataset)
+        if self.workers > 1:
+            return self._collect_parallel(items)
+
         parts: list[tuple[ItemRef, np.ndarray, np.ndarray]] = []
-        total = len(self.dataset)
-        for i, item in enumerate(self.dataset, 1):
-            reference = item.reference()
-            # Nothing sounds, so there is no pitch question to score. Skipping
-            # keeps these out of the denominator rather than counting them as
-            # failures the baseline never had a chance at.
-            if reference.is_silent:
-                continue
-            estimate = self._estimate(item, reference)
-            true, pred = align(reference, estimate)
-            parts.append((ItemRef(item.name, item.groups), true, pred))
+        for i, item in enumerate(items, 1):
+            result = _evaluate_item((self.baseline, self.transform, item))
+            # None => silent reference; skip so it stays out of the denominator
+            # rather than counting as a failure the baseline never had a shot at.
+            if result is not None:
+                parts.append(result)
             if self.progress:
-                print(f"  {i}/{total} {item.name[:44]:<44}", end="\r", file=sys.stderr)
+                print(f"  {i}/{len(items)} {item.name[:44]:<44}", end="\r", file=sys.stderr)
+        if self.progress:
+            print(file=sys.stderr)
+        return FrameSet.from_items(parts)
+
+    def _collect_parallel(self, items: list[EvalItem]) -> FrameSet:
+        payloads = [(self.baseline, self.transform, item) for item in items]
+        parts: list[tuple[ItemRef, np.ndarray, np.ndarray]] = []
+        with ProcessPoolExecutor(max_workers=self.workers) as pool:
+            # map keeps submission order, so per-item reporting stays stable
+            # across runs regardless of which worker finishes first.
+            for i, result in enumerate(pool.map(_evaluate_item, payloads), 1):
+                if result is not None:
+                    parts.append(result)
+                if self.progress:
+                    print(f"  {i}/{len(items)}", end="\r", file=sys.stderr)
         if self.progress:
             print(file=sys.stderr)
         return FrameSet.from_items(parts)

@@ -104,6 +104,13 @@ def main() -> None:
         "hears it. 'demucs' is the deployment condition; 'none' is the clean "
         "upper bound. Results are cached, so repeat runs are free.",
     )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="process-pool width for scoring. Near-linear speedup on CPU-bound "
+        "conditions (pyin). Keep at 1 for --separate demucs on a cold cache.",
+    )
     ap.add_argument("--json", type=Path, help="also write the report here")
     args = ap.parse_args()
 
@@ -119,6 +126,7 @@ def main() -> None:
             baseline=BASELINES[args.baseline](),
             transform=transform,
             group_by=args.group_by,
+            workers=args.workers,
         )
         report = evaluation.run()
     except (FileNotFoundError, ValueError) as exc:

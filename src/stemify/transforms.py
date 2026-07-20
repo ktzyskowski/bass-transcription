@@ -92,7 +92,11 @@ class AudioTransform(ABC):
         # Write aside and rename: rename is atomic within a filesystem, so an
         # interrupted separation leaves no half-written file masquerading as a
         # cache hit. Without this a Ctrl-C mid-track silently poisons the cache.
-        partial = dest.with_name(dest.name + ".partial")
+        # The temp name carries this process's pid so two processes separating
+        # the same source concurrently (a pre-warm pass alongside an eval run)
+        # write to distinct temp files -- last rename wins, both are valid, and
+        # neither sees a half-written partial from the other.
+        partial = dest.with_name(f"{dest.name}.{os.getpid()}.partial")
         try:
             self._run(source, partial)
             partial.replace(dest)
