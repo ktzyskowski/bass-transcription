@@ -34,6 +34,7 @@ from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report
 from stemify.notes import NoteEvent
 from stemify.segmentation import HeuristicSegmenter, Segmenter
+from stemify.transforms import AudioTransform, Identity
 
 ONSET_TOLERANCE_S = 0.05
 PITCH_TOLERANCE_CENTS = 50.0
@@ -94,6 +95,7 @@ class NoteReport(Report):
     tp: int
     fp: int
     fn: int
+    transform: str = "identity"
     per_item: list[tuple[str, int, int, int]] = field(default_factory=list)
 
     @staticmethod
@@ -120,6 +122,7 @@ class NoteReport(Report):
             "baseline": self.baseline,
             "segmenter": self.segmenter,
             "dataset": self.dataset,
+            "transform": self.transform,
             "level": "note",
             "onset_tolerance_s": ONSET_TOLERANCE_S,
             "pitch_tolerance_cents": PITCH_TOLERANCE_CENTS,
@@ -133,9 +136,10 @@ class NoteReport(Report):
 
     def render(self, worst: int = 10) -> str:
         p, r, f = self.precision, self.recall, self.f1
+        via = "" if self.transform == "identity" else f", audio via {self.transform}"
         lines = [
             f"\n=== {self.baseline} + {self.segmenter} on {self.dataset} "
-            f"(note-level, {len(self.per_item)} items) ===",
+            f"(note-level, {len(self.per_item)} items{via}) ===",
             f"  reference / estimated notes  {self.tp + self.fn:,} / {self.tp + self.fp:,}",
             f"  precision                    {p:>7.1%}",
             f"  recall                       {r:>7.1%}",
@@ -170,6 +174,7 @@ class NoteEvaluation:
         dataset: Dataset,
         baseline: PitchBaseline,
         segmenter: Segmenter | None = None,
+        transform: AudioTransform | None = None,
         onset_tolerance: float = ONSET_TOLERANCE_S,
         pitch_tolerance: float = PITCH_TOLERANCE_CENTS,
         progress: bool = True,
@@ -177,6 +182,12 @@ class NoteEvaluation:
         self.dataset = dataset
         self.baseline = baseline
         self.segmenter = segmenter if segmenter is not None else HeuristicSegmenter()
+        # Preprocessing before the baseline hears the audio -- separation,
+        # principally. The reference notes are ground truth and untouched by it;
+        # only the estimate side sees the transformed audio, and both the pitch
+        # contour and the onset detection read the same transformed path so they
+        # stay consistent.
+        self.transform = transform if transform is not None else Identity()
         # None means "use the baseline's native note output" -- set by passing
         # segmenter=..., unset means compose contour + segmenter.
         self._native = segmenter is None and not baseline.is_frame_level
@@ -185,7 +196,7 @@ class NoteEvaluation:
         self.progress = progress
 
     def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
-        path = item.audio()
+        path = self.transform.apply(item.audio())
         if self._native:
             return self.baseline.predict_notes(path)
         return self.segmenter.segment(self.baseline.predict_f0(path), path)
@@ -209,6 +220,7 @@ class NoteEvaluation:
             raise ValueError(f"No items to evaluate for {self.dataset.name}.")
 
         return NoteReport(
+            transform=self.transform.name,
             baseline=self.baseline.name,
             segmenter="native" if self._native else self.segmenter.name,
             dataset=self.dataset.name,

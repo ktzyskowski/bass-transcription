@@ -29,7 +29,7 @@ of the note.** 41 Hz is so low that many speakers can't reproduce it, and the
 instrument and recording chain naturally put more energy into the 82 Hz and
 123 Hz harmonics than into the 41 Hz fundamental itself.
 
-## 2. Why octave errors are *the* bass problem
+## 2. Octave errors: the classic bass trap (that a real tracker avoids)
 
 A naive pitch detector finds the strongest frequency and calls that the pitch.
 On a low bass note the strongest frequency is often the **82 Hz harmonic, not
@@ -37,14 +37,26 @@ the 41 Hz fundamental** — so the detector answers "E2" when the truth is "E1".
 That's an **octave error**: right note letter, wrong height, off by exactly a
 factor of 2 in frequency.
 
-These errors are **structured, not random**. The model isn't guessing — it's
-locking onto a real, loud, musically-related frequency that happens to be a
+These errors are **structured, not random**. A *naive* detector isn't guessing —
+it's locking onto a real, loud, musically-related frequency that happens to be a
 harmonic. That's why it's *confidently* wrong and why naive fixes don't dislodge
 it.
 
-> Observed in our own data: ~46% of the CQT peaks on the IDMT isolated notes
-> landed on the +12-semitone (octave) harmonic rather than the fundamental.
-> That is exactly this effect.
+> Observed in our own data: ~46% of the raw **CQT peaks** on the IDMT isolated
+> notes landed on the +12-semitone (octave) harmonic rather than the
+> fundamental. That is exactly this effect — for peak-picking.
+
+**Measured reality check (this changed our priorities).** That 46% is a property
+of naive peak-picking, *not* of the task. A real tracker defeats it: pyin's
+octave-error rate is **0.1%** on IDMT isolated notes, **0.3%** on clean MDB
+stems, **~1%** after Demucs separation, and only rises to **5–17%** on raw
+unseparated mixes — which separation then removes. Across five measurements
+octave error is a small slice of the error budget everywhere it matters. The
+*actual* dominant failure on real mixes is **voicing** — finding *whether the
+bass is sounding at all* — where recall collapses from ~97% to ~62%. So do not
+design around octave error (an octave-aware loss, harmonic input) without
+re-measuring; the acoustics below are real, but the problem they cause is
+already largely solved by any non-naive tracker. See docs/modelling.md.
 
 ## 3. How pitches are named and numbered (why "MIDI 28–56" isn't arbitrary)
 
@@ -62,9 +74,16 @@ So "28-class classification" literally means: the bass plays ~28 distinct notes,
 and estimating pitch = picking which of 28 log-spaced frequency bins is active.
 **An octave error = being 12 classes off.**
 
+> A standard 4-string bass is MIDI 28–56, but real data is wider: 5-string
+> basses reach down to B0 (MIDI 23), and transcriptions written at *sounding*
+> vs *written* octave push the top up. The evaluation code uses **MIDI 23–67**
+> (a 5-string, 24-fret range), and any learned model should classify over that,
+> not a hardcoded 28. Do not assume 28 classes.
+
 ## 4. Exact vs chroma (a.k.a. RPA vs RCA)
 
-Because octave errors dominate, we always measure accuracy two ways:
+Because octave errors are the *classic* thing to watch for (even though they
+turned out small in practice — see §2), we always measure accuracy two ways:
 
 - **Exact accuracy (RPA, "raw pitch accuracy")** — right note *including* octave.
   E1 vs E2 → wrong.
@@ -140,5 +159,6 @@ fully objective and machine-validatable.
 
 ## The one sentence to remember
 
-On bass, the pitch *class* is usually easy and the *octave* is the hard part,
-because the fundamental is weak and its harmonics are loud.
+The octave *looks* like the hard part — the fundamental is weak and its harmonics
+are loud — but any real tracker already handles it; on actual mixes the hard part
+turns out to be **voicing**: knowing whether the bass is sounding at all.
