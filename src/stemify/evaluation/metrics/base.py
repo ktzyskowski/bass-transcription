@@ -2,7 +2,7 @@
 
 A ``Metric`` receives two frame-aligned pitch arrays and returns a
 ``MetricResult``. It does no resampling, no voicing inference, no aggregation --
-``Evaluation`` has already done all of that (see ``stemify.evaluation.run``).
+``Evaluation`` has already done all of that (see ``stemify.evaluation.evaluation``).
 That is the whole point of the split: metrics stay stateless and comparable, and
 alignment is implemented once rather than once per metric.
 

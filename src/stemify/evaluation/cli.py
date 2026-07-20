@@ -30,7 +30,7 @@ from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
-from stemify.evaluation.run import Evaluation
+from stemify.evaluation import Evaluation
 
 BASELINES: dict[str, type[PitchBaseline]] = {
     "pyin": PyinBaseline,

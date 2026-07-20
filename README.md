@@ -37,7 +37,8 @@ src/stemify/
     base.py       PitchBaseline — predict_f0 and/or predict_pitch
     *.py          off-the-shelf estimators to beat
   evaluation/
-    run.py        Evaluation — binds dataset + baseline + metrics
+    __init__.py    exports Evaluation and Report — the public entry point
+    evaluation.py  Evaluation — binds dataset + baseline + metrics
     alignment.py  resampling onto the reference grid; FrameSet pooling
     report.py     Report — results as data, renderable and serialisable
     metrics/      Metric.calculate(true, pred) -> MetricResult
