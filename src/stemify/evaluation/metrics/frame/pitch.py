@@ -46,7 +46,8 @@ with different voiced fractions.
 import mir_eval
 import numpy as np
 
-from stemify.evaluation.metrics.base import Metric, MetricResult
+from stemify.evaluation.metrics.base import MetricResult
+from stemify.evaluation.metrics.frame.base import FrameMetric
 
 CENTS_PER_OCTAVE = 1200.0
 
@@ -69,7 +70,7 @@ class PitchAccuracyResult(MetricResult):
         )
 
 
-class PitchAccuracy(Metric):
+class PitchAccuracy(FrameMetric):
     name = "pitch-accuracy"
 
     def __init__(self, cent_tolerance: float = 50.0) -> None:

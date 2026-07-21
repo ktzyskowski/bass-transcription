@@ -1,11 +1,47 @@
-"""Metrics: pure functions from an aligned (reference, estimate) pair to numbers.
+"""Metrics: pure functions from a (reference, estimate) pair to numbers.
 
-See ``base`` for the contract. Alignment and aggregation live in
-``stemify.evaluation.alignment``, deliberately outside this package.
+Two families, each in its own subpackage, split by input shape (see ``base``):
+
+  - ``frame`` -- ``FrameMetric`` over two frame-aligned Hz arrays.
+    ``PitchAccuracy``, ``PitchConfusion``. Alignment and pooling happen before
+    the metric, in ``stemify.evaluation.alignment`` / the frame harness.
+  - ``note`` -- ``NoteMetric`` over lists of per-track note lists. ``PRF``,
+    ``OverSegmentation``. Matching (``matched_pairs``) is shared within the subpackage.
+
+Everything is re-exported here, so callers import from ``stemify.evaluation.metrics``
+regardless of which subpackage a metric lives in.
 """
 
-from stemify.evaluation.metrics.base import Metric, MetricResult
-from stemify.evaluation.metrics.confusion import PitchConfusion
-from stemify.evaluation.metrics.pitch import PitchAccuracy
+from stemify.evaluation.metrics.base import MetricResult
+from stemify.evaluation.metrics.frame import (
+    ConfusionResult,
+    FrameMetric,
+    PitchAccuracy,
+    PitchAccuracyResult,
+    PitchConfusion,
+)
+from stemify.evaluation.metrics.note import (
+    PRF,
+    NoteMetric,
+    OverSegmentation,
+    OverSegResult,
+    PRFResult,
+    count_matches,
+    matched_pairs,
+)
 
-__all__ = ["Metric", "MetricResult", "PitchAccuracy", "PitchConfusion"]
+__all__ = [
+    "MetricResult",
+    "FrameMetric",
+    "NoteMetric",
+    "PitchAccuracy",
+    "PitchAccuracyResult",
+    "PitchConfusion",
+    "ConfusionResult",
+    "PRF",
+    "PRFResult",
+    "OverSegmentation",
+    "OverSegResult",
+    "matched_pairs",
+    "count_matches",
+]

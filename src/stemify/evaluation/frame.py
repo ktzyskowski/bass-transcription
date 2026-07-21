@@ -3,7 +3,7 @@
     FrameEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
 
 Asks "what pitch at each instant". Everything dataset-specific lives behind
-``Dataset``, everything metric-specific behind ``Metric``; this module only
+``Dataset``, everything metric-specific behind ``FrameMetric``; this module only
 sequences them:
 
     for each item:  reference -> predict -> align
@@ -33,12 +33,12 @@ from stemify.baselines.base import PitchBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.alignment import FrameSet, ItemRef, align
-from stemify.evaluation.metrics import Metric, PitchAccuracy, PitchConfusion
+from stemify.evaluation.metrics import FrameMetric, PitchAccuracy, PitchConfusion
 from stemify.evaluation.metrics.base import MetricResult
 from stemify.evaluation.report import Report, jsonable
 from stemify.transforms import AudioTransform, Identity
 
-DEFAULT_METRICS: tuple[Metric, ...] = (PitchAccuracy(), PitchConfusion())
+DEFAULT_METRICS: tuple[FrameMetric, ...] = (PitchAccuracy(), PitchConfusion())
 
 
 @dataclass(frozen=True)
@@ -184,7 +184,7 @@ class FrameEvaluation:
         self,
         dataset: Dataset,
         baseline: PitchBaseline,
-        metrics: Iterable[Metric] = DEFAULT_METRICS,
+        metrics: Iterable[FrameMetric] = DEFAULT_METRICS,
         transform: AudioTransform | None = None,
         group_by: Iterable[str] | None = None,
         progress: bool = True,

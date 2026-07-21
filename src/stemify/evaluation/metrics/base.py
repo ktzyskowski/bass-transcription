@@ -1,27 +1,23 @@
-"""The metric contract: a pure function from aligned reference/estimate to numbers.
+"""``MetricResult``: the one data type every metric returns, frame or note.
 
-A ``Metric`` receives two frame-aligned pitch arrays and returns a
-``MetricResult``. It does no resampling, no voicing inference, no aggregation --
-``FrameEvaluation`` has already done all of that (see ``stemify.evaluation.frame``).
-That is the whole point of the split: metrics stay stateless and comparable, and
-alignment is implemented once rather than once per metric.
+A metric is a pure function from a (reference, estimate) pair to numbers. There
+are two families, split by the shape of that pair, and each has its own base
+class:
 
-The contract for ``calculate(true, pred)``:
+  - ``FrameMetric`` (``metrics.frame``) scores two frame-aligned Hz arrays. Its
+    caller flattens every track's frames into one pair -- frame scoring is
+    elementwise, so concatenation is lossless -- and scores once.
+  - ``NoteMetric`` (``metrics.note``) scores two *lists of per-track* note-event
+    lists. Note matching is a per-track set assignment, not elementwise, so the
+    track structure is load-bearing and cannot be flattened away; the metric
+    loops tracks and sums counts internally, then scores once.
 
-  - both arrays are 1-D, the same length, and share a common time grid
-  - values are frequencies in Hz, with **0.0 meaning unvoiced**
-  - the grid is the *reference's*, which is the mir_eval convention -- the
-    reference defines where questions get asked, the estimate is resampled onto
-    it
-
-Aggregation across a dataset is *not* a metric concern. ``FrameEvaluation`` pools frames
-from every track into one pair of arrays and calls ``calculate`` once, which
-makes results frame-weighted by construction. Per-group breakdowns (per track,
-per string) are the same call on a boolean-masked subset. There is deliberately
-no ``combine`` step to get wrong.
+What they share is only this result type: named scalars plus any non-scalar
+artifacts, uniform to render, serialise and compare regardless of which family
+produced it. It is just data -- computation lives in the metrics, alignment and
+estimation in the harnesses (``stemify.evaluation.frame`` / ``.note``).
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -45,26 +41,3 @@ class MetricResult:
     def render(self) -> str:
         """Human-readable summary. Subclasses override for domain formatting."""
         return "\n".join(f"  {k:<28} {v:>9.4g}" for k, v in self.scalars.items())
-
-
-class Metric(ABC):
-    """Computes one family of numbers from an aligned (reference, estimate) pair."""
-
-    name: str
-
-    @abstractmethod
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
-        """Score aligned reference vs. estimate. See the module docstring for the
-        contract both arrays must satisfy."""
-
-    def _check(self, true: np.ndarray, pred: np.ndarray) -> None:
-        """Enforce the alignment contract. Cheap, and the failure it catches --
-        silently comparing misaligned grids -- produces plausible-looking
-        numbers that are entirely meaningless."""
-        if true.shape != pred.shape:
-            raise ValueError(
-                f"{self.name}: expected aligned arrays, got {true.shape} vs "
-                f"{pred.shape}. Align with stemify.evaluation.alignment first."
-            )
-        if true.ndim != 1:
-            raise ValueError(f"{self.name}: expected 1-D arrays, got {true.ndim}-D")

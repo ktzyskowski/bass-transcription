@@ -24,7 +24,8 @@ distinction drives entirely different fixes.
 import librosa
 import numpy as np
 
-from stemify.evaluation.metrics.base import Metric, MetricResult
+from stemify.evaluation.metrics.base import MetricResult
+from stemify.evaluation.metrics.frame.base import FrameMetric
 
 # The physical range of a 5-string bass with 24 frets: B0 (open low B) to G4
 # (24th fret of the G string). Chosen from instrument physics rather than fitted
@@ -79,7 +80,7 @@ class ConfusionResult(MetricResult):
         return "\n".join(lines)
 
 
-class PitchConfusion(Metric):
+class PitchConfusion(FrameMetric):
     name = "pitch-confusion"
 
     def __init__(self, midi_min: int = MIDI_MIN, midi_max: int = MIDI_MAX) -> None:
