@@ -20,6 +20,7 @@ its pyin contours so a score is a model forward, not a pyin re-run -- and logs
 """
 
 import argparse
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -101,6 +102,8 @@ def train_onset(
     val_limit: int = 40,
     val_every: int = 5,
     tracking_uri: str | None = None,
+    experiment: str = "onset-detection",
+    run_name: str = "tcn-v1",
     limit: int | None = None,
     out: Path | None = None,
 ) -> None:
@@ -135,8 +138,13 @@ def train_onset(
     callbacks: list = [ConsoleCallback()]
     mlflow = None
     if tracking_uri:
+        # Run names are labels, not keys -- MLflow mints a fresh run_id per launch,
+        # so two runs can share a name. Suffix a UTC timestamp so relaunching with
+        # the same --run-name yields distinct, self-dating runs ("tcn-v1" stays the
+        # groupable prefix) rather than ambiguous duplicates.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
         mlflow = MLflowCallback(
-            run_name="onset-tcn", tracking_uri=tracking_uri,
+            run_name=f"{run_name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
             params={"encoder": "tcn", "sources": ",".join(sources),
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate, "window": config.window_frames,
@@ -180,6 +188,9 @@ def main() -> None:
     ap.add_argument("--val-sources", default="stem,mix,demucs",
                     help="comma-separated val conditions, scored+logged separately")
     ap.add_argument("--tracking-uri", help="MLflow tracking URI, e.g. file:./mlruns")
+    ap.add_argument("--experiment", default="onset-detection",
+                    help="MLflow experiment name")
+    ap.add_argument("--run-name", default="tcn-v1", help="MLflow run name")
     ap.add_argument("--limit", type=int, help="cap train tracks per source")
     ap.add_argument("--val-limit", type=int, default=40)
     ap.add_argument("--val-every", type=int, default=5)
