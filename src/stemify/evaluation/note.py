@@ -23,16 +23,16 @@ import sys
 
 from stemify.baselines.base import PitchBaseline
 from stemify.data.base import Dataset, EvalItem
-from stemify.evaluation.metrics import PRF, MetricResult, NoteMetric, OverSegmentation
+from stemify.evaluation.metrics import PRF, Fragmentation, MetricResult, NoteMetric
 from stemify.evaluation.report import Report, jsonable
 from stemify.notes import NoteEvent
 from stemify.segmentation import HeuristicSegmenter, Segmenter
 from stemify.transforms import AudioTransform, Identity
 
-# PRF is the headline (what a tab is graded on); OverSegmentation explains the
+# PRF is the headline (what a tab is graded on); Fragmentation explains the
 # false positives PRF only counts. Both read the same match, so they always
 # agree on which estimates were wrong.
-DEFAULT_METRICS: tuple[NoteMetric, ...] = (PRF(), OverSegmentation())
+DEFAULT_METRICS: tuple[NoteMetric, ...] = (PRF(), Fragmentation())
 
 
 @dataclass(frozen=True)

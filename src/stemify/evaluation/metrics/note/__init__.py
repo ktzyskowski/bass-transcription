@@ -10,9 +10,9 @@ from stemify.evaluation.metrics.note.base import (
     count_matches,
     matched_pairs,
 )
-from stemify.evaluation.metrics.note.over_segmentation import (
-    OverSegmentation,
-    OverSegResult,
+from stemify.evaluation.metrics.note.fragmentation import (
+    Fragmentation,
+    FragmentationResult,
 )
 from stemify.evaluation.metrics.note.prf import PRF, PRFResult
 
@@ -22,6 +22,6 @@ __all__ = [
     "count_matches",
     "PRF",
     "PRFResult",
-    "OverSegmentation",
-    "OverSegResult",
+    "Fragmentation",
+    "FragmentationResult",
 ]

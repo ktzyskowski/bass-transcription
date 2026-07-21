@@ -6,7 +6,7 @@ Two families, each in its own subpackage, split by input shape (see ``base``):
     ``PitchAccuracy``, ``PitchConfusion``. Alignment and pooling happen before
     the metric, in ``stemify.evaluation.alignment`` / the frame harness.
   - ``note`` -- ``NoteMetric`` over lists of per-track note lists. ``PRF``,
-    ``OverSegmentation``. Matching (``matched_pairs``) is shared within the subpackage.
+    ``Fragmentation``. Matching (``matched_pairs``) is shared within the subpackage.
 
 Everything is re-exported here, so callers import from ``stemify.evaluation.metrics``
 regardless of which subpackage a metric lives in.
@@ -22,9 +22,9 @@ from stemify.evaluation.metrics.frame import (
 )
 from stemify.evaluation.metrics.note import (
     PRF,
+    Fragmentation,
+    FragmentationResult,
     NoteMetric,
-    OverSegmentation,
-    OverSegResult,
     PRFResult,
     count_matches,
     matched_pairs,
@@ -40,8 +40,8 @@ __all__ = [
     "ConfusionResult",
     "PRF",
     "PRFResult",
-    "OverSegmentation",
-    "OverSegResult",
+    "Fragmentation",
+    "FragmentationResult",
     "matched_pairs",
     "count_matches",
 ]

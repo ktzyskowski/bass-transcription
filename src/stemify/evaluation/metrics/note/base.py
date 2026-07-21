@@ -23,7 +23,7 @@ never averaged per track (per-track F1 is not averageable). A per-track number
 -- for ranking the worst items -- is the same ``calculate`` on a one-track list.
 
 ``matched_pairs`` is defined here, once, and shared by every note metric (``prf``,
-``over_segmentation``), so P/R/F and the over-segmentation breakdown can never
+``fragmentation``), so P/R/F and the fragmentation breakdown can never
 disagree about which estimates were matched. It ignores offsets
 (``offset_ratio=None``): a bass note's end is fuzzy (decay, release), its start
 is not, so onset + pitch is the honest criterion. Onset tolerance defaults to

@@ -1,13 +1,20 @@
-"""Where the false-positive notes come from: over-segmentation vs voicing.
+"""Where the false-positive notes come from: fragmentation vs voicing.
 
 Answers a question P/R/F cannot: of the phantom notes we emit, how many are the
 segmenter shredding one held note into fragments (fix: better note boundaries)
 versus the tracker hearing bass where the reference is silent (fix: better
 voicing). Every false positive lands in exactly one bucket, and the split says
-which head is worth building.
+which head is worth building:
 
-Reuses ``matched_pairs`` from ``note`` so "matched" -- hence which estimates are false
-positives -- means exactly what it does for ``PRF``.
+  - ``fragmentation`` -- onset falls *inside* a reference note's span and carries
+    that note's pitch: a leftover fragment of a real note the segmenter split.
+  - ``rest`` -- onset falls in a reference *rest*: a voicing false alarm.
+  - ``interior_offpitch`` -- inside a span but the *wrong* pitch (an octave slip
+    or confusion while a real note sounds); kept apart so it inflates neither.
+
+"Fragmentation" is the plain term for over-segmentation -- a held note broken
+into pieces. Reuses ``matched_pairs`` from ``note`` so "matched" -- hence which
+estimates are false positives -- means exactly what it does for ``PRF``.
 """
 
 from stemify.evaluation.metrics.base import MetricResult
@@ -15,7 +22,7 @@ from stemify.evaluation.metrics.note.base import NoteMetric, matched_pairs
 from stemify.notes import NoteEvent
 
 
-class OverSegResult(MetricResult):
+class FragmentationResult(MetricResult):
     def render(self) -> str:
         s = self.scalars
         fp = s["fp"]
@@ -25,8 +32,8 @@ class OverSegResult(MetricResult):
 
         return "\n".join([
             f"  false positives              {int(fp):,}",
-            f"    over-segmentation          {int(s['overseg']):>7,} "
-            f"({frac(s['overseg']):.1%})",
+            f"    fragmentation              {int(s['fragmentation']):>7,} "
+            f"({frac(s['fragmentation']):.1%})",
             f"    voicing (note in a rest)   {int(s['rest']):>7,} "
             f"({frac(s['rest']):.1%})",
             f"    interior, wrong pitch      {int(s['interior_offpitch']):>7,} "
@@ -34,8 +41,8 @@ class OverSegResult(MetricResult):
         ])
 
 
-class OverSegmentation(NoteMetric):
-    name = "over-segmentation"
+class Fragmentation(NoteMetric):
+    name = "fragmentation"
 
     def calculate(
         self,
@@ -43,7 +50,7 @@ class OverSegmentation(NoteMetric):
         estimates: list[list[NoteEvent]],
     ) -> MetricResult:
         semitone_tol = self.pitch_tolerance / 100.0
-        overseg = interior_off = rest = fp = 0
+        fragmentation = interior_off = rest = fp = 0
         for ref, est in zip(references, estimates):
             matched = {
                 e for _, e in matched_pairs(
@@ -60,10 +67,15 @@ class OverSegmentation(NoteMetric):
                 if not covering:
                     rest += 1
                 elif any(abs(e.midi_pitch - r.midi_pitch) <= semitone_tol for r in covering):
-                    overseg += 1
+                    fragmentation += 1
                 else:
                     interior_off += 1
-        return OverSegResult(
+        return FragmentationResult(
             self.name,
-            {"fp": fp, "overseg": overseg, "interior_offpitch": interior_off, "rest": rest},
+            {
+                "fp": fp,
+                "fragmentation": fragmentation,
+                "interior_offpitch": interior_off,
+                "rest": rest,
+            },
         )
