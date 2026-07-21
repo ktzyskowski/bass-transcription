@@ -1,0 +1,131 @@
+"""The training loop -- head-agnostic, driven by a loss per head.
+
+The model returns a dict of per-frame logits, one entry per head; the trainer
+sums a per-head loss over whichever heads are present, so training one head
+(onset first) or several (joint) is the same code. Onset and voicing are binary
+per-frame, so their loss is BCE-with-logits, class-weighted because onsets are a
+few percent of frames. Pitch is deferred: its target encoding (plain classes vs
+the two-hot cents target) is still open, so ``build_losses`` refuses it rather
+than guess.
+
+Early stopping is on validation loss, the cheap proxy. The number that actually
+matters is note-level F1 from the eval harness, but running that every epoch is
+expensive; the intended use is a periodic harness eval on the side, with val loss
+picking the checkpoint between.
+"""
+
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+
+import torch
+from torch import nn
+from torch.utils.data import DataLoader
+
+from stemify.training.config import TrainConfig
+from stemify.training.model import FrameTagger
+
+BINARY_HEADS = ("onset", "voicing")
+
+
+def best_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def build_losses(
+    heads: Iterable[str],
+    pos_weight: dict[str, float | None],
+    device: torch.device,
+) -> dict[str, nn.Module]:
+    """A loss module per head. Binary heads get weighted BCE; pitch is refused
+    until its encoding is decided."""
+    losses: dict[str, nn.Module] = {}
+    for h in heads:
+        if h in BINARY_HEADS:
+            pw = pos_weight.get(h)
+            weight = None if pw is None else torch.tensor(pw, device=device)
+            losses[h] = nn.BCEWithLogitsLoss(pos_weight=weight)
+        else:
+            raise NotImplementedError(
+                f"No loss for head '{h}'. Binary heads {BINARY_HEADS} use weighted "
+                "BCE; pitch needs its target encoding (classes vs two-hot cents) "
+                "settled first."
+            )
+    return losses
+
+
+@dataclass
+class History:
+    train_loss: list[float] = field(default_factory=list)
+    val_loss: list[float] = field(default_factory=list)
+    best_epoch: int = -1
+
+
+class Trainer:
+    """Fit a ``FrameTagger`` with one optimiser and a per-head loss sum."""
+
+    def __init__(self, model: FrameTagger, config: TrainConfig) -> None:
+        self.config = config
+        self.device = torch.device(config.device or best_device())
+        self.model = model.to(self.device)
+        self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+        self.losses = build_losses(config.heads, config.pos_weight, self.device)
+
+    def _batch_loss(self, x: torch.Tensor, y: dict[str, torch.Tensor]) -> torch.Tensor:
+        logits = self.model(x.to(self.device))
+        total = x.new_zeros(())
+        for head, loss_fn in self.losses.items():
+            pred = logits[head]
+            if pred.shape[-1] == 1:  # binary head: (B, T, 1) -> (B, T)
+                pred = pred.squeeze(-1)
+            total = total + loss_fn(pred, y[head].to(self.device))
+        return total
+
+    def _run_epoch(self, loader: DataLoader, train: bool) -> float:
+        self.model.train(train)
+        total, n = 0.0, 0
+        with torch.set_grad_enabled(train):
+            for x, y in loader:
+                loss = self._batch_loss(x, y)
+                if train:
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+                total += loss.detach().item() * x.shape[0]
+                n += x.shape[0]
+        return total / max(n, 1)
+
+    def fit(
+        self, train_loader: DataLoader, val_loader: DataLoader | None = None
+    ) -> History:
+        history = History()
+        best_val = float("inf")
+        best_state = None
+        stale = 0
+        for epoch in range(self.config.max_epochs):
+            history.train_loss.append(self._run_epoch(train_loader, train=True))
+            monitored = (
+                self._run_epoch(val_loader, train=False)
+                if val_loader is not None
+                else history.train_loss[-1]
+            )
+            history.val_loss.append(monitored)
+
+            if monitored < best_val - 1e-5:
+                best_val, best_state, history.best_epoch, stale = (
+                    monitored, self._state_cpu(), epoch, 0
+                )
+            else:
+                stale += 1
+                if stale >= self.config.patience:
+                    break
+
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+        return history
+
+    def _state_cpu(self) -> dict[str, torch.Tensor]:
+        return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
