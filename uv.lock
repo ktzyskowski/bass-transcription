@@ -2663,6 +2663,11 @@ dependencies = [
     { name = "torchaudio" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.50" },
@@ -2677,6 +2682,9 @@ requires-dist = [
     { name = "torch", specifier = ">=2.13.0" },
     { name = "torchaudio", specifier = ">=2.11.0" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "strictyaml"
