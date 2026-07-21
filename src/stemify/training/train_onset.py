@@ -131,13 +131,18 @@ def train_onset(
     val_ds = SlakhDataset(root, split="validation", source="stem", limit=val_limit)
     val_paths = prepare_examples(val_ds, HEADS, cache_dir / "val" / "stem")
 
-    train_loader = DataLoader(
-        _windows(train_paths, config), batch_size=config.batch_size,
-        shuffle=True, collate_fn=collate,
-    )
-    val_loader = DataLoader(
-        _windows(val_paths, config), batch_size=config.batch_size, collate_fn=collate,
-    )
+    # persistent_workers keeps the worker pool alive between epochs -- without it
+    # the fork cost is paid every epoch and cancels the benefit on short epochs.
+    # It is only valid when there are workers, so gate it.
+    loader_kw: dict = {
+        "batch_size": config.batch_size,
+        "collate_fn": collate,
+        "num_workers": config.num_workers,
+    }
+    if config.num_workers > 0:
+        loader_kw["persistent_workers"] = True
+    train_loader = DataLoader(_windows(train_paths, config), shuffle=True, **loader_kw)
+    val_loader = DataLoader(_windows(val_paths, config), **loader_kw)
 
     trainer = Trainer(build_model(), config)
 
@@ -211,12 +216,15 @@ def main() -> None:
     ap.add_argument("--val-every", type=int, default=5)
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--num-workers", type=int, default=8,
+                    help="DataLoader worker subprocesses (0 = main thread)")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
     args = ap.parse_args()
 
     config = TrainConfig(
         heads=("onset",), max_epochs=args.epochs, batch_size=args.batch_size,
+        num_workers=args.num_workers,
     )
     train_onset(
         args.root, args.cache_dir, config, sources=args.sources.split(","),

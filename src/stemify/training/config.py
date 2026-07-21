@@ -30,6 +30,12 @@ class TrainConfig:
     max_epochs: int = 50
     patience: int = 8  # early-stop after this many epochs without val gain
 
+    # DataLoader worker subprocesses. 0 loads batches on the main thread, which
+    # can starve a fast model's GPU step; >0 prefetches batches across CPU cores
+    # so the device stays fed. A few below the physical core count leaves headroom
+    # for the main process and the GPU driver.
+    num_workers: int = 0
+
     # Onsets and (on sparse basslines) voicing are rare positives, so their BCE
     # is class-weighted. Per-head positive weight; None lets the trainer estimate
     # it from the data.
