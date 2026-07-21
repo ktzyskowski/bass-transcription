@@ -24,6 +24,13 @@ floor for the pitch stage. It draws a note boundary at any of three cues:
     into one -- a real limitation the note-level metric will expose as missed
     notes.
 
+The rest/onset cues over-fire: spectral flux triggers on mid-sustain noise and
+pyin drops out for a frame or two, both splitting one held note into same-pitch
+fragments. So an optional final pass (``merge_gap_s``) rejoins consecutive
+same-pitch notes closer than a small gap -- the fragmentation these artifacts
+create. It trades against recall (a real fast repeat can look like a fragment),
+which is exactly the knee the Fragmentation metric measures.
+
 Monophonic bass is what makes this tractable: with one note at a time the
 timeline partitions cleanly into notes, no overlapping voices to untangle.
 """
@@ -43,6 +50,13 @@ MIN_NOTE_S = 0.05
 # A sustained jump this far from the note's running pitch starts a new note.
 # Under half a semitone would split vibrato; this keeps a vibrato'd note whole.
 PITCH_SPLIT_SEMITONES = 0.8
+# Two same-pitch notes closer than this are rejoined: the split that separated
+# them was an artifact (a spurious mid-sustain onset, gap ~0, or a one-frame pyin
+# dropout, gap ~one hop) rather than a real re-articulation. None disables the
+# pass. This is the over-segmentation/fragmentation lever: too large and genuine
+# repeated same-pitch notes merge, costing recall. Tuned against the
+# Fragmentation metric.
+MERGE_GAP_S: float | None = None
 
 
 def detect_onsets(path: str | Path, sr: int = 22050) -> np.ndarray:
@@ -84,6 +98,7 @@ class HeuristicSegmenter(Segmenter):
         min_note_s: float = MIN_NOTE_S,
         pitch_split_semitones: float = PITCH_SPLIT_SEMITONES,
         use_onsets: bool = True,
+        merge_gap_s: float | None = MERGE_GAP_S,
     ) -> None:
         self.min_note_s = min_note_s
         self.pitch_split_semitones = pitch_split_semitones
@@ -91,6 +106,10 @@ class HeuristicSegmenter(Segmenter):
         # notes merge -- useful to toggle when measuring how much onset
         # detection contributes to note recall.
         self.use_onsets = use_onsets
+        # Rejoin same-pitch notes split by an artifact rather than a real
+        # re-articulation. None keeps the raw splits; a small value undoes the
+        # dominant source of over-segmentation.
+        self.merge_gap_s = merge_gap_s
 
     def segment(self, contour: Contour, audio_path: str | Path) -> list[NoteEvent]:
         onsets = detect_onsets(audio_path) if self.use_onsets else None
@@ -148,4 +167,35 @@ class HeuristicSegmenter(Segmenter):
         if start is not None:
             emit(start, times.size)
 
+        if self.merge_gap_s is not None:
+            notes = self._merge_same_pitch(notes)
         return notes
+
+    def _merge_same_pitch(self, notes: list[NoteEvent]) -> list[NoteEvent]:
+        """Rejoin consecutive notes within ``pitch_split_semitones`` and
+        ``merge_gap_s`` of each other -- the fragments a spurious onset or a pyin
+        dropout left behind. The merged note keeps the first fragment's onset
+        (the real one, already matched as a true positive) and drops the second's
+        onset (the phantom), which is exactly the false positive to remove. Pitch
+        becomes the duration-weighted mean, so a long note plus a stray frame is
+        barely moved."""
+        if not notes:
+            return notes
+        merged = [notes[0]]
+        for nxt in notes[1:]:
+            cur = merged[-1]
+            gap = nxt.onset - cur.offset
+            same_pitch = abs(nxt.midi_pitch - cur.midi_pitch) <= self.pitch_split_semitones
+            if same_pitch and gap <= self.merge_gap_s:
+                dur_cur = cur.offset - cur.onset
+                dur_nxt = nxt.offset - nxt.onset
+                pitch = (
+                    (cur.midi_pitch * dur_cur + nxt.midi_pitch * dur_nxt)
+                    / (dur_cur + dur_nxt)
+                )
+                merged[-1] = NoteEvent(
+                    onset=cur.onset, offset=nxt.offset, midi_pitch=pitch
+                )
+            else:
+                merged.append(nxt)
+        return merged
