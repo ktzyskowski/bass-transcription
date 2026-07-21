@@ -2665,6 +2665,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mlflow" },
     { name = "pytest" },
 ]
 
@@ -2684,7 +2685,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "mlflow", specifier = ">=2" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "strictyaml"

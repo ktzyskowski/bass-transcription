@@ -21,6 +21,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
 from stemify.training.model import FrameTagger
 
@@ -99,33 +100,48 @@ class Trainer:
         return total / max(n, 1)
 
     def fit(
-        self, train_loader: DataLoader, val_loader: DataLoader | None = None
+        self,
+        train_loader: DataLoader,
+        val_loader: DataLoader | None = None,
+        callbacks: Iterable[Callback] = (),
     ) -> History:
+        callbacks = list(callbacks)
         history = History()
         best_val = float("inf")
         best_state = None
         stale = 0
         for epoch in range(self.config.max_epochs):
-            history.train_loss.append(self._run_epoch(train_loader, train=True))
+            train_loss = self._run_epoch(train_loader, train=True)
+            history.train_loss.append(train_loss)
             monitored = (
                 self._run_epoch(val_loader, train=False)
                 if val_loader is not None
-                else history.train_loss[-1]
+                else train_loss
             )
             history.val_loss.append(monitored)
 
             if monitored < best_val - 1e-5:
                 best_val, best_state, history.best_epoch, stale = (
-                    monitored, self._state_cpu(), epoch, 0
+                    monitored, self.state_cpu(), epoch, 0
                 )
             else:
                 stale += 1
-                if stale >= self.config.patience:
-                    break
+
+            logs = EpochLogs(
+                epoch=epoch, train_loss=train_loss, val_loss=monitored,
+                best_epoch=history.best_epoch, snapshot=self.state_cpu,
+            )
+            for callback in callbacks:
+                callback.on_epoch_end(logs)
+
+            if stale >= self.config.patience:
+                break
 
         if best_state is not None:
             self.model.load_state_dict(best_state)
+        for callback in callbacks:
+            callback.on_train_end(history.best_epoch)
         return history
 
-    def _state_cpu(self) -> dict[str, torch.Tensor]:
+    def state_cpu(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}

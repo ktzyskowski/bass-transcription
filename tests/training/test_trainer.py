@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import collate
-from stemify.training.model import FrameEncoder, FrameTagger, onset_head
+from stemify.training.model import FrameTagger, TCNEncoder, onset_head
 from stemify.training.trainer import Trainer, build_losses
 
 
@@ -35,7 +35,7 @@ class _FixedMapping(Dataset):
 
 def test_fit_reduces_loss():
     loader = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
-    model = FrameTagger(FrameEncoder(), {"onset": onset_head()})
+    model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
     config = TrainConfig(
         heads=("onset",), device="cpu", max_epochs=20,
         learning_rate=1e-2, patience=99,
@@ -46,11 +46,13 @@ def test_fit_reduces_loss():
 
 def test_best_checkpoint_is_restored():
     loader = DataLoader(_FixedMapping(4, window=16), batch_size=4, collate_fn=collate)
-    model = FrameTagger(FrameEncoder(), {"onset": onset_head()})
+    model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
     config = TrainConfig(heads=("onset",), device="cpu", max_epochs=5, patience=99)
     history = Trainer(model, config).fit(loader)
     assert 0 <= history.best_epoch < len(history.val_loss)
-    assert history.val_loss[history.best_epoch] == min(history.val_loss)
+    # best_epoch tracks the minimum up to the 1e-5 improvement threshold the
+    # early-stopper uses, so it is at (or within that threshold of) the minimum.
+    assert history.val_loss[history.best_epoch] <= min(history.val_loss) + 1e-5
 
 
 def test_pitch_head_loss_is_refused():
