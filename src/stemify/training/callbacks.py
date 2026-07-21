@@ -83,10 +83,13 @@ class MLflowCallback(Callback):
 
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
-        experiment_id = "0"
-        if experiment:
-            experiment_id = mlflow.set_experiment(experiment).experiment_id
-        self._client = MlflowClient()
+        self._client = MlflowClient(tracking_uri=tracking_uri)
+        # Get-or-create rather than assume experiment "0" exists: on a fresh (or
+        # pre-created empty) store the Default experiment has not been
+        # initialised yet, and create_run would fail looking it up.
+        name = experiment or "Default"
+        found = self._client.get_experiment_by_name(name)
+        experiment_id = found.experiment_id if found else self._client.create_experiment(name)
         self._run_id = self._client.create_run(experiment_id, run_name=run_name).info.run_id
         for key, value in (params or {}).items():
             self._client.log_param(self._run_id, key, value)
