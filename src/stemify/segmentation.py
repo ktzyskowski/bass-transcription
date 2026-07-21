@@ -57,19 +57,37 @@ PITCH_SPLIT_SEMITONES = 0.8
 # repeated same-pitch notes merge, costing recall. Tuned against the
 # Fragmentation metric.
 MERGE_GAP_S: float | None = None
+# Peak-picking threshold for onset detection: an onset must rise this far above
+# the local mean flux to fire. librosa's default is 0.07. Raising it drops the
+# weak flux peaks -- mid-sustain bow/finger noise -- that spuriously split a held
+# note, while keeping the strong attacks of real re-plucks, because spurious
+# onsets are systematically weaker than real ones. A sweep on Slakh stems put the
+# F1 optimum near 0.20 (F1 71% -> 73%, precision +7 pts at -6 pts recall), which
+# strictly beats the merge pass. Left at None (librosa default) because that
+# optimum is tuned on isolated stems; the separated/mixed deployment condition
+# has a different flux distribution and needs its own validation before the
+# default moves. Unlike a scalar threshold, a learned onset head sees the whole
+# attack shape, so this is the ceiling it should beat.
+ONSET_DELTA: float | None = None
 
 
-def detect_onsets(path: str | Path, sr: int = 22050) -> np.ndarray:
+def detect_onsets(
+    path: str | Path, sr: int = 22050, delta: float | None = ONSET_DELTA
+) -> np.ndarray:
     """Onset times (seconds) via spectral flux, backtracked to the energy rise.
 
     A module-level utility rather than a ``Segmenter`` method because it is a
     generic audio operation: a learned segmenter might reuse it, replace it with
     a learned onset head, or ignore it. ``backtrack`` moves each detection to the
     preceding local energy minimum, so the reported time is the note's actual
-    start rather than the flux peak a few frames later.
+    start rather than the flux peak a few frames later. ``delta`` is the
+    peak-picking threshold; None uses librosa's default (0.07).
     """
     audio, _ = librosa.load(path, sr=sr, mono=True)
-    return librosa.onset.onset_detect(y=audio, sr=sr, units="time", backtrack=True)
+    kwargs = {} if delta is None else {"delta": delta}
+    return librosa.onset.onset_detect(
+        y=audio, sr=sr, units="time", backtrack=True, **kwargs
+    )
 
 
 class Segmenter(ABC):
@@ -99,6 +117,7 @@ class HeuristicSegmenter(Segmenter):
         pitch_split_semitones: float = PITCH_SPLIT_SEMITONES,
         use_onsets: bool = True,
         merge_gap_s: float | None = MERGE_GAP_S,
+        onset_delta: float | None = ONSET_DELTA,
     ) -> None:
         self.min_note_s = min_note_s
         self.pitch_split_semitones = pitch_split_semitones
@@ -110,9 +129,17 @@ class HeuristicSegmenter(Segmenter):
         # re-articulation. None keeps the raw splits; a small value undoes the
         # dominant source of over-segmentation.
         self.merge_gap_s = merge_gap_s
+        # Onset peak-picking threshold. Higher drops weak (spurious) onsets --
+        # the better-targeted fragmentation lever, since it removes only weak
+        # splits rather than merging indiscriminately. None = librosa default.
+        self.onset_delta = onset_delta
 
     def segment(self, contour: Contour, audio_path: str | Path) -> list[NoteEvent]:
-        onsets = detect_onsets(audio_path) if self.use_onsets else None
+        onsets = (
+            detect_onsets(audio_path, delta=self.onset_delta)
+            if self.use_onsets
+            else None
+        )
         return self.group(contour, onsets)
 
     def group(
