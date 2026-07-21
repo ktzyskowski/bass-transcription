@@ -117,3 +117,18 @@ def test_mlflow_callback_logs_metrics(tmp_path):
     history = client.get_metric_history(cb._run_id, "train_loss")
     assert len(history) == 3
     assert run.data.metrics["best_epoch"] >= 0
+
+
+def test_mlflow_callback_logs_artifact(tmp_path):
+    pytest.importorskip("mlflow")
+    from mlflow.tracking import MlflowClient
+
+    uri = f"file://{tmp_path}/mlruns"
+    cb = MLflowCallback(run_name="t", tracking_uri=uri)
+    ckpt = tmp_path / "onset_model.pt"
+    ckpt.write_bytes(b"weights")
+    cb.log_artifact(ckpt)
+
+    client = MlflowClient(tracking_uri=uri)
+    artifacts = [a.path for a in client.list_artifacts(cb._run_id)]
+    assert "onset_model.pt" in artifacts

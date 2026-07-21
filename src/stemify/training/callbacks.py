@@ -19,6 +19,7 @@ Two are provided:
     model is tiny) to keep it off the training device entirely.
 """
 
+import os
 from collections.abc import Callable, Mapping
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -98,6 +99,10 @@ class MLflowCallback(Callback):
         """Thread-safe metric logging -- the entry point for the async validator."""
         for key, value in metrics.items():
             self._client.log_metric(self._run_id, key, float(value), step=step)
+
+    def log_artifact(self, path: os.PathLike[str] | str) -> None:
+        """Attach a file (e.g. the saved model checkpoint) to this run."""
+        self._client.log_artifact(self._run_id, str(path))
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
         self.sink({"train_loss": logs.train_loss, "val_loss": logs.val_loss}, logs.epoch)

@@ -25,6 +25,7 @@ directory invalidates its cache.
 """
 
 import hashlib
+import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
