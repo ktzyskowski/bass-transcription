@@ -135,12 +135,16 @@ class HeuristicSegmenter(Segmenter):
         self.onset_delta = onset_delta
 
     def segment(self, contour: Contour, audio_path: str | Path) -> list[NoteEvent]:
-        onsets = (
-            detect_onsets(audio_path, delta=self.onset_delta)
-            if self.use_onsets
-            else None
-        )
-        return self.group(contour, onsets)
+        return self.group(contour, self._onset_times(audio_path))
+
+    def _onset_times(self, audio_path: str | Path) -> np.ndarray | None:
+        """Onset times (seconds) used as the same-pitch split cue -- here, spectral
+        flux. The one piece a learned segmenter swaps: override this to peak-pick a
+        trained onset head instead, and the grouping (rests, pitch changes, merge)
+        is inherited unchanged."""
+        if not self.use_onsets:
+            return None
+        return detect_onsets(audio_path, delta=self.onset_delta)
 
     def group(
         self, contour: Contour, onsets: np.ndarray | None = None
