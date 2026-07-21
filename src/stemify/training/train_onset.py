@@ -20,6 +20,7 @@ its pyin contours so a score is a model forward, not a pyin re-run -- and logs
 """
 
 import argparse
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,6 +39,8 @@ from stemify.training.model import FrameTagger, TCNEncoder, onset_head
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
+
+logger = logging.getLogger(__name__)
 
 HEADS = ["onset"]
 
@@ -156,9 +159,9 @@ def train_onset(
         # Precompute pyin (and, for demucs, the separation) over each val condition
         # once; async scores are then just model forwards. Slowest at construction
         # is demucs -- it separates its val audio before pyin.
-        print(
-            f"caching val contours for {val_limit} tracks x conditions "
-            f"{val_conditions}...", flush=True,
+        logger.info(
+            "caching val contours for %d tracks x conditions %s...",
+            val_limit, val_conditions,
         )
         validators = build_validators(
             root, val_limit, val_conditions, contour_cache=cache_dir / "val_contours"
@@ -179,12 +182,19 @@ def train_onset(
         {"state_dict": trainer.model.state_dict(), "heads": HEADS, "encoder": "tcn"},
         out,
     )
-    print(f"saved onset model -> {out}", flush=True)
+    logger.info("saved onset model -> %s", out)
     if mlflow is not None:
         mlflow.log_artifact(out)
 
 
 def main() -> None:
+    # Configure logging once, here at the entry point -- library modules only ever
+    # getLogger, never configure, so importing them stays side-effect free.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default="data/raw/slakh2100")
     ap.add_argument("--cache-dir", type=Path, default=Path("data/cache/onset"))

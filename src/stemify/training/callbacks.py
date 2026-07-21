@@ -19,11 +19,14 @@ Two are provided:
     model is tiny) to keep it off the training device entirely.
 """
 
+import logging
 import os
 from collections.abc import Callable, Mapping
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 Metrics = Mapping[str, float]
 StateDict = Mapping[str, Any]
@@ -56,17 +59,16 @@ class Callback:
 
 
 class ConsoleCallback(Callback):
-    """Print epoch losses to stdout -- the minimal progress signal for a run."""
+    """Log epoch losses -- the minimal progress signal for a run."""
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
-        print(
-            f"epoch {logs.epoch:>3}  train {logs.train_loss:.4f}  "
-            f"val {logs.val_loss:.4f}  (best {logs.best_epoch})",
-            flush=True,
+        logger.info(
+            "epoch %3d  train %.4f  val %.4f  (best %d)",
+            logs.epoch, logs.train_loss, logs.val_loss, logs.best_epoch,
         )
 
     def on_train_end(self, best_epoch: int) -> None:
-        print(f"training done -- best epoch {best_epoch}", flush=True)
+        logger.info("training done -- best epoch %d", best_epoch)
 
 
 class MLflowCallback(Callback):

@@ -70,11 +70,13 @@ def test_epoch_hook_receives_data_not_the_trainer():
     assert "encoder.project.weight" in dict(rec.epochs[0].snapshot())
 
 
-def test_console_callback_prints_progress(capsys):
-    _trainer(max_epochs=2).fit(_loader(), callbacks=[ConsoleCallback()])
-    out = capsys.readouterr().out
-    assert "epoch" in out
-    assert "training done" in out
+def test_console_callback_logs_progress(caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="stemify.training.callbacks"):
+        _trainer(max_epochs=2).fit(_loader(), callbacks=[ConsoleCallback()])
+    assert "epoch" in caplog.text
+    assert "training done" in caplog.text
 
 
 def test_async_validation_delivers_to_sink():

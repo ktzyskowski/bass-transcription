@@ -17,6 +17,7 @@ features and every target therefore share one grid, and none of them assume it
 lines up with the 10 ms reference grid.
 """
 
+import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,8 @@ from stemify.features import HOP_LENGTH, SAMPLE_RATE, cqt, load_audio
 from stemify.notes import NoteEvent
 from stemify.training.labels import onset_targets, pitch_targets, voicing_targets
 from stemify.transforms import AudioTransform, Identity
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,8 +117,10 @@ def prepare_examples(
     transform = transform or Identity()
     cache_dir.mkdir(parents=True, exist_ok=True)
     heads = list(heads)
+    total = len(dataset)
     paths: list[Path] = []
-    for item in dataset:
+    computed = 0  # cache misses actually computed (the slow ones; the rest are hits)
+    for i, item in enumerate(dataset, start=1):
         path = cache_dir / f"{item.name.replace('/', '_')}__{transform.name}.npz"
         if not path.exists():
             audio = load_audio(transform.apply(item.audio()))
@@ -126,7 +131,18 @@ def prepare_examples(
                 onset_tolerance_frames,
             )
             example.save(path)
+            computed += 1
         paths.append(path)
+        # Prep is otherwise silent for hours; print a heartbeat so a long
+        # separation+CQT pass is visibly progressing. Tagged by the cache dir's
+        # name (the source tag: stem/mix/demucs -- transform.name can't tell stem
+        # from mix, both Identity), and split computed vs cached so a resumed run
+        # visibly races through hits and slows on real work.
+        if i % 25 == 0 or i == total:
+            logger.info(
+                "prepare[%s] %d/%d (%d computed, %d cached)",
+                cache_dir.name, i, total, computed, i - computed,
+            )
     return paths
 
 
