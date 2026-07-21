@@ -56,18 +56,21 @@ def build_model() -> FrameTagger:
 
 
 def build_validators(
-    root: str, val_limit: int, conditions: list[str]
+    root: str, val_limit: int, conditions: list[str], contour_cache: Path | None = None
 ) -> dict[str, OnsetValidator]:
     """One ``OnsetValidator`` per condition, keyed by tag. A condition is just a
     ``(source, transform)`` pair -- exactly what a validator wraps -- so the same
     ``SOURCES`` table that defines the *training* conditions defines the validation
-    ones. Each caches its own pyin contours; the demucs condition separates its val
-    audio through the (cached) DemucsSeparator at construction."""
+    ones. Contours are memoised to ``contour_cache`` (shared across conditions --
+    keyed on each condition's resolved audio path), so pyin runs once per file ever
+    rather than at every launch, which is what makes a large val set affordable. The
+    demucs condition separates its val audio through the (cached) DemucsSeparator at
+    construction."""
     validators: dict[str, OnsetValidator] = {}
     for tag in conditions:
         source, transform = SOURCES[tag]
         ds = SlakhDataset(root, split="validation", source=source, limit=val_limit)
-        validators[tag] = OnsetValidator(ds, transform)
+        validators[tag] = OnsetValidator(ds, transform, contour_cache=contour_cache)
     return validators
 
 
@@ -157,7 +160,9 @@ def train_onset(
             f"caching val contours for {val_limit} tracks x conditions "
             f"{val_conditions}...", flush=True,
         )
-        validators = build_validators(root, val_limit, val_conditions)
+        validators = build_validators(
+            root, val_limit, val_conditions, contour_cache=cache_dir / "val_contours"
+        )
         callbacks += [
             mlflow,
             AsyncValidationCallback(_eval_fn(validators), mlflow.sink, every=val_every),
