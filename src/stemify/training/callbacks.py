@@ -54,6 +54,20 @@ class Callback:
         ...
 
 
+class ConsoleCallback(Callback):
+    """Print epoch losses to stdout -- the minimal progress signal for a run."""
+
+    def on_epoch_end(self, logs: EpochLogs) -> None:
+        print(
+            f"epoch {logs.epoch:>3}  train {logs.train_loss:.4f}  "
+            f"val {logs.val_loss:.4f}  (best {logs.best_epoch})",
+            flush=True,
+        )
+
+    def on_train_end(self, best_epoch: int) -> None:
+        print(f"training done -- best epoch {best_epoch}", flush=True)
+
+
 class MLflowCallback(Callback):
     """Log train/val loss (and, via ``sink``, async note-level metrics) to MLflow."""
 

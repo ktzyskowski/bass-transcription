@@ -23,7 +23,11 @@ from torch.utils.data import DataLoader
 from stemify.baselines.pyin import PyinBaseline
 from stemify.data.slakh import SlakhDataset
 from stemify.evaluation import NoteEvaluation
-from stemify.training.callbacks import AsyncValidationCallback, MLflowCallback
+from stemify.training.callbacks import (
+    AsyncValidationCallback,
+    ConsoleCallback,
+    MLflowCallback,
+)
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import FrameWindowDataset, collate, prepare_examples
 from stemify.training.model import FrameTagger, TCNEncoder, onset_head
@@ -94,7 +98,7 @@ def train_onset(
 
     trainer = Trainer(build_model(), config)
 
-    callbacks = []
+    callbacks: list = [ConsoleCallback()]
     if tracking_uri:
         mlflow = MLflowCallback(
             run_name="onset-tcn", tracking_uri=tracking_uri,

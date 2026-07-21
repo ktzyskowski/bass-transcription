@@ -13,6 +13,7 @@ from stemify.features import N_BINS
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     Callback,
+    ConsoleCallback,
     EpochLogs,
     MLflowCallback,
 )
@@ -67,6 +68,13 @@ def test_epoch_hook_receives_data_not_the_trainer():
     # snapshot is callable and returns weights, so the async validator can freeze one
     assert callable(rec.epochs[0].snapshot)
     assert "encoder.project.weight" in dict(rec.epochs[0].snapshot())
+
+
+def test_console_callback_prints_progress(capsys):
+    _trainer(max_epochs=2).fit(_loader(), callbacks=[ConsoleCallback()])
+    out = capsys.readouterr().out
+    assert "epoch" in out
+    assert "training done" in out
 
 
 def test_async_validation_delivers_to_sink():
