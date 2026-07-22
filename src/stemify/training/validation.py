@@ -82,12 +82,28 @@ def cached_f0(
 
 @dataclass
 class ValExample:
-    """One val track, everything fixed across checkpoints precomputed."""
+    """One val track, everything fixed across checkpoints precomputed.
 
-    features: torch.Tensor        # (1, 1, n_bins, T)
+    Features are held either in memory (``features``, e.g. tests or the no-cache
+    path) or lazily on disk (``feature_path``, the cached path). Holding all val
+    features in memory for a full-scale val set is ~21 GB across three conditions,
+    so when they are cached to disk we keep only the path and load the tensor
+    transiently per score -- see ``load_features``. Only ``frame_times`` (small) is
+    kept resident, since scoring needs it for onset timing."""
+
     frame_times: np.ndarray       # (T,)
     contour: Contour              # pyin pitch, fixed
     notes: list[NoteEvent]        # reference notes
+    features: torch.Tensor | None = None    # (1, 1, n_bins, T), if resident
+    feature_path: Path | None = None        # else load from disk on demand
+
+    def load_features(self) -> torch.Tensor:
+        """The (1, 1, n_bins, T) feature tensor, from memory or disk. The disk read
+        is transient -- freed after each score -- so memory stays flat over the run."""
+        if self.features is not None:
+            return self.features
+        arr = np.load(self.feature_path)["features"]
+        return torch.from_numpy(arr).float()[None, None]
 
 
 @torch.no_grad()
@@ -105,7 +121,7 @@ def score_examples(
     refs: list[list[NoteEvent]] = []
     ests: list[list[NoteEvent]] = []
     for ex in examples:
-        logits = model(ex.features.to(device))["onset"]           # (1, T, 1)
+        logits = model(ex.load_features().to(device))["onset"]    # (1, T, 1)
         probs = torch.sigmoid(logits).squeeze(-1).squeeze(0).cpu().numpy()
         onsets = onset_times_from_probs(probs, ex.frame_times, threshold, min_gap_s)
         ests.append(grouper.group(ex.contour, onsets))
@@ -151,19 +167,24 @@ class OnsetValidator:
         for item in dataset:
             path = transform.apply(item.audio())
             if feature_cache is not None:
-                cached = TrackExample.load(
-                    example_path(feature_cache, item.name, transform.name)
-                )
-                features, frame_times = cached.features, cached.frame_times
+                # Keep only the path + small frame_times resident; the feature tensor
+                # is loaded transiently per score (load_features), so the whole val
+                # set's CQT never sits in memory at once.
+                fpath = example_path(feature_cache, item.name, transform.name)
+                frame_times = np.load(fpath)["frame_times"]
+                features = None
             else:
-                features = cqt(load_audio(path))
-                frame_times = frame_times_for(features)
+                feat = cqt(load_audio(path))
+                frame_times = frame_times_for(feat)
+                features = torch.from_numpy(feat).float()[None, None]
+                fpath = None
             self.examples.append(
                 ValExample(
-                    features=torch.from_numpy(features).float()[None, None],
                     frame_times=frame_times,
                     contour=cached_f0(baseline, path, contour_cache),
                     notes=item.reference_notes(),
+                    features=features,
+                    feature_path=fpath,
                 )
             )
 

@@ -90,7 +90,9 @@ def _example(n_frames, hop, held_pitch, onset_frames):
     features = torch.randn(1, 1, N_BINS, n_frames)
     notes = [NoteEvent(onset=frame_times[f], offset=frame_times[f] + 0.2,
                        midi_pitch=held_pitch) for f in onset_frames]
-    return ValExample(features, frame_times, contour, notes), frame_times
+    ex = ValExample(frame_times=frame_times, contour=contour, notes=notes,
+                    features=features)
+    return ex, frame_times
 
 
 def test_score_examples_returns_note_metrics():
