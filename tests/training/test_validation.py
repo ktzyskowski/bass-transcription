@@ -10,10 +10,16 @@ from torch import nn
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
-from stemify.segmentation import HeuristicSegmenter
+from stemify.segmentation.learned import LearnedSegmenter
 from stemify.training.validation import ValExample, cached_f0, score_examples
 
 N_BINS = 8
+
+
+def _segment(model):
+    """The segment step the validator scores: wrap a (fake) model in a real
+    LearnedSegmenter and hand back its cache-fed segment_features."""
+    return LearnedSegmenter(model, device="cpu").segment_features
 
 
 class _CountingBaseline:
@@ -49,7 +55,8 @@ def test_cached_f0_computes_once_then_reads_disk(tmp_path):
 def test_cached_f0_keys_on_path_so_conditions_dont_collide(tmp_path):
     # Two different audio files (stem vs separated) must get distinct cache entries.
     a, b = tmp_path / "stem.wav", tmp_path / "demucs.wav"
-    a.write_text("a"); b.write_text("b")
+    a.write_text("a")
+    b.write_text("b")
     cache = tmp_path / "contours"
     base = _CountingBaseline()
     cached_f0(base, a, cache)
@@ -87,7 +94,7 @@ def _example(n_frames, hop, held_pitch, onset_frames):
     # a single held note across the whole clip at held_pitch
     freqs = np.full(n_frames, 440.0 * 2 ** ((held_pitch - 69) / 12))
     contour = Contour(frame_times, freqs)
-    features = torch.randn(1, 1, N_BINS, n_frames)
+    features = np.random.rand(N_BINS, n_frames).astype(np.float32)  # (n_bins, T) CQT
     notes = [NoteEvent(onset=frame_times[f], offset=frame_times[f] + 0.2,
                        midi_pitch=held_pitch) for f in onset_frames]
     ex = ValExample(frame_times=frame_times, contour=contour, notes=notes,
@@ -99,10 +106,7 @@ def test_score_examples_returns_note_metrics():
     # A held pitch re-articulated at frames 0, 30, 60; the model fires there too,
     # so onsets split the held contour into the right notes.
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0, 30, 60])
-    model = _FakeOnsetModel([0, 30, 60])
-    scores = score_examples(
-        model, [ex], HeuristicSegmenter(), threshold=0.5, min_gap_s=0.03,
-    )
+    scores = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
     assert set(scores) == {"note_f1", "note_precision", "note_recall", "fragmentation"}
     assert scores["note_recall"] > 0.5  # found the re-articulated notes
     assert 0.0 <= scores["note_f1"] <= 1.0
@@ -111,6 +115,6 @@ def test_score_examples_returns_note_metrics():
 def test_missing_onsets_lower_recall():
     # Model fires only at frame 0 -> the two later re-articulations are missed.
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0, 30, 60])
-    few = score_examples(_FakeOnsetModel([0]), [ex], HeuristicSegmenter(), 0.5, 0.03)
-    many = score_examples(_FakeOnsetModel([0, 30, 60]), [ex], HeuristicSegmenter(), 0.5, 0.03)
+    few = score_examples(_segment(_FakeOnsetModel([0])), [ex])
+    many = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
     assert few["note_recall"] < many["note_recall"]

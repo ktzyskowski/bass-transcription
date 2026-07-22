@@ -13,33 +13,29 @@ is tested with synthetic inputs and a fake model, no audio.
 
 import hashlib
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset
 from stemify.evaluation.metrics import PRF, Fragmentation
-from stemify.features import cqt, load_audio
+from stemify.features import Features, extract_features
 from stemify.notes import NoteEvent
-from stemify.segmentation import HeuristicSegmenter
-from stemify.training.dataset import (
+from stemify.training.examples import (
     example_path,
     features_npy,
-    frame_times_for,
     prepare_examples,
 )
-from stemify.training.model import FrameTagger
-from stemify.training.segmenter import (
-    MIN_ONSET_GAP_S,
-    ONSET_THRESHOLD,
-    onset_times_from_probs,
-)
 from stemify.transforms import AudioTransform, Identity
+
+# A segmentation step: cached features + their contour -> notes. The validator
+# depends on this shape, not on the concrete LearnedSegmenter/FrameTagger -- the
+# caller wraps a checkpoint and passes its bound ``segment_features``.
+SegmentFn = Callable[[Contour, Features], list[NoteEvent]]
 
 
 def cached_f0(
@@ -94,38 +90,35 @@ class ValExample:
     frame_times: np.ndarray       # (T,)
     contour: Contour              # pyin pitch, fixed
     notes: list[NoteEvent]        # reference notes
-    features: torch.Tensor | None = None    # (1, 1, n_bins, T), if resident
+    features: np.ndarray | None = None      # (n_bins, T) CQT, if resident
     feature_path: Path | None = None        # else load from disk on demand
 
-    def load_features(self) -> torch.Tensor:
-        """The (1, 1, n_bins, T) feature tensor, from memory or disk. The disk read
-        is transient -- freed after each score -- so memory stays flat over the run.
-        ``feature_path`` is the TrackExample npz; features live in its .npy sidecar."""
-        if self.features is not None:
-            return self.features
-        arr = np.load(features_npy(self.feature_path))
-        return torch.from_numpy(arr).float()[None, None]
+    def load_features(self) -> Features:
+        """The track's CQT paired with its frame grid, from memory or disk. The disk
+        read is transient -- freed after each score -- so memory stays flat over the
+        run. ``feature_path`` is the TrackExample npz; the CQT is its .npy sidecar."""
+        values = self.features
+        if values is None:
+            values = np.load(features_npy(self.feature_path))
+        return Features(values, self.frame_times)
 
 
-@torch.no_grad()
 def score_examples(
-    model: FrameTagger,
+    segment: SegmentFn,
     examples: Sequence[ValExample],
-    grouper: HeuristicSegmenter,
-    threshold: float,
-    min_gap_s: float,
-    device: str = "cpu",
 ) -> dict[str, float]:
-    """Score a model over precomputed val examples: model onsets -> grouping ->
-    note-level P/R/F and fragmentation. Pure given ``examples``."""
-    model = model.to(device).eval()
+    """Score a segmentation function over precomputed val examples: for each, hand
+    its contour + cached CQT to ``segment`` and compare the notes it returns to the
+    references.
+
+    The validator owns no segmentation logic -- it just calls the function it was
+    given (typically a ``LearnedSegmenter.segment_features``, the same class
+    deployment uses), so how notes are made lives entirely in the segmenter and eval
+    can't drift from deploy. Pure given ``examples`` and ``segment``."""
     refs: list[list[NoteEvent]] = []
     ests: list[list[NoteEvent]] = []
     for ex in examples:
-        logits = model(ex.load_features().to(device))["onset"]    # (1, T, 1)
-        probs = torch.sigmoid(logits).squeeze(-1).squeeze(0).cpu().numpy()
-        onsets = onset_times_from_probs(probs, ex.frame_times, threshold, min_gap_s)
-        ests.append(grouper.group(ex.contour, onsets))
+        ests.append(segment(ex.contour, ex.load_features()))
         refs.append(ex.notes)
     prf = PRF().calculate(refs, ests).scalars
     frag = Fragmentation().calculate(refs, ests).scalars
@@ -146,13 +139,7 @@ class OnsetValidator:
         transform: AudioTransform | None = None,
         contour_cache: Path | None = None,
         feature_cache: Path | None = None,
-        threshold: float = ONSET_THRESHOLD,
-        min_gap_s: float = MIN_ONSET_GAP_S,
-        **grouping: object,
     ) -> None:
-        self.threshold = threshold
-        self.min_gap_s = min_gap_s
-        self.grouper = HeuristicSegmenter(**grouping)
         transform = transform or Identity()
         baseline = PyinBaseline()
 
@@ -175,9 +162,9 @@ class OnsetValidator:
                 frame_times = np.load(fpath)["frame_times"]
                 features = None
             else:
-                feat = cqt(load_audio(path))
-                frame_times = frame_times_for(feat)
-                features = torch.from_numpy(feat).float()[None, None]
+                feats = extract_features(path)
+                frame_times = feats.frame_times
+                features = feats.values
                 fpath = None
             self.examples.append(
                 ValExample(
@@ -189,7 +176,5 @@ class OnsetValidator:
                 )
             )
 
-    def score(self, model: FrameTagger, device: str = "cpu") -> dict[str, float]:
-        return score_examples(
-            model, self.examples, self.grouper, self.threshold, self.min_gap_s, device
-        )
+    def score(self, segment: SegmentFn) -> dict[str, float]:
+        return score_examples(segment, self.examples)

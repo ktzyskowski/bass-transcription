@@ -17,6 +17,7 @@ why 6 octaves starting a semitone below the open low E), and that reasoning is
 the expensive part, not the code.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import librosa
@@ -65,3 +66,36 @@ def midi_to_bin(midi_pitch: float) -> float:
     """Map a MIDI pitch to its (fractional) CQT bin index."""
     hz = librosa.midi_to_hz(midi_pitch)
     return BINS_PER_OCTAVE * np.log2(hz / FMIN)
+
+
+def frame_times_for(features: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
+    """Centre time of each CQT frame -- the grid every per-frame target is built on
+    and every other signal (onsets, the contour) resamples onto. A pure function of
+    the frame count and the hop, so it lives with the CQT that defines that hop."""
+    return librosa.frames_to_time(
+        np.arange(features.shape[1]), sr=sr, hop_length=HOP_LENGTH
+    )
+
+
+@dataclass(frozen=True)
+class Features:
+    """CQT features and the frame-time grid they live on.
+
+    Kept together because a slice of features is meaningless without the times its
+    frames fall on, and pairing them as one object means the two can't be handed
+    over for different tracks by accident -- the same reason ``Contour`` bundles
+    its arrays. ``values`` is the model's input; the pyin ``Contour`` is
+    deliberately *not* here (different producer, cache, grid and consumer)."""
+
+    values: np.ndarray        # (n_bins, T), the CQT the model ingests
+    frame_times: np.ndarray   # (T,)
+
+
+def extract_features(path: str | Path, sr: int = SAMPLE_RATE) -> Features:
+    """Audio file -> CQT features with the frame grid they sit on.
+
+    The audio->model-input step every caller shares (training prep, the segmenter,
+    validation), in one place so the CQT is never recomputed with drifting params.
+    Takes a path (not audio) because callers pass a transform-resolved file."""
+    values = cqt(load_audio(path, sr=sr), sr=sr)
+    return Features(values, frame_times_for(values, sr=sr))

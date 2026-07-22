@@ -116,8 +116,9 @@ def test_mlflow_callback_logs_metrics(tmp_path):
     client = MlflowClient(tracking_uri=uri)
     run = client.get_run(cb._run_id)
     assert run.data.params["lr"] == "0.01"
-    history = client.get_metric_history(cb._run_id, "train_loss")
+    history = client.get_metric_history(cb._run_id, "loss/total/train")
     assert len(history) == 3
+    assert client.get_metric_history(cb._run_id, "loss/onset/train")  # per-head logged
     assert run.data.metrics["best_epoch"] >= 0
 
 
@@ -128,10 +129,10 @@ def test_mlflow_callback_logs_smoothed_loss_on_throttle_boundary(tmp_path):
     uri = f"file://{tmp_path}/mlruns"
     cb = MLflowCallback(run_name="t", tracking_uri=uri, batch_log_every=2, ema_beta=0.5)
     for step, loss in enumerate([1.0, 3.0, 5.0, 7.0], start=1):
-        cb.on_batch_end(step, loss)  # EMA: 1, 2, 3.5, 5.25; logged at steps 2 and 4
+        cb.on_batch_end(step, {"total": loss})  # EMA: 1, 2, 3.5, 5.25; logged at 2 and 4
 
     client = MlflowClient(tracking_uri=uri)
-    history = client.get_metric_history(cb._run_id, "train_loss_step")
+    history = client.get_metric_history(cb._run_id, "loss/total/step")
     by_step = {m.step: m.value for m in history}
     assert set(by_step) == {2, 4}                 # only the throttle boundaries
     assert by_step[2] == pytest.approx(2.0)       # smoothed, not the raw 3.0
@@ -145,10 +146,10 @@ def test_mlflow_batch_logging_disabled_when_zero(tmp_path):
     uri = f"file://{tmp_path}/mlruns"
     cb = MLflowCallback(run_name="t", tracking_uri=uri, batch_log_every=0)
     for step in range(1, 6):
-        cb.on_batch_end(step, 1.0)
+        cb.on_batch_end(step, {"total": 1.0})
 
     client = MlflowClient(tracking_uri=uri)
-    assert client.get_metric_history(cb._run_id, "train_loss_step") == []
+    assert client.get_metric_history(cb._run_id, "loss/total/step") == []
 
 
 def test_mlflow_callback_logs_artifact(tmp_path):

@@ -67,11 +67,11 @@ def test_on_batch_fires_per_train_batch_with_monotonic_steps():
     model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
     config = TrainConfig(heads=("onset",), device="cpu", max_epochs=2, patience=99)
 
-    calls: list[tuple[int, float]] = []
+    calls: list[tuple[int, dict]] = []
 
     class _BatchRecorder:
-        def on_batch_end(self, step, loss):
-            calls.append((step, loss))
+        def on_batch_end(self, step, losses):
+            calls.append((step, losses))
 
         def on_epoch_end(self, logs):
             ...
@@ -82,4 +82,5 @@ def test_on_batch_fires_per_train_batch_with_monotonic_steps():
     Trainer(model, config).fit(train, val, callbacks=[_BatchRecorder()])
     steps = [s for s, _ in calls]
     assert steps == [1, 2, 3, 4]                     # 2 batches x 2 epochs, val excluded
-    assert all(isinstance(loss, float) for _, loss in calls)
+    # per-head dict incl. the total; onset is the one trained head here
+    assert all("total" in losses and "onset" in losses for _, losses in calls)

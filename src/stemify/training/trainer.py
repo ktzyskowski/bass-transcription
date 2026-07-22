@@ -23,17 +23,10 @@ from torch.utils.data import DataLoader
 
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
+from stemify.training.device import best_device
 from stemify.training.model import FrameTagger
 
 BINARY_HEADS = ("onset", "voicing")
-
-
-def best_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 def build_losses(
@@ -76,39 +69,52 @@ class Trainer:
         self.losses = build_losses(config.heads, config.pos_weight, self.device)
         self._global_step = 0  # monotonic over train batches, for step-indexed logging
 
-    def _batch_loss(self, x: torch.Tensor, y: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _batch_loss(
+        self, x: torch.Tensor, y: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        """Per-head loss tensors. The caller sums them for backward and syncs each
+        for logging, so onset and voicing are tracked separately, not only summed."""
         logits = self.model(x.to(self.device))
-        total = x.new_zeros(())
+        per_head: dict[str, torch.Tensor] = {}
         for head, loss_fn in self.losses.items():
             pred = logits[head]
             if pred.shape[-1] == 1:  # binary head: (B, T, 1) -> (B, T)
                 pred = pred.squeeze(-1)
-            total = total + loss_fn(pred, y[head].to(self.device))
-        return total
+            per_head[head] = loss_fn(pred, y[head].to(self.device))
+        return per_head
 
     def _run_epoch(
         self,
         loader: DataLoader,
         train: bool,
-        on_batch: Callable[[int, float], None] | None = None,
-    ) -> float:
+        on_batch: Callable[[int, dict[str, float]], None] | None = None,
+    ) -> dict[str, float]:
+        """Average loss over the epoch as ``{"total": ..., <head>: ...}`` -- per-head
+        so the caller (and MLflow) can see which head is still learning."""
         self.model.train(train)
-        total, n = 0.0, 0
+        totals: dict[str, float] = {}
+        n = 0
         with torch.set_grad_enabled(train):
             for x, y in loader:
-                loss = self._batch_loss(x, y)
+                per_head = self._batch_loss(x, y)
+                loss = sum(per_head.values())  # tensor sum, for backward
                 if train:
                     self.optimizer.zero_grad()
                     loss.backward()
                     self.optimizer.step()
-                batch_loss = loss.detach().item()  # the one device sync, already paid
-                total += batch_loss * x.shape[0]
-                n += x.shape[0]
+                # One .item() per head is the only device sync (total is their sum,
+                # needing no extra one); was a single sync for onset alone.
+                batch = {h: v.detach().item() for h, v in per_head.items()}
+                batch["total"] = sum(batch.values())
+                bs = x.shape[0]
+                for h, v in batch.items():
+                    totals[h] = totals.get(h, 0.0) + v * bs
+                n += bs
                 # Only train batches carry a step; val batches are averaged, not logged.
                 if train and on_batch is not None:
                     self._global_step += 1
-                    on_batch(self._global_step, batch_loss)
-        return total / max(n, 1)
+                    on_batch(self._global_step, batch)
+        return {h: v / max(n, 1) for h, v in totals.items()}
 
     def fit(
         self,
@@ -122,18 +128,19 @@ class Trainer:
         best_state = None
         stale = 0
 
-        def emit_batch(step: int, loss: float) -> None:
+        def emit_batch(step: int, losses: dict[str, float]) -> None:
             for callback in callbacks:
-                callback.on_batch_end(step, loss)
+                callback.on_batch_end(step, losses)
 
         for epoch in range(self.config.max_epochs):
-            train_loss = self._run_epoch(train_loader, train=True, on_batch=emit_batch)
-            history.train_loss.append(train_loss)
-            monitored = (
+            train_losses = self._run_epoch(train_loader, train=True, on_batch=emit_batch)
+            val_losses = (
                 self._run_epoch(val_loader, train=False)
                 if val_loader is not None
-                else train_loss
+                else train_losses
             )
+            train_loss, monitored = train_losses["total"], val_losses["total"]
+            history.train_loss.append(train_loss)
             history.val_loss.append(monitored)
 
             if monitored < best_val - 1e-5:
@@ -145,6 +152,7 @@ class Trainer:
 
             logs = EpochLogs(
                 epoch=epoch, train_loss=train_loss, val_loss=monitored,
+                train_losses=train_losses, val_losses=val_losses,
                 best_epoch=history.best_epoch, snapshot=self.state_cpu,
             )
             for callback in callbacks:

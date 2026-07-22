@@ -28,21 +28,30 @@ import torch
 from torch.utils.data import DataLoader
 
 from stemify.data.slakh import SlakhDataset
+from stemify.segmentation.learned import LearnedSegmenter
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     ConsoleCallback,
     MLflowCallback,
 )
 from stemify.training.config import TrainConfig
-from stemify.training.dataset import FrameWindowDataset, collate, prepare_examples
-from stemify.training.model import FrameTagger, TCNEncoder, onset_head
+from stemify.training.dataset import FrameWindowDataset, collate
+from stemify.training.examples import prepare_examples
+from stemify.training.model import FrameTagger, TCNEncoder, onset_head, voicing_head
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
 
-HEADS = ["onset"]
+HEADS = ["onset", "voicing"]
+
+# score_examples' metric keys -> the short leaf name under note/<condition>/, so
+# MLflow groups them: note/stem/f1, note/demucs/recall, ... one section per metric.
+_NOTE_KEY = {
+    "note_f1": "f1", "note_precision": "precision",
+    "note_recall": "recall", "fragmentation": "fragmentation",
+}
 
 # tag -> (Slakh source, input transform). Target is always the clean stem MIDI,
 # regardless of which source the *features* come from.
@@ -55,7 +64,10 @@ SOURCES: dict[str, tuple[str, AudioTransform]] = {
 
 def build_model() -> FrameTagger:
     encoder = TCNEncoder()
-    return FrameTagger(encoder, {"onset": onset_head(encoder.hidden)})
+    return FrameTagger(
+        encoder,
+        {"onset": onset_head(encoder.hidden), "voicing": voicing_head(encoder.hidden)},
+    )
 
 
 def build_validators(
@@ -97,10 +109,14 @@ def _eval_fn(validators: dict[str, OnsetValidator]):
     def eval_fn(state_dict, epoch):
         model = build_model()
         model.load_state_dict(state_dict)
+        # Wrap the checkpoint once (CPU, off the training device) and hand each
+        # condition's validator its segment step -- the validator scores notes, the
+        # segmenter makes them.
+        segment = LearnedSegmenter(model, device="cpu").segment_features
         metrics: dict[str, float] = {}
         for tag, validator in validators.items():
-            for key, value in validator.score(model, device="cpu").items():
-                metrics[f"{key}_{tag}"] = value
+            for key, value in validator.score(segment).items():
+                metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
         return metrics
 
     return eval_fn
@@ -120,7 +136,7 @@ def train_onset(
     val_every: int = 5,
     tracking_uri: str | None = None,
     experiment: str = "onset-detection",
-    run_name: str = "tcn-v1",
+    run_name: str = "tcn-v2",
     batch_log_every: int = 100,
     limit: int | None = None,
     out: Path | None = None,
@@ -225,13 +241,13 @@ def main() -> None:
     ap.add_argument("--tracking-uri", help="MLflow tracking URI, e.g. file:./mlruns")
     ap.add_argument("--experiment", default="onset-detection",
                     help="MLflow experiment name")
-    ap.add_argument("--run-name", default="tcn-v1", help="MLflow run name")
+    ap.add_argument("--run-name", default="tcn-v2", help="MLflow run name")
     ap.add_argument("--limit", type=int, help="cap train tracks per source")
     ap.add_argument("--val-limit", type=int, default=40)
-    ap.add_argument("--val-every", type=int, default=5)
+    ap.add_argument("--val-every", type=int, default=1)
     ap.add_argument("--batch-log-every", type=int, default=100,
                     help="log a smoothed train loss to MLflow every N steps (0 = off)")
-    ap.add_argument("--epochs", type=int, default=50)
+    ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader worker subprocesses (0 = main thread)")
@@ -240,7 +256,7 @@ def main() -> None:
     args = ap.parse_args()
 
     config = TrainConfig(
-        heads=("onset",), max_epochs=args.epochs, batch_size=args.batch_size,
+        heads=tuple(HEADS), max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
     train_onset(

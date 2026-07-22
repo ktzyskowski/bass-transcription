@@ -44,8 +44,10 @@ class EpochLogs:
     """
 
     epoch: int
-    train_loss: float
+    train_loss: float                    # the total (sum over heads), for early stop
     val_loss: float
+    train_losses: Mapping[str, float]    # {"total": ..., <head>: ...}, per head
+    val_losses: Mapping[str, float]
     best_epoch: int
     snapshot: Callable[[], StateDict]
 
@@ -53,7 +55,7 @@ class EpochLogs:
 class Callback:
     """No-op base. Override the hooks you need."""
 
-    def on_batch_end(self, step: int, loss: float) -> None:
+    def on_batch_end(self, step: int, losses: Mapping[str, float]) -> None:
         ...
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
@@ -67,9 +69,14 @@ class ConsoleCallback(Callback):
     """Log epoch losses -- the minimal progress signal for a run."""
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
+        # Break out the per-head train loss (onset/voicing/...) beside the total, so
+        # the log shows which head is still moving; total drives early stopping.
+        heads = " ".join(
+            f"{h} {v:.4f}" for h, v in logs.train_losses.items() if h != "total"
+        )
         logger.info(
-            "epoch %3d  train %.4f  val %.4f  (best %d)",
-            logs.epoch, logs.train_loss, logs.val_loss, logs.best_epoch,
+            "epoch %3d  train %.4f  val %.4f  [%s]  (best %d)",
+            logs.epoch, logs.train_loss, logs.val_loss, heads, logs.best_epoch,
         )
 
     def on_train_end(self, best_epoch: int) -> None:
@@ -92,11 +99,12 @@ class MLflowCallback(Callback):
         from mlflow.tracking import MlflowClient
 
         # Per-epoch loss (one point/epoch) is too coarse to see divergence inside a
-        # 30k-step epoch, but raw per-batch onset BCE is noisy; log a smoothed loss
-        # every ``batch_log_every`` steps instead (0 disables). The EMA lives in its
-        # own unit; this callback just decides when to emit.
+        # ~50k-step epoch, but raw per-batch BCE is noisy; log a smoothed loss every
+        # ``batch_log_every`` steps instead (0 disables). One EMA per head (created on
+        # first sight), so onset and voicing get their own step curve, not just total.
         self._batch_log_every = batch_log_every
-        self._loss_ema = EMA(ema_beta)
+        self._ema_beta = ema_beta
+        self._emas: dict[str, EMA] = {}
 
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
@@ -116,17 +124,24 @@ class MLflowCallback(Callback):
         for key, value in metrics.items():
             self._client.log_metric(self._run_id, key, float(value), step=step)
 
-    def on_batch_end(self, step: int, loss: float) -> None:
-        smoothed = self._loss_ema.update(loss)
+    def on_batch_end(self, step: int, losses: Mapping[str, float]) -> None:
+        smoothed = {
+            h: self._emas.setdefault(h, EMA(self._ema_beta)).update(v)
+            for h, v in losses.items()
+        }
         if self._batch_log_every and step % self._batch_log_every == 0:
-            self.sink({"train_loss_step": smoothed}, step)
+            self.sink({f"loss/{h}/step": v for h, v in smoothed.items()}, step)
 
     def log_artifact(self, path: os.PathLike[str] | str) -> None:
         """Attach a file (e.g. the saved model checkpoint) to this run."""
         self._client.log_artifact(self._run_id, str(path))
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
-        self.sink({"train_loss": logs.train_loss, "val_loss": logs.val_loss}, logs.epoch)
+        # Slash-namespaced so MLflow groups them: loss/<head>/{train,val} sit under a
+        # "loss" section, one chart per head (total, onset, voicing) x phase.
+        metrics = {f"loss/{h}/train": v for h, v in logs.train_losses.items()}
+        metrics.update({f"loss/{h}/val": v for h, v in logs.val_losses.items()})
+        self.sink(metrics, logs.epoch)
 
     def on_train_end(self, best_epoch: int) -> None:
         self._client.log_metric(self._run_id, "best_epoch", float(best_epoch))

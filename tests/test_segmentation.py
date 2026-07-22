@@ -46,6 +46,44 @@ def test_merge_rejoins_a_one_frame_dropout():
     assert len(HeuristicSegmenter(merge_gap_s=0.05).group(dropout)) == 1
 
 
+def test_voiced_mask_overrides_pyin_voicing():
+    # pyin tracks a pitch across the whole clip (one note by default), but the
+    # learned voicing mask calls the middle a rest -> two notes split by that rest.
+    held = contour([A2_HZ] * 100)
+    voiced = np.ones(100, dtype=bool)
+    voiced[45:55] = False  # learned rest in the middle
+    seg = HeuristicSegmenter(merge_gap_s=None)
+    assert len(seg.group(held, voiced=np.ones(100, dtype=bool))) == 1  # all-voiced: 1
+    assert len(seg.group(held, voiced=voiced)) == 2                    # masked rest: 2
+
+
+def test_voiced_mask_can_trim_pyin_over_voicing():
+    # pyin voices the whole clip; the learned mask says only the first half sounds,
+    # so the note ends where the mask does -- the false-positive-trimming direction.
+    held = contour([A2_HZ] * 100)
+    voiced = np.zeros(100, dtype=bool)
+    voiced[:50] = True
+    notes = HeuristicSegmenter(merge_gap_s=None).group(held, voiced=voiced)
+    assert len(notes) == 1
+    assert notes[0].offset < 0.6  # ends around frame 50 (0.5 s), not 1.0 s
+
+
+def test_voiced_frame_without_pyin_pitch_places_no_note():
+    # Mask calls frames voiced where pyin has no pitch (freq 0): no pitch to assign,
+    # so no note is invented rather than a NaN-pitch note being emitted.
+    silent = contour([0.0] * 100)          # pyin tracked nothing
+    voiced = np.ones(100, dtype=bool)      # but the mask says voiced everywhere
+    assert HeuristicSegmenter(merge_gap_s=None).group(silent, voiced=voiced) == []
+
+
+def test_voiced_mask_shape_must_match_contour():
+    held = contour([A2_HZ] * 100)
+    import pytest
+
+    with pytest.raises(ValueError):
+        HeuristicSegmenter().group(held, voiced=np.ones(50, dtype=bool))
+
+
 def test_merge_keeps_distinct_pitches_apart():
     # Half at A2, half at A3: a real pitch change, must stay two notes even with
     # merge on (they are not the same pitch).

@@ -1,41 +1,22 @@
-"""Frame-level pitch contour -> discrete note events.
+"""``HeuristicSegmenter``: the DSP floor (no learning).
 
-This is the segmentation stage: the step from "what pitch at each instant" to
-"which notes were played". It is a first-class, swappable component -- not a
-method hidden on the pitch tracker -- because it is the part of the note-level
-pipeline this project actually studies. A note-level score is
-``pitch-tracker + segmenter``, and the segmenter is the weak, interesting half
-(onset and voicing, which the frame-level work identified as the bottleneck).
-Keeping it separate is what lets the pitch tracker stay fixed while segmenters
-are compared, and lets a learned onset/voicing head later drop in as just
-another ``Segmenter`` -- with its own algorithm, sharing none of the heuristic
-below.
-
-``HeuristicSegmenter`` is the DSP floor -- no learning -- so there is a baseline
-to beat before a note-level model is worth building, exactly as pyin is the
-floor for the pitch stage. It draws a note boundary at any of three cues:
+A baseline to beat before a note-level model is worth building, exactly as pyin is
+the floor for the pitch stage. It draws a note boundary at any of three cues:
 
   - **a rest** -- an unvoiced run separates two notes (note -> silence -> note)
   - **a pitch change** -- the contour jumps to a different pitch
-  - **an onset** -- a re-articulation at the *same* pitch, which the contour
-    alone cannot show. Two repeated quarter-notes and one held half-note produce
-    an identical contour; only an onset distinguishes them. Onsets come from
-    spectral flux on the audio, and without them repeated same-pitch notes merge
-    into one -- a real limitation the note-level metric will expose as missed
-    notes.
+  - **an onset** -- a re-articulation at the *same* pitch, which the contour alone
+    cannot show. Two repeated quarter-notes and one held half-note produce an
+    identical contour; only an onset distinguishes them. Onsets come from spectral
+    flux on the audio; without them repeated same-pitch notes merge into one.
 
-The rest/onset cues over-fire: spectral flux triggers on mid-sustain noise and
-pyin drops out for a frame or two, both splitting one held note into same-pitch
-fragments. So an optional final pass (``merge_gap_s``) rejoins consecutive
-same-pitch notes closer than a small gap -- the fragmentation these artifacts
-create. It trades against recall (a real fast repeat can look like a fragment),
-which is exactly the knee the Fragmentation metric measures.
-
-Monophonic bass is what makes this tractable: with one note at a time the
-timeline partitions cleanly into notes, no overlapping voices to untangle.
+The rest/onset cues over-fire (flux triggers on mid-sustain noise; pyin drops out
+for a frame or two), both splitting one held note into same-pitch fragments. So an
+optional final pass (``merge_gap_s``) rejoins consecutive same-pitch notes closer
+than a small gap. It trades against recall (a real fast repeat can look like a
+fragment), which is exactly the knee the Fragmentation metric measures.
 """
 
-from abc import ABC, abstractmethod
 from pathlib import Path
 
 import librosa
@@ -43,6 +24,7 @@ import numpy as np
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
+from stemify.segmentation.base import Segmenter
 
 # Below this, a "note" is a tracker blip (onset transient, a frame of octave
 # wobble) rather than a played note.
@@ -88,17 +70,6 @@ def detect_onsets(
     return librosa.onset.onset_detect(
         y=audio, sr=sr, units="time", backtrack=True, **kwargs
     )
-
-
-class Segmenter(ABC):
-    """Turns a pitch contour (and its audio) into note events."""
-
-    name: str
-
-    @abstractmethod
-    def segment(self, contour: Contour, audio_path: str | Path) -> list[NoteEvent]:
-        """The notes implied by ``contour``. ``audio_path`` is available for
-        cues the contour does not carry, chiefly onsets."""
 
 
 class HeuristicSegmenter(Segmenter):
@@ -147,18 +118,36 @@ class HeuristicSegmenter(Segmenter):
         return detect_onsets(audio_path, delta=self.onset_delta)
 
     def group(
-        self, contour: Contour, onsets: np.ndarray | None = None
+        self,
+        contour: Contour,
+        onsets: np.ndarray | None = None,
+        voiced: np.ndarray | None = None,
     ) -> list[NoteEvent]:
         """Group a contour into notes given onset times. The pure core -- no
         audio, no I/O -- so a boundary case is testable with a synthetic contour
-        and hand-picked onsets."""
+        and hand-picked onsets.
+
+        ``voiced`` decides where notes sound: by default a frame is voiced iff pyin
+        tracked a pitch there (``freqs > 0``), but a learned voicing head can supply
+        its own per-frame mask (aligned to ``contour.times``) to place the rests
+        instead. Pitch always comes from ``freqs``, so a frame the mask calls voiced
+        but pyin left pitchless simply contributes no pitch -- it never invents one.
+        """
         times, freqs = contour.times, contour.freqs
         if times.size == 0:
             return []
 
-        voiced = freqs > 0
+        has_pitch = freqs > 0
         midi = np.full(freqs.shape, np.nan)
-        midi[voiced] = librosa.hz_to_midi(freqs[voiced])
+        midi[has_pitch] = librosa.hz_to_midi(freqs[has_pitch])
+        if voiced is None:
+            voiced = has_pitch
+        else:
+            voiced = np.asarray(voiced, dtype=bool)
+            if voiced.shape != times.shape:
+                raise ValueError(
+                    f"voiced mask {voiced.shape} must match contour grid {times.shape}"
+                )
 
         # Mark frames where an onset lands, so a same-pitch re-articulation splits.
         onset_frame = np.zeros(times.shape, dtype=bool)
@@ -173,7 +162,10 @@ class HeuristicSegmenter(Segmenter):
         start: int | None = None  # index of the current note's first frame
 
         def emit(lo: int, hi: int) -> None:
-            pitch = float(np.nanmedian(midi[lo:hi]))
+            window = midi[lo:hi]
+            if np.isnan(window).all():  # learned-voiced but pyin tracked no pitch
+                return
+            pitch = float(np.nanmedian(window))
             onset, offset = float(times[lo]), float(times[hi - 1] + hop)
             if offset - onset >= self.min_note_s and not np.isnan(pitch):
                 notes.append(NoteEvent(onset=onset, offset=offset, midi_pitch=pitch))
@@ -187,10 +179,12 @@ class HeuristicSegmenter(Segmenter):
             if start is None:
                 start = i
                 continue
-            # Voiced continuation: does a boundary fall here?
+            # Voiced continuation: does a boundary fall here? (No pitch to compare
+            # against when the run so far is all pyin-pitchless -> no pitch split.)
+            prev = midi[start:i]
             jumped = (
-                abs(midi[i] - np.nanmedian(midi[start:i]))
-                > self.pitch_split_semitones
+                not np.isnan(prev).all()
+                and abs(midi[i] - np.nanmedian(prev)) > self.pitch_split_semitones
             )
             if onset_frame[i] or jumped:
                 emit(start, i)
