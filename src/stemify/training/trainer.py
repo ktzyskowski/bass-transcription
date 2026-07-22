@@ -14,7 +14,7 @@ expensive; the intended use is a periodic harness eval on the side, with val los
 picking the checkpoint between.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 import torch
@@ -74,6 +74,7 @@ class Trainer:
         self.model = model.to(self.device)
         self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
         self.losses = build_losses(config.heads, config.pos_weight, self.device)
+        self._global_step = 0  # monotonic over train batches, for step-indexed logging
 
     def _batch_loss(self, x: torch.Tensor, y: dict[str, torch.Tensor]) -> torch.Tensor:
         logits = self.model(x.to(self.device))
@@ -85,7 +86,12 @@ class Trainer:
             total = total + loss_fn(pred, y[head].to(self.device))
         return total
 
-    def _run_epoch(self, loader: DataLoader, train: bool) -> float:
+    def _run_epoch(
+        self,
+        loader: DataLoader,
+        train: bool,
+        on_batch: Callable[[int, float], None] | None = None,
+    ) -> float:
         self.model.train(train)
         total, n = 0.0, 0
         with torch.set_grad_enabled(train):
@@ -95,8 +101,13 @@ class Trainer:
                     self.optimizer.zero_grad()
                     loss.backward()
                     self.optimizer.step()
-                total += loss.detach().item() * x.shape[0]
+                batch_loss = loss.detach().item()  # the one device sync, already paid
+                total += batch_loss * x.shape[0]
                 n += x.shape[0]
+                # Only train batches carry a step; val batches are averaged, not logged.
+                if train and on_batch is not None:
+                    self._global_step += 1
+                    on_batch(self._global_step, batch_loss)
         return total / max(n, 1)
 
     def fit(
@@ -110,8 +121,13 @@ class Trainer:
         best_val = float("inf")
         best_state = None
         stale = 0
+
+        def emit_batch(step: int, loss: float) -> None:
+            for callback in callbacks:
+                callback.on_batch_end(step, loss)
+
         for epoch in range(self.config.max_epochs):
-            train_loss = self._run_epoch(train_loader, train=True)
+            train_loss = self._run_epoch(train_loader, train=True, on_batch=emit_batch)
             history.train_loss.append(train_loss)
             monitored = (
                 self._run_epoch(val_loader, train=False)

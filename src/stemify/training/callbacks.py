@@ -26,6 +26,8 @@ from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from stemify.training.ema import EMA
+
 logger = logging.getLogger(__name__)
 
 Metrics = Mapping[str, float]
@@ -50,6 +52,9 @@ class EpochLogs:
 
 class Callback:
     """No-op base. Override the hooks you need."""
+
+    def on_batch_end(self, step: int, loss: float) -> None:
+        ...
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
         ...
@@ -80,9 +85,18 @@ class MLflowCallback(Callback):
         params: Mapping[str, Any] | None = None,
         tracking_uri: str | None = None,
         experiment: str | None = None,
+        batch_log_every: int = 100,
+        ema_beta: float = 0.98,
     ) -> None:
         import mlflow  # lazy: tracking is optional, the trainer never imports it
         from mlflow.tracking import MlflowClient
+
+        # Per-epoch loss (one point/epoch) is too coarse to see divergence inside a
+        # 30k-step epoch, but raw per-batch onset BCE is noisy; log a smoothed loss
+        # every ``batch_log_every`` steps instead (0 disables). The EMA lives in its
+        # own unit; this callback just decides when to emit.
+        self._batch_log_every = batch_log_every
+        self._loss_ema = EMA(ema_beta)
 
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
@@ -101,6 +115,11 @@ class MLflowCallback(Callback):
         """Thread-safe metric logging -- the entry point for the async validator."""
         for key, value in metrics.items():
             self._client.log_metric(self._run_id, key, float(value), step=step)
+
+    def on_batch_end(self, step: int, loss: float) -> None:
+        smoothed = self._loss_ema.update(loss)
+        if self._batch_log_every and step % self._batch_log_every == 0:
+            self.sink({"train_loss_step": smoothed}, step)
 
     def log_artifact(self, path: os.PathLike[str] | str) -> None:
         """Attach a file (e.g. the saved model checkpoint) to this run."""

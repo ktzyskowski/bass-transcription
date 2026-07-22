@@ -121,6 +121,7 @@ def train_onset(
     tracking_uri: str | None = None,
     experiment: str = "onset-detection",
     run_name: str = "tcn-v1",
+    batch_log_every: int = 100,
     limit: int | None = None,
     out: Path | None = None,
 ) -> None:
@@ -167,6 +168,7 @@ def train_onset(
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
         mlflow = MLflowCallback(
             run_name=f"{run_name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
+            batch_log_every=batch_log_every,
             params={"encoder": "tcn", "sources": ",".join(sources),
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate, "window": config.window_frames,
@@ -227,6 +229,8 @@ def main() -> None:
     ap.add_argument("--limit", type=int, help="cap train tracks per source")
     ap.add_argument("--val-limit", type=int, default=40)
     ap.add_argument("--val-every", type=int, default=5)
+    ap.add_argument("--batch-log-every", type=int, default=100,
+                    help="log a smoothed train loss to MLflow every N steps (0 = off)")
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
@@ -244,6 +248,7 @@ def main() -> None:
         val_conditions=args.val_sources.split(","),
         val_limit=args.val_limit, val_every=args.val_every,
         experiment=args.experiment, run_name=args.run_name,
+        batch_log_every=args.batch_log_every,
         tracking_uri=args.tracking_uri, limit=args.limit, out=args.out,
     )
 
