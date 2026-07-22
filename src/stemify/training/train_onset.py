@@ -37,7 +37,7 @@ from stemify.training.config import TrainConfig
 from stemify.training.dataset import FrameWindowDataset, collate, prepare_examples
 from stemify.training.model import FrameTagger, TCNEncoder, onset_head
 from stemify.training.trainer import Trainer
-from stemify.training.validation import OnsetValidator, warm_contours
+from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
@@ -64,35 +64,19 @@ def build_validators(
     conditions: list[str],
     contour_cache: Path | None = None,
     feature_cache_root: Path | None = None,
-    contour_workers: int = 0,
 ) -> dict[str, OnsetValidator]:
     """One ``OnsetValidator`` per condition, keyed by tag. A condition is just a
     ``(source, transform)`` pair -- exactly what a validator wraps -- so the same
     ``SOURCES`` table that defines the *training* conditions defines the validation
     ones. Contours are memoised to ``contour_cache`` (shared across conditions --
     keyed on each condition's resolved audio path), so pyin runs once per file ever
-    rather than at every launch, which is what makes a large val set affordable. CQT
+    rather than at every launch, which is what makes a large val set affordable -- and
+    since pyin already parallelises its own FFTs across cores, the per-track loop is
+    left serial rather than stacked under a process pool that only oversubscribes. CQT
     features are memoised under ``feature_cache_root/<tag>`` (the stem tag reuses the
     cache the BCE loader already built), so the validator loads them from disk rather
     than recomputing in memory each launch. The demucs condition separates its val
-    audio through the (cached) DemucsSeparator at construction.
-
-    With ``contour_workers > 1``, the pyin cache is filled in parallel first (pyin
-    is the serial bottleneck of validator construction); the per-condition loops
-    below then hit an all-cache and only compute CQT."""
-    if contour_cache is not None and contour_workers > 1:
-        paths = []
-        for tag in conditions:
-            source, transform = SOURCES[tag]
-            ds = SlakhDataset(root, split="validation", source=source, limit=val_limit)
-            # transform.apply resolves each condition's (already-cached) audio file
-            # -- the exact path cached_f0 keys on, so the pool warms the right entries.
-            paths += [transform.apply(item.audio()) for item in ds]
-        logger.info(
-            "warming %d val contours across %d workers...", len(paths), contour_workers
-        )
-        warm_contours(paths, contour_cache, contour_workers)
-
+    audio through the (cached) DemucsSeparator at construction."""
     validators: dict[str, OnsetValidator] = {}
     for tag in conditions:
         source, transform = SOURCES[tag]
@@ -134,7 +118,6 @@ def train_onset(
     val_conditions: list[str] | None = None,
     val_limit: int = 40,
     val_every: int = 5,
-    contour_workers: int = 0,
     tracking_uri: str | None = None,
     experiment: str = "onset-detection",
     run_name: str = "tcn-v1",
@@ -200,7 +183,6 @@ def train_onset(
             root, val_limit, val_conditions,
             contour_cache=cache_dir / "val_contours",
             feature_cache_root=cache_dir / "val",
-            contour_workers=contour_workers,
         )
         callbacks += [
             mlflow,
@@ -245,8 +227,6 @@ def main() -> None:
     ap.add_argument("--limit", type=int, help="cap train tracks per source")
     ap.add_argument("--val-limit", type=int, default=40)
     ap.add_argument("--val-every", type=int, default=5)
-    ap.add_argument("--contour-workers", type=int, default=8,
-                    help="parallel processes to precompute val pyin contours (1 = serial)")
     ap.add_argument("--epochs", type=int, default=50)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
@@ -263,7 +243,6 @@ def main() -> None:
         args.root, args.cache_dir, config, sources=args.sources.split(","),
         val_conditions=args.val_sources.split(","),
         val_limit=args.val_limit, val_every=args.val_every,
-        contour_workers=args.contour_workers,
         experiment=args.experiment, run_name=args.run_name,
         tracking_uri=args.tracking_uri, limit=args.limit, out=args.out,
     )

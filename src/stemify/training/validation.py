@@ -23,7 +23,6 @@ import torch
 from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset
-from stemify.parallel import parallel_map
 from stemify.evaluation.metrics import PRF, Fragmentation
 from stemify.features import cqt, load_audio
 from stemify.notes import NoteEvent
@@ -79,28 +78,6 @@ def cached_f0(
     finally:
         partial.unlink(missing_ok=True)
     return contour
-
-
-def _warm_one(args: tuple[str, str]) -> None:
-    """Pool worker: compute+cache one contour. Module-level and string-argued so it
-    pickles under the spawn start method macOS uses."""
-    audio_path, cache_dir = args
-    cached_f0(PyinBaseline(), audio_path, Path(cache_dir))
-
-
-def warm_contours(
-    audio_paths: Sequence[str | Path], cache_dir: Path, workers: int
-) -> None:
-    """Precompute the pyin contour cache in parallel.
-
-    pyin over tracks is embarrassingly parallel and dominates val setup (~10 s a
-    track, single-threaded in ``OnsetValidator``'s construction loop), while 13 of
-    14 cores sit idle. Because the on-disk cache is concurrency-safe (the atomic
-    pid-``.partial`` write in ``cached_f0``), a process pool can fill it far faster;
-    ``OnsetValidator`` then hits an all-cache and its loop is just CQT. Already-cached
-    paths are skipped inside ``cached_f0``, so this resumes a partial cache cheaply."""
-    items = [(str(p), str(cache_dir)) for p in audio_paths]
-    parallel_map(_warm_one, items, workers=workers, chunksize=4)
 
 
 @dataclass
