@@ -11,7 +11,12 @@ from torch import nn
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.segmentation.learned import LearnedSegmenter
-from stemify.training.validation import ValExample, cached_f0, score_examples
+from stemify.training.validation import (
+    ValExample,
+    cached_f0,
+    score_examples,
+    score_voicing,
+)
 
 N_BINS = 8
 
@@ -118,3 +123,29 @@ def test_missing_onsets_lower_recall():
     few = score_examples(_segment(_FakeOnsetModel([0])), [ex])
     many = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
     assert few["note_recall"] < many["note_recall"]
+
+
+class _FakeVoicingModel(nn.Module):
+    """A voicing head that ranks voiced frames (first half) above the rest."""
+
+    def forward(self, x):  # (1, 1, F, T)
+        t = x.shape[-1]
+        onset = torch.full((1, t, 1), -10.0)
+        voicing = torch.full((1, t, 1), -5.0)
+        voicing[0, : t // 2, 0] = 5.0  # high P(voiced) on the first half
+        return {"onset": onset, "voicing": voicing}
+
+
+def test_score_voicing_returns_auroc_against_the_label():
+    ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
+    ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
+    prob_fn = LearnedSegmenter(_FakeVoicingModel(), device="cpu").voicing_probs
+    scores = score_voicing(prob_fn, [ex])
+    assert scores["voicing_auroc"] == 1.0  # perfectly separates voiced from rest
+
+
+def test_score_voicing_empty_for_onset_only_model():
+    ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
+    ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
+    prob_fn = LearnedSegmenter(_FakeOnsetModel([0]), device="cpu").voicing_probs
+    assert score_voicing(prob_fn, [ex]) == {}  # no voicing head -> nothing to score

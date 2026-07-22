@@ -23,6 +23,7 @@ from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset
 from stemify.evaluation.metrics import PRF, Fragmentation
+from stemify.evaluation.metrics.frame import VoicingAUROC
 from stemify.features import Features, extract_features
 from stemify.notes import NoteEvent
 from stemify.training.examples import (
@@ -36,6 +37,9 @@ from stemify.transforms import AudioTransform, Identity
 # depends on this shape, not on the concrete LearnedSegmenter/FrameTagger -- the
 # caller wraps a checkpoint and passes its bound ``segment_features``.
 SegmentFn = Callable[[Contour, Features], list[NoteEvent]]
+# The raw voicing step: cached features -> per-frame P(voiced), or None with no
+# voicing head. Its threshold-free counterpart to SegmentFn, for the AUROC path.
+VoicingProbFn = Callable[[Features], "np.ndarray | None"]
 
 
 def cached_f0(
@@ -92,6 +96,7 @@ class ValExample:
     notes: list[NoteEvent]        # reference notes
     features: np.ndarray | None = None      # (n_bins, T) CQT, if resident
     feature_path: Path | None = None        # else load from disk on demand
+    voicing_target: np.ndarray | None = None  # (T,) gt voiced mask, for voicing AUROC
 
     def load_features(self) -> Features:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
@@ -130,6 +135,34 @@ def score_examples(
     }
 
 
+def score_voicing(
+    voicing_prob: VoicingProbFn,
+    examples: Sequence[ValExample],
+) -> dict[str, float]:
+    """Frame-level voicing-head quality (AUROC) over precomputed val examples.
+
+    Pools every example's per-frame P(voiced) and its ground-truth voiced label
+    (both on the CQT grid, so no resampling) and scores once -- threshold-free, so
+    it measures the head independent of the 0.5 cut ``segment_features`` uses. Like
+    ``score_examples`` it takes a callable, not a model, so the validator stays
+    model-agnostic. Returns ``{}`` when the model has no voicing head or no example
+    carries a label (nothing to score)."""
+    labels: list[np.ndarray] = []
+    probs: list[np.ndarray] = []
+    for ex in examples:
+        if ex.voicing_target is None:
+            continue
+        p = voicing_prob(ex.load_features())
+        if p is None:  # onset-only model: no voicing head to score
+            return {}
+        labels.append(ex.voicing_target)
+        probs.append(p)
+    if not labels:
+        return {}
+    result = VoicingAUROC().calculate(np.concatenate(labels), np.concatenate(probs))
+    return result.scalars
+
+
 class OnsetValidator:
     """Precompute pyin contours + CQT + reference notes once; score models cheaply."""
 
@@ -147,24 +180,31 @@ class OnsetValidator:
         # ``feature_cache`` set, populate it once (``prepare_examples``, disk-cached
         # per (track, transform)) and read features back rather than recomputing in
         # memory every launch -- and reuse the stem cache the BCE loader already
-        # built instead of recomputing it a second time.
+        # built instead of recomputing it a second time. Prepare the voicing target
+        # too (cheap backfill), so the per-frame voiced label for the AUROC path is
+        # in every condition's cache, not just the stem one the BCE loader built.
         if feature_cache is not None:
-            prepare_examples(dataset, ["onset"], feature_cache, transform)
+            prepare_examples(dataset, ["onset", "voicing"], feature_cache, transform)
 
         self.examples: list[ValExample] = []
         for item in dataset:
             path = transform.apply(item.audio())
             if feature_cache is not None:
-                # Keep only the path + small frame_times resident; the feature tensor
-                # is loaded transiently per score (load_features), so the whole val
-                # set's CQT never sits in memory at once.
+                # Keep only the path + small frame_times/label resident; the feature
+                # tensor is loaded transiently per score (load_features), so the whole
+                # val set's CQT never sits in memory at once.
                 fpath = example_path(feature_cache, item.name, transform.name)
-                frame_times = np.load(fpath)["frame_times"]
+                cached = np.load(fpath)
+                frame_times = cached["frame_times"]
+                voicing_target = (
+                    cached["target_voicing"] if "target_voicing" in cached.files else None
+                )
                 features = None
             else:
                 feats = extract_features(path)
                 frame_times = feats.frame_times
                 features = feats.values
+                voicing_target = None
                 fpath = None
             self.examples.append(
                 ValExample(
@@ -173,8 +213,12 @@ class OnsetValidator:
                     notes=item.reference_notes(),
                     features=features,
                     feature_path=fpath,
+                    voicing_target=voicing_target,
                 )
             )
 
     def score(self, segment: SegmentFn) -> dict[str, float]:
         return score_examples(segment, self.examples)
+
+    def score_voicing(self, voicing_prob: VoicingProbFn) -> dict[str, float]:
+        return score_voicing(voicing_prob, self.examples)

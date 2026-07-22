@@ -101,6 +101,13 @@ class LearnedSegmenter(HeuristicSegmenter):
         onset, _ = self._forward(feats.values)
         return onset, feats.frame_times
 
+    def voicing_probs(self, features: Features) -> np.ndarray | None:
+        """Raw per-frame P(voiced) over a whole track, or ``None`` if the model has
+        no voicing head. The un-thresholded signal a threshold-free metric (voicing
+        AUROC) needs, distinct from the thresholded mask ``segment_features`` uses."""
+        _, voicing = self._forward(features.values)
+        return voicing
+
     def _onset_times(self, audio_path: str | Path) -> np.ndarray:
         probs, frame_times = self.onset_probs(audio_path)
         return onset_times_from_probs(

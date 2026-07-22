@@ -112,11 +112,14 @@ def _eval_fn(validators: dict[str, OnsetValidator]):
         # Wrap the checkpoint once (CPU, off the training device) and hand each
         # condition's validator its segment step -- the validator scores notes, the
         # segmenter makes them.
-        segment = LearnedSegmenter(model, device="cpu").segment_features
+        segmenter = LearnedSegmenter(model, device="cpu")
         metrics: dict[str, float] = {}
         for tag, validator in validators.items():
-            for key, value in validator.score(segment).items():
+            for key, value in validator.score(segmenter.segment_features).items():
                 metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
+            # Threshold-free voicing-head quality (empty for an onset-only model).
+            for key, value in validator.score_voicing(segmenter.voicing_probs).items():
+                metrics[f"voicing/{tag}/{key.removeprefix('voicing_')}"] = value
         return metrics
 
     return eval_fn
