@@ -28,7 +28,12 @@ from stemify.evaluation.metrics import PRF, Fragmentation
 from stemify.features import cqt, load_audio
 from stemify.notes import NoteEvent
 from stemify.segmentation import HeuristicSegmenter
-from stemify.training.dataset import frame_times_for
+from stemify.training.dataset import (
+    TrackExample,
+    example_path,
+    frame_times_for,
+    prepare_examples,
+)
 from stemify.training.model import FrameTagger
 from stemify.training.segmenter import (
     MIN_ONSET_GAP_S,
@@ -146,6 +151,7 @@ class OnsetValidator:
         dataset: Dataset,
         transform: AudioTransform | None = None,
         contour_cache: Path | None = None,
+        feature_cache: Path | None = None,
         threshold: float = ONSET_THRESHOLD,
         min_gap_s: float = MIN_ONSET_GAP_S,
         **grouping: object,
@@ -155,14 +161,30 @@ class OnsetValidator:
         self.grouper = HeuristicSegmenter(**grouping)
         transform = transform or Identity()
         baseline = PyinBaseline()
+
+        # The CQT is the same the training pipeline already caches. With
+        # ``feature_cache`` set, populate it once (``prepare_examples``, disk-cached
+        # per (track, transform)) and read features back rather than recomputing in
+        # memory every launch -- and reuse the stem cache the BCE loader already
+        # built instead of recomputing it a second time.
+        if feature_cache is not None:
+            prepare_examples(dataset, ["onset"], feature_cache, transform)
+
         self.examples: list[ValExample] = []
         for item in dataset:
             path = transform.apply(item.audio())
-            features = cqt(load_audio(path))
+            if feature_cache is not None:
+                cached = TrackExample.load(
+                    example_path(feature_cache, item.name, transform.name)
+                )
+                features, frame_times = cached.features, cached.frame_times
+            else:
+                features = cqt(load_audio(path))
+                frame_times = frame_times_for(features)
             self.examples.append(
                 ValExample(
                     features=torch.from_numpy(features).float()[None, None],
-                    frame_times=frame_times_for(features),
+                    frame_times=frame_times,
                     contour=cached_f0(baseline, path, contour_cache),
                     notes=item.reference_notes(),
                 )

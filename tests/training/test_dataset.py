@@ -9,11 +9,14 @@ import numpy as np
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
+from pathlib import Path
+
 from stemify.training.dataset import (
     FrameWindowDataset,
     TrackExample,
     build_example,
     collate,
+    example_path,
 )
 
 
@@ -78,3 +81,15 @@ def test_example_round_trips_through_disk(tmp_path):
     assert loaded.name == "rt"
     assert loaded.features.shape == (5, 6)
     assert "onset" in loaded.targets
+
+
+def test_example_path_keys_on_name_and_transform():
+    # The writer (prepare_examples) and reader (OnsetValidator) must agree on this
+    # filename, so it lives in one helper. '/' in a track name is flattened, and
+    # the transform is part of the key so stem and demucs of one track don't collide.
+    cache = Path("cache")
+    assert example_path(cache, "Track01", "identity").name == "Track01__identity.npz"
+    assert example_path(cache, "a/b", "demucs").name == "a_b__demucs.npz"
+    stem = example_path(cache, "Track01", "identity")
+    demucs = example_path(cache, "Track01", "demucs-htdemucs-bass")
+    assert stem != demucs  # same track, different transform -> distinct files

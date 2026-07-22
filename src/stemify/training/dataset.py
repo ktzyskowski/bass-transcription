@@ -101,6 +101,14 @@ def build_example(
     return TrackExample(name, features, targets, frame_times)
 
 
+def example_path(cache_dir: Path, name: str, transform_name: str) -> Path:
+    """Cache filename for one ``(track, transform)`` TrackExample. Shared by the
+    writer (``prepare_examples``) and any reader (``OnsetValidator``) so the naming
+    scheme -- including the transform in the key, which is what keeps a stem and a
+    demucs pass of the same track from colliding -- lives in exactly one place."""
+    return cache_dir / f"{name.replace('/', '_')}__{transform_name}.npz"
+
+
 def prepare_examples(
     dataset: SlakhLikeDataset,
     heads: Iterable[str],
@@ -121,7 +129,7 @@ def prepare_examples(
     paths: list[Path] = []
     computed = 0  # cache misses actually computed (the slow ones; the rest are hits)
     for i, item in enumerate(dataset, start=1):
-        path = cache_dir / f"{item.name.replace('/', '_')}__{transform.name}.npz"
+        path = example_path(cache_dir, item.name, transform.name)
         if not path.exists():
             audio = load_audio(transform.apply(item.audio()))
             features = cqt(audio)

@@ -63,6 +63,7 @@ def build_validators(
     val_limit: int,
     conditions: list[str],
     contour_cache: Path | None = None,
+    feature_cache_root: Path | None = None,
     contour_workers: int = 0,
 ) -> dict[str, OnsetValidator]:
     """One ``OnsetValidator`` per condition, keyed by tag. A condition is just a
@@ -70,9 +71,11 @@ def build_validators(
     ``SOURCES`` table that defines the *training* conditions defines the validation
     ones. Contours are memoised to ``contour_cache`` (shared across conditions --
     keyed on each condition's resolved audio path), so pyin runs once per file ever
-    rather than at every launch, which is what makes a large val set affordable. The
-    demucs condition separates its val audio through the (cached) DemucsSeparator at
-    construction.
+    rather than at every launch, which is what makes a large val set affordable. CQT
+    features are memoised under ``feature_cache_root/<tag>`` (the stem tag reuses the
+    cache the BCE loader already built), so the validator loads them from disk rather
+    than recomputing in memory each launch. The demucs condition separates its val
+    audio through the (cached) DemucsSeparator at construction.
 
     With ``contour_workers > 1``, the pyin cache is filled in parallel first (pyin
     is the serial bottleneck of validator construction); the per-condition loops
@@ -94,7 +97,10 @@ def build_validators(
     for tag in conditions:
         source, transform = SOURCES[tag]
         ds = SlakhDataset(root, split="validation", source=source, limit=val_limit)
-        validators[tag] = OnsetValidator(ds, transform, contour_cache=contour_cache)
+        feature_cache = feature_cache_root / tag if feature_cache_root else None
+        validators[tag] = OnsetValidator(
+            ds, transform, contour_cache=contour_cache, feature_cache=feature_cache
+        )
     return validators
 
 
@@ -192,7 +198,9 @@ def train_onset(
         )
         validators = build_validators(
             root, val_limit, val_conditions,
-            contour_cache=cache_dir / "val_contours", contour_workers=contour_workers,
+            contour_cache=cache_dir / "val_contours",
+            feature_cache_root=cache_dir / "val",
+            contour_workers=contour_workers,
         )
         callbacks += [
             mlflow,
