@@ -23,7 +23,6 @@ pooling), which is why the two are separate modules rather than one.
 
 import sys
 from collections.abc import Iterable
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 
 import librosa
@@ -36,6 +35,7 @@ from stemify.evaluation.alignment import FrameSet, ItemRef, align
 from stemify.evaluation.metrics import FrameMetric, PitchAccuracy, PitchConfusion
 from stemify.evaluation.metrics.base import MetricResult
 from stemify.evaluation.report import Report, jsonable
+from stemify.parallel import parallel_map
 from stemify.transforms import AudioTransform, Identity
 
 DEFAULT_METRICS: tuple[FrameMetric, ...] = (PitchAccuracy(), PitchConfusion())
@@ -233,17 +233,21 @@ class FrameEvaluation:
 
     def _collect_parallel(self, items: list[EvalItem]) -> FrameSet:
         payloads = [(self.baseline, self.transform, item) for item in items]
-        parts: list[tuple[ItemRef, np.ndarray, np.ndarray]] = []
-        with ProcessPoolExecutor(max_workers=self.workers) as pool:
-            # map keeps submission order, so per-item reporting stays stable
-            # across runs regardless of which worker finishes first.
-            for i, result in enumerate(pool.map(_evaluate_item, payloads), 1):
-                if result is not None:
-                    parts.append(result)
-                if self.progress:
-                    print(f"  {i}/{len(items)}", end="\r", file=sys.stderr)
+        n = len(items)
+
+        def report(i: int, _result: object) -> None:
+            # Runs in this process as each result streams back, in submission
+            # order, so per-item reporting stays stable across runs.
+            if self.progress:
+                print(f"  {i}/{n}", end="\r", file=sys.stderr)
+
+        results = parallel_map(
+            _evaluate_item, payloads, workers=self.workers, on_result=report
+        )
         if self.progress:
             print(file=sys.stderr)
+        # None => silent reference; drop so it stays out of the denominator.
+        parts = [r for r in results if r is not None]
         return FrameSet.from_items(parts)
 
     def run(self) -> FrameReport:
