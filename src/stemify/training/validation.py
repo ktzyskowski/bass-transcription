@@ -28,8 +28,8 @@ from stemify.features import cqt, load_audio
 from stemify.notes import NoteEvent
 from stemify.segmentation import HeuristicSegmenter
 from stemify.training.dataset import (
-    TrackExample,
     example_path,
+    features_npy,
     frame_times_for,
     prepare_examples,
 )
@@ -99,10 +99,11 @@ class ValExample:
 
     def load_features(self) -> torch.Tensor:
         """The (1, 1, n_bins, T) feature tensor, from memory or disk. The disk read
-        is transient -- freed after each score -- so memory stays flat over the run."""
+        is transient -- freed after each score -- so memory stays flat over the run.
+        ``feature_path`` is the TrackExample npz; features live in its .npy sidecar."""
         if self.features is not None:
             return self.features
-        arr = np.load(self.feature_path)["features"]
+        arr = np.load(features_npy(self.feature_path))
         return torch.from_numpy(arr).float()[None, None]
 
 

@@ -83,6 +83,35 @@ def test_example_round_trips_through_disk(tmp_path):
     assert "onset" in loaded.targets
 
 
+def test_load_mmap_returns_memmap_and_splits_features(tmp_path):
+    from stemify.training.dataset import features_npy
+
+    feats = np.random.rand(5, 8).astype(np.float32)
+    path = _save_example(tmp_path, "mm", feats, np.arange(8))
+    # features live in a bare .npy sidecar, not the npz
+    assert features_npy(path).exists()
+    assert "features" not in np.load(path).files
+    ex = TrackExample.load(path, mmap=True)
+    assert isinstance(ex.features, np.memmap)          # not resident in RAM
+    np.testing.assert_array_equal(np.asarray(ex.features), feats)
+
+
+def test_migrate_splits_legacy_npz_and_is_idempotent(tmp_path):
+    from stemify.training.dataset import features_npy, migrate_example_cache
+
+    legacy = tmp_path / "old.npz"
+    np.savez_compressed(
+        legacy, name="old", features=np.ones((4, 6), dtype=np.float32),
+        frame_times=np.arange(6), target_onset=np.zeros(6),
+    )
+    assert migrate_example_cache(tmp_path) == 1
+    assert features_npy(legacy).exists()
+    assert "features" not in np.load(legacy).files    # rewritten slim
+    ex = TrackExample.load(legacy)
+    assert ex.features.shape == (4, 6) and "onset" in ex.targets
+    assert migrate_example_cache(tmp_path) == 0        # already split -> no-op
+
+
 def test_example_path_keys_on_name_and_transform():
     # The writer (prepare_examples) and reader (OnsetValidator) must agree on this
     # filename, so it lives in one helper. '/' in a track name is flattened, and
