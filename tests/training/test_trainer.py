@@ -13,7 +13,9 @@ from torch.utils.data import DataLoader, Dataset
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import collate
-from stemify.training.model import FrameTagger, TCNEncoder, onset_head
+from stemify.encoders.heads import onset_head
+from stemify.encoders.networks import TCN
+from stemify.encoders.tagger import FrameTagger
 from stemify.training.trainer import Trainer, build_losses
 
 
@@ -35,7 +37,7 @@ class _FixedMapping(Dataset):
 
 def test_fit_reduces_loss():
     loader = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
-    model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
+    model = FrameTagger(TCN(), {"onset": onset_head()})
     config = TrainConfig(
         heads=("onset",), device="cpu", max_epochs=20,
         learning_rate=1e-2, patience=99,
@@ -46,7 +48,7 @@ def test_fit_reduces_loss():
 
 def test_best_checkpoint_is_restored():
     loader = DataLoader(_FixedMapping(4, window=16), batch_size=4, collate_fn=collate)
-    model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
+    model = FrameTagger(TCN(), {"onset": onset_head()})
     config = TrainConfig(heads=("onset",), device="cpu", max_epochs=5, patience=99)
     history = Trainer(model, config).fit(loader)
     assert 0 <= history.best_epoch < len(history.val_loss)
@@ -64,7 +66,7 @@ def test_on_batch_fires_per_train_batch_with_monotonic_steps():
     # 8 windows, batch 4 -> 2 train batches/epoch; the val pass must NOT emit.
     train = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
     val = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
-    model = FrameTagger(TCNEncoder(), {"onset": onset_head()})
+    model = FrameTagger(TCN(), {"onset": onset_head()})
     config = TrainConfig(heads=("onset",), device="cpu", max_epochs=2, patience=99)
 
     calls: list[tuple[int, dict]] = []

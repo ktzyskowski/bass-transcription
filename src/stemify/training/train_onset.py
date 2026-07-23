@@ -37,7 +37,9 @@ from stemify.training.callbacks import (
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import FrameWindowDataset, collate
 from stemify.training.examples import prepare_examples
-from stemify.training.model import FrameTagger, TCNEncoder, onset_head, voicing_head
+from stemify.encoders.heads import onset_head, voicing_head
+from stemify.encoders.networks import TCN
+from stemify.encoders.tagger import FrameTagger
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
@@ -63,10 +65,10 @@ SOURCES: dict[str, tuple[str, AudioTransform]] = {
 
 
 def build_model() -> FrameTagger:
-    encoder = TCNEncoder()
+    backbone = TCN()
     return FrameTagger(
-        encoder,
-        {"onset": onset_head(encoder.hidden), "voicing": voicing_head(encoder.hidden)},
+        backbone,
+        {"onset": onset_head(backbone.hidden), "voicing": voicing_head(backbone.hidden)},
     )
 
 

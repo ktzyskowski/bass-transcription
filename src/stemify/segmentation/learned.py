@@ -30,7 +30,7 @@ from stemify.notes import NoteEvent
 from stemify.segmentation.heuristic import HeuristicSegmenter
 from stemify.training.device import best_device
 from stemify.training.labels import resample_mask
-from stemify.training.model import FrameTagger
+from stemify.encoders.tagger import FrameTagger
 
 ONSET_THRESHOLD = 0.5
 MIN_ONSET_GAP_S = 0.03
