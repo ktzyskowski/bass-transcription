@@ -28,6 +28,9 @@ import torch
 from torch.utils.data import DataLoader
 
 from stemify.data.slakh import SlakhDataset
+from stemify.encoders.heads import onset_head, voicing_head
+from stemify.encoders.networks import TCN
+from stemify.encoders.tagger import FrameTagger
 from stemify.segmentation.learned import LearnedSegmenter
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -37,9 +40,6 @@ from stemify.training.callbacks import (
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import FrameWindowDataset, collate
 from stemify.training.examples import prepare_examples
-from stemify.encoders.heads import onset_head, voicing_head
-from stemify.encoders.networks import TCN
-from stemify.encoders.tagger import FrameTagger
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity

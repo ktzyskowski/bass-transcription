@@ -21,10 +21,10 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from stemify.encoders.tagger import FrameTagger
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
 from stemify.training.device import best_device
-from stemify.encoders.tagger import FrameTagger
 
 BINARY_HEADS = ("onset", "voicing")
 

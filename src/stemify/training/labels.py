@@ -13,15 +13,7 @@ invent half-voiced frames or smear an onset across two.
 
 import numpy as np
 
-
-def _nearest_frame(frame_times: np.ndarray, query: np.ndarray) -> np.ndarray:
-    """Index of the nearest frame to each query time. Vectorised, so a whole
-    track's onsets or a whole source grid resample in one call."""
-    j = np.searchsorted(frame_times, query)
-    j = np.clip(j, 0, frame_times.size - 1)
-    left = np.clip(j - 1, 0, frame_times.size - 1)
-    choose_left = np.abs(frame_times[left] - query) < np.abs(frame_times[j] - query)
-    return np.where(choose_left, left, j)
+from stemify.decoders.frames import _nearest_frame, resample_mask
 
 
 def onset_targets(
@@ -46,19 +38,6 @@ def onset_targets(
         hi = min(frame_times.size, int(c) + tolerance_frames + 1)
         y[lo:hi] = 1.0
     return y
-
-
-def resample_mask(
-    src_times: np.ndarray,
-    src_mask: np.ndarray,
-    frame_times: np.ndarray,
-) -> np.ndarray:
-    """Resample a boolean mask from its own grid onto ``frame_times`` (nearest)."""
-    y = np.zeros(frame_times.size, dtype=np.float32)
-    if src_times.size == 0 or frame_times.size == 0:
-        return y
-    nearest = _nearest_frame(np.asarray(src_times, dtype=float), frame_times)
-    return np.asarray(src_mask)[nearest].astype(np.float32)
 
 
 def voicing_targets(

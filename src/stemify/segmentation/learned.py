@@ -22,39 +22,20 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scipy.signal import find_peaks
 
 from stemify.contour import Contour
+from stemify.decoders.heuristic import (
+    MIN_ONSET_GAP_S,
+    ONSET_THRESHOLD,
+    VOICING_THRESHOLD,
+    onset_times_from_probs,
+)
+from stemify.encoders.tagger import FrameTagger
 from stemify.features import Features, extract_features
 from stemify.notes import NoteEvent
 from stemify.segmentation.heuristic import HeuristicSegmenter
 from stemify.training.device import best_device
 from stemify.training.labels import resample_mask
-from stemify.encoders.tagger import FrameTagger
-
-ONSET_THRESHOLD = 0.5
-MIN_ONSET_GAP_S = 0.03
-VOICING_THRESHOLD = 0.5  # per-frame P(voiced) cut for the learned voicing mask
-
-
-def onset_times_from_probs(
-    probs: np.ndarray,
-    frame_times: np.ndarray,
-    threshold: float = ONSET_THRESHOLD,
-    min_gap_s: float = MIN_ONSET_GAP_S,
-) -> np.ndarray:
-    """Peak-pick an onset-probability curve into onset times.
-
-    A local maximum above ``threshold`` is an onset; ``min_gap_s`` enforces a
-    refractory gap so one attack does not fire twice. Pure, so the peak logic is
-    tested without a model or audio.
-    """
-    if probs.size == 0:
-        return np.zeros(0)
-    hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.01
-    distance = max(1, round(min_gap_s / hop))
-    peaks, _ = find_peaks(probs, height=threshold, distance=distance)
-    return frame_times[peaks]
 
 
 class LearnedSegmenter(HeuristicSegmenter):
