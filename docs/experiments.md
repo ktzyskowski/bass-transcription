@@ -14,22 +14,29 @@ each learned head's contribution over the DSP floor. Pitch is always pyin.
 |---|---|---|---|---|
 | DSP floor (`HeuristicSegmenter`, δ=0.20) | spectral flux | pyin | **0.750** | **0.637** |
 | onset head (`tcn-v1`) | learned | pyin | **0.813** | **0.686** |
-| onset + voicing head | learned | learned | _(in progress)_ | _(in progress)_ |
+| onset + voicing head (`tcn-v2`) | learned | learned | **0.878** | **0.729** |
 
-Full P/R breakdown, matched val sets (stem N=252, demucs N=213), all at δ=0.20 for
-the floor:
+Full P/R breakdown, matched val sets (stem N=252, demucs N=213), floor at δ=0.20:
 
 | set | segmenter | P | R | F1 |
 |---|---|---|---|---|
 | stem | DSP floor | 0.713 | 0.792 | 0.750 |
-| stem | onset head (e1=e3) | 0.768 | 0.865 | **0.813** |
+| stem | onset head | 0.768 | 0.865 | 0.813 |
+| stem | onset + voicing | 0.855 | 0.903 | **0.878** |
 | demucs | DSP floor | 0.624 | 0.651 | 0.637 |
-| demucs | onset head (e1) | 0.649 | 0.727 | **0.686** |
+| demucs | onset head | 0.649 | 0.727 | 0.686 |
+| demucs | onset + voicing | 0.708 | 0.751 | **0.729** |
 
-**Learned onset head beats the DSP floor Pareto** (precision *and* recall up) on
-both conditions: **stem +6.3 F1, demucs +4.9 F1**. Not a threshold trade — a real
-model gain. The demucs floor uses the stem-tuned δ=0.20; demucs's own optimum is
-milder (~0.13, ~0.647), so even vs a demucs-tuned floor the head wins ~+3.9.
+**Every step is Pareto** (precision *and* recall rise, both conditions) — real
+model gains, not threshold trades:
+- **Onset** buys recall (splits same-pitch re-articulations the floor merged):
+  stem R +7.3, demucs R +7.6.
+- **Voicing** buys precision (trims pyin's over-voiced rests, the 34% FP bucket):
+  stem P +8.7, demucs P +5.9.
+- Cumulative over the floor: **stem +12.8, demucs +9.2**. demucs (the deployment
+  condition) is the number that ships.
+The demucs floor uses the stem-tuned δ=0.20; demucs's own optimum is milder
+(~0.13, ~0.647), so even vs a demucs-tuned floor the head stack wins clearly.
 
 ## Runs
 
@@ -56,21 +63,35 @@ milder (~0.13, ~0.647), so even vs a demucs-tuned floor the head wins ~+3.9.
 - **mix ≈ 0.18 confirms separation is non-negotiable** — bass buried in the full
   mix is untrackable; demucs recovers 84% of stem F1.
 
-## Error decomposition (why voicing is next)
+### tcn-v2 (onset + voicing heads) — 2026-07-22
+- **Model:** same `TCNEncoder`, now two heads (onset + voicing) on the shared
+  encoder; per-head weighted BCE. `--epochs 4 --val-every 1`.
+- **Result (best = epoch 3; plateaus at epoch 0):** stem **0.878** (P .855/R .903),
+  demucs **0.729** (P .708/R .751), mix 0.269. Pareto over onset-only on both.
+- **Voicing head is near-solved.** Threshold-free voicing AUROC: stem **0.984**,
+  demucs **0.961**, mix 0.937. Frame-F1-optimal threshold ~0.52 everywhere, so the
+  default 0.5 cut is right — no tuning warranted. Frame voicing-F1 ≈ 0.95–0.97.
+- **Mechanism confirmed:** voicing lifted *precision* (stem P +8.7, demucs +5.9) by
+  trimming pyin's over-voiced rests — exactly the 34% FP bucket predicted below.
+- Checkpoint saved to `data/cache/onset/onset_model.pt` (holds both heads; this
+  overwrote the onset-only tcn-v1 file — name future outputs per-run to keep both).
 
-Note-level false positives break down as **58% over-segmentation / 34% voicing /
-8% pitch**. Onset head addresses the 58% (and beat DSP on it). **Voicing (34%) is
-the next-biggest lever**, orthogonal to onset, ~zero new infra. Pitch (8%) is
-small but tab is octave-sensitive — gate behind an octave-error check before
-building. Direction of the voicing win: the 34% are *false positives* (pyin
-over-voices — places notes in rests), so a learned voicing mask should trim them
-and lift precision.
+## Error decomposition
+
+The pre-onset decomposition of note-level false positives was **58% over-seg / 34%
+voicing / 8% pitch**. As of tcn-v2 the first two are addressed: onset head took the
+over-seg (recall), voicing head took the 34% (precision, near-solved). **The
+residual is now onset over-segmentation + pyin pitch/octave errors** — pitch is the
+untouched third component and the candidate next lever, gated on the octave-error
+analysis (`scratchpad/octave_analysis.py`) that sizes how much of the residual a
+learned pitch head (dethroning pyin, Onsets-&-Frames-style) would actually recover.
 
 ## Deployment gap
 
-Stem → demucs costs both methods ~similarly (onset head −12.7 F1, DSP −11.3), so
-the learned lead survives separation. demucs (~0.686) is the number that ships,
-since we always separate before tracking.
+Stem → demucs costs every stage ~15 F1 (floor −11.3, onset −12.7, onset+voicing
+−14.9), so the learned lead survives separation but the gap does not shrink.
+demucs is the number that ships (we always separate before tracking): **0.729** as
+of tcn-v2, up from the 0.637 DSP floor.
 
 ## Hardware / ops notes
 - M3 Max, 36 GB RAM. Long runs need `caffeinate -is` (sleep kills them silently).
