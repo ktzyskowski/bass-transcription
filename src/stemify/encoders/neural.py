@@ -14,10 +14,11 @@ import numpy as np
 import torch
 
 from stemify.baselines.pyin import PyinBaseline
+from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.encoders.base import Encoder
 from stemify.encoders.tagger import FrameTagger
-from stemify.features import extract_features
+from stemify.features import Features, extract_features
 from stemify.sources import Sources
 from stemify.training.device import best_device
 
@@ -52,11 +53,24 @@ class NeuralEncoder(Encoder):
 
     def encode(self, sources: Sources) -> Cues:
         feats = extract_features(sources.bass)
-        onset, voicing = self._forward(feats.values)
         contour = self.baseline.predict_f0(sources.bass)
+        return self.encode_features(contour, feats)
+
+    def encode_features(self, contour: Contour, features: Features) -> Cues:
+        """``Cues`` from a precomputed CQT and contour -- the cache-friendly path the
+        async validator uses (no CQT/pyin recompute, both already cached per track).
+        ``encode`` is this over a freshly computed CQT and pyin contour."""
+        onset, voicing = self._forward(features.values)
         return Cues(
             contour=contour,
             onset=onset,
-            frame_times=feats.frame_times,
+            frame_times=features.frame_times,
             voicing=voicing,
         )
+
+    def voicing_probs(self, features: Features) -> np.ndarray | None:
+        """Raw per-frame P(voiced) over a track, or ``None`` with no voicing head --
+        the un-thresholded signal the threshold-free voicing AUROC metric needs,
+        distinct from the thresholded mask the decoder places rests with."""
+        _, voicing = self._forward(features.values)
+        return voicing

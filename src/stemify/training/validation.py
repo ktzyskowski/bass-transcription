@@ -34,8 +34,8 @@ from stemify.training.examples import (
 from stemify.transforms import AudioTransform, Identity
 
 # A segmentation step: cached features + their contour -> notes. The validator
-# depends on this shape, not on the concrete LearnedSegmenter/FrameTagger -- the
-# caller wraps a checkpoint and passes its bound ``segment_features``.
+# depends on this shape, not on any concrete encoder/decoder -- the caller wraps a
+# checkpoint's NeuralEncoder + a Decoder and passes their composed step.
 SegmentFn = Callable[[Contour, Features], list[NoteEvent]]
 # The raw voicing step: cached features -> per-frame P(voiced), or None with no
 # voicing head. Its threshold-free counterpart to SegmentFn, for the AUROC path.
@@ -117,9 +117,10 @@ def score_examples(
     references.
 
     The validator owns no segmentation logic -- it just calls the function it was
-    given (typically a ``LearnedSegmenter.segment_features``, the same class
-    deployment uses), so how notes are made lives entirely in the segmenter and eval
-    can't drift from deploy. Pure given ``examples`` and ``segment``."""
+    given (typically a decoder over a checkpoint's ``NeuralEncoder.encode_features``,
+    the same encoder/decoder pair deployment composes into a ``Segmenter``), so how
+    notes are made lives entirely there and eval can't drift from deploy. Pure given
+    ``examples`` and ``segment``."""
     refs: list[list[NoteEvent]] = []
     ests: list[list[NoteEvent]] = []
     for ex in examples:

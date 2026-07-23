@@ -11,9 +11,10 @@ robust to the condition it will actually see. stem+mix need no separation; addin
 
 Validation runs on every deployment condition (``--val-sources``, default
 stem,mix,demucs), not just clean stems: cheap BCE val loss on the stem set drives
-early stopping inline, while ``AsyncValidationCallback`` scores each checkpoint as
-a real ``LearnedSegmenter`` -- one ``OnsetValidator`` per condition, each caching
-its pyin contours so a score is a model forward, not a pyin re-run -- and logs
+early stopping inline, while ``AsyncValidationCallback`` scores each checkpoint
+through the real ``NeuralEncoder`` + ``HeuristicDecoder`` pair -- one
+``OnsetValidator`` per condition, each caching its pyin contours so a score is a
+model forward, not a pyin re-run -- and logs
 ``note_f1_<condition>`` to MLflow. The gap between ``note_f1_stem`` and
 ``note_f1_demucs`` is the verdict on how well the learned onsets survive separation
 (the DSP stem floor is ~80% on val / 73% on test).
@@ -28,10 +29,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from stemify.data.slakh import SlakhDataset
+from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.heads import onset_head, voicing_head
 from stemify.encoders.networks import TCN
+from stemify.encoders.neural import NeuralEncoder
 from stemify.encoders.tagger import FrameTagger
-from stemify.segmentation.learned import LearnedSegmenter
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     ConsoleCallback,
@@ -111,16 +113,22 @@ def _eval_fn(validators: dict[str, OnsetValidator]):
     def eval_fn(state_dict, epoch):
         model = build_model()
         model.load_state_dict(state_dict)
-        # Wrap the checkpoint once (CPU, off the training device) and hand each
-        # condition's validator its segment step -- the validator scores notes, the
-        # segmenter makes them.
-        segmenter = LearnedSegmenter(model, device="cpu")
+        # Wrap the checkpoint once (CPU, off the training device) as the encoder/
+        # decoder pair deployment composes into a Segmenter. Note scoring runs the
+        # decoder on the encoder's cued features; voicing (frame-level) scoring runs
+        # the encoder alone -- the same encoder-for-frames, decoder-for-notes split.
+        encoder = NeuralEncoder(model, device="cpu")
+        decoder = HeuristicDecoder()
+
+        def segment(contour, features):
+            return decoder.decode(encoder.encode_features(contour, features))
+
         metrics: dict[str, float] = {}
         for tag, validator in validators.items():
-            for key, value in validator.score(segmenter.segment_features).items():
+            for key, value in validator.score(segment).items():
                 metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
             # Threshold-free voicing-head quality (empty for an onset-only model).
-            for key, value in validator.score_voicing(segmenter.voicing_probs).items():
+            for key, value in validator.score_voicing(encoder.voicing_probs).items():
                 metrics[f"voicing/{tag}/{key.removeprefix('voicing_')}"] = value
         return metrics
 
@@ -215,9 +223,9 @@ def train_onset(
     trainer.fit(train_loader, val_loader, callbacks=callbacks)
 
     # fit() restores the best-val checkpoint into trainer.model; persist it so the
-    # trained onset head survives the process (LearnedSegmenter loads it) rather
-    # than living only as MLflow metrics. Save the state_dict plus the metadata
-    # LearnedSegmenter needs to rebuild the architecture before loading weights.
+    # trained heads survive the process (a NeuralEncoder loads them) rather than
+    # living only as MLflow metrics. Save the state_dict plus the metadata needed to
+    # rebuild the architecture before loading weights.
     out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {"state_dict": trainer.model.state_dict(), "heads": HEADS, "encoder": "tcn"},
