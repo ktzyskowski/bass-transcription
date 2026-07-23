@@ -1,6 +1,6 @@
 """Train the onset head on Slakh, scored by note-level F1.
 
-    uv run python -m stemify.training.train_onset --root data/raw/slakh2100 \
+    uv run python -m stemify.training.train --root data/raw/slakh2100 \
         --cache-dir data/cache/onset --tracking-uri file:./mlruns \
         --sources stem,mix,demucs --limit 400
 
@@ -139,7 +139,7 @@ def _windows(paths, config: TrainConfig) -> FrameWindowDataset:
     return FrameWindowDataset(paths, HEADS, config.window_frames, config.hop_frames)
 
 
-def train_onset(
+def train(
     root: str,
     cache_dir: Path,
     config: TrainConfig,
@@ -272,7 +272,7 @@ def main() -> None:
         heads=tuple(HEADS), max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
-    train_onset(
+    train(
         args.root, args.cache_dir, config, sources=args.sources.split(","),
         val_conditions=args.val_sources.split(","),
         val_limit=args.val_limit, val_every=args.val_every,
