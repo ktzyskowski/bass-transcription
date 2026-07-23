@@ -93,6 +93,73 @@ Stem → demucs costs every stage ~15 F1 (floor −11.3, onset −12.7, onset+vo
 demucs is the number that ships (we always separate before tracking): **0.729** as
 of tcn-v2, up from the 0.637 DSP floor.
 
+## Semi-CRF decoder — Config A findings (frozen probe, 2026-07-23)
+
+A semi-CRF learned decoder to replace `group()` (design: `docs/semi-crf.md`),
+probed as **Config A**: frozen tcn-v2 emissions, ~15 CRF params fit by NLL of the
+gold segmentation via the differentiable segmental forward algorithm; batched DP
+(START-state 3-label scan). Prototype: session scratchpad `semicrf.py`.
+
+**Three failure causes found, two fixed on the frozen probe:**
+
+1. Missing pitch-change cue → added a pyin pitch-jump emission (dropout-bridged,
+   like group()'s running pitch).
+2. **MIDI-gap gold** → gold rests derived from MIDI note-off gaps that the audio
+   rings through (see note-off-vs-silence quirk) trained the CRF that `note→note`
+   was unlikely, collapsing legato runs. Fix: merge sub-threshold (<0.12 s) MIDI
+   gaps into contiguous `note→note` gold (extend the note offset; onsets never
+   move — the metric ignores offsets). **Confirmed the cause:** `trans[note→note]`
+   −1.34 → −0.59, NLL 1620 → 1339, **stem recall 0.35 → 0.55 and stem precision
+   0.841 now beats group()'s 0.826.**
+3. **Weak demucs emissions** → NOT fixable while frozen. The gold fix left demucs
+   recall flat (0.24 → 0.24): on separated audio the onset head is sub-threshold and
+   pyin is noisy, so the split cues aren't in the frozen emissions.
+
+**Verdict:** the architecture is *validated on clean signal* but hits the
+**frozen-emission ceiling** on demucs. As a frozen decoder it still loses to group()
+on recall (stem 0.55 vs 0.88), so it does not ship. group() remains the shipping
+baseline. The demucs gap is an emission-quality problem → the fix is **end-to-end**.
+
+## Future experiments
+
+### Semi-CRF end-to-end + mix-conditioned input — committed next (needs 5090)
+
+Retrain the onset/voicing heads **jointly with the CRF** so the separated-audio
+emissions get sharpened for the decoder — the only thing that addresses the demucs
+ceiling above. The differentiable forward-algorithm scan moves *into* the training
+loop (backprop through heads + CRF), which is sequential and MPS-hostile → run on
+CUDA (5090). Bake in the two proven Config-A fixes: **dropout-bridged pitch cue +
+audio-aligned gold**. The note-verifier (learn to prune group()'s FPs) is **dropped**
+— it was the fallback for when the CRF looked dead; the CRF is now the real path, and
+group() holds the shipping line meanwhile.
+
+Stage it so each result is interpretable (three simultaneous changes would be
+undebuggable):
+
+**Stage 1 — end-to-end CRF, current (bass) input.** Answers the one big unknown:
+does joint training lift demucs recall past the frozen ceiling? Build work: promote
+the prototype from frozen cached probs to an integrated loss (segmental forward NLL
+as the training objective, decoding via segmental Viterbi), reusing the batched DP.
+
+**Stage 2 — add (bass, mix) bichannel input, as an ablation.** Feed the separated
+bass *and* the original mix (bass head stays bass-only; mix is pure context).
+Rationale: a chunk of demucs over-seg is likely **drum bleed** (kick/bass overlap in
+the low end), read as spurious bass onsets — given the mix, the model can learn "this
+low transient lines up with a kick → not a re-pluck → suppress it." Training with vs
+without the mix channel *measures* the bleed contribution directly (replaces the
+standalone drum-onset-coincidence diagnostic, since we're retraining anyway).
+
+- **Buildable:** demucs already emits the mix/all stems in one pass, available *at
+  inference*, not just training — we currently discard everything but bass. Slakh
+  gives ground-truth stems for training.
+- **Channels:** start **(bass, mix)** — the mix is `bass + residual`, so the model
+  derives the interferers (drums included) as `(mix − bass)`; a separate drum stem is
+  redundant (drums ⊂ mix). Keep **(bass, drums, mix)** only as a later ablation if
+  2-channel underperforms.
+- **Mechanics:** `_ConvFrontend` already takes channels, so `(B,1,F,T)` →
+  `(B,2,F,T)`. Train with **stem dropout** (randomly zero the mix channel) so an
+  isolated-bass-DI upload with no mix degrades to bass-only instead of breaking.
+
 ## Hardware / ops notes
 - M3 Max, 36 GB RAM. Long runs need `caffeinate -is` (sleep kills them silently).
 - Full-scale fits in RAM only via memmapped CQT features + lazy val features.
