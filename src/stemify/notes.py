@@ -2,10 +2,10 @@
 
 A ``NoteEvent`` is the note-level peer of ``Contour``: where a contour is pitch
 sampled per frame, a note is a discrete event with a start, an end, and one
-pitch. Both are exchanged between datasets (as references) and baselines (as
-predictions), so like ``Contour`` this type lives in a neutral module that
-neither ``data`` nor ``baselines`` owns -- keeping the dependency direction
-one-way and needing no import guards.
+pitch. Both are exchanged between datasets (as references) and the pipeline (as
+predictions), so like ``Contour`` this type lives in a neutral module that neither
+``data`` nor ``decoders`` owns -- keeping the dependency direction one-way and
+needing no import guards.
 """
 
 from dataclasses import dataclass

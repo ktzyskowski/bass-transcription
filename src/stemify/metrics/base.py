@@ -4,9 +4,10 @@ A metric is a pure function from a (reference, estimate) pair to numbers. There
 are two families, split by the shape of that pair, and each has its own base
 class:
 
-  - ``FrameMetric`` (``metrics.frame``) scores two frame-aligned Hz arrays. Its
-    caller flattens every track's frames into one pair -- frame scoring is
-    elementwise, so concatenation is lossless -- and scores once.
+  - ``FrameMetric`` (``metrics.frame``) scores two frame-aligned arrays (Hz for
+    pitch, or a label/probability pair for onset and voicing). Its caller flattens
+    every track's frames into one pair -- frame scoring is elementwise, so
+    concatenation is lossless -- and scores once.
   - ``NoteMetric`` (``metrics.note``) scores two *lists of per-track* note-event
     lists. Note matching is a per-track set assignment, not elementwise, so the
     track structure is load-bearing and cannot be flattened away; the metric
@@ -15,7 +16,7 @@ class:
 What they share is only this result type: named scalars plus any non-scalar
 artifacts, uniform to render, serialise and compare regardless of which family
 produced it. It is just data -- computation lives in the metrics, alignment and
-estimation in the harnesses (``stemify.evaluation.frame`` / ``.note``).
+estimation in the harnesses (``stemify.evaluation.cues`` / ``.note``).
 """
 
 from dataclasses import dataclass, field

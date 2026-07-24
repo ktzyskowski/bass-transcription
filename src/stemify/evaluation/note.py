@@ -3,7 +3,7 @@
     NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
                    Segmenter(DSPEncoder(), HeuristicDecoder())).run()
 
-The frame-level harness (``FrameEvaluation``) asks "what pitch at each instant".
+The cues-level harness (``CuesEvaluation``) scores the encoder's per-frame evidence.
 This asks "did you find the right notes" -- the metric a tab is actually graded on,
 and the one a bass-transcription collaborator's F1 numbers use.
 
@@ -14,12 +14,12 @@ one object and cannot drift, and there is no separate "learned baseline" class. 
 note-native transcriber that emits notes without a contour would plug in the same
 way once it exposes ``segment(sources) -> notes``.)
 
-Same shape as the frame harness (dataset + transcriber -> a ``Report``), and the same
+Same shape as the cues harness (dataset + object -> a ``Report``), and the same
 division of labour: everything dataset-specific lives behind ``Dataset``, everything
-metric-specific behind ``NoteMetric``. The one difference from frame is where the
-per-track step sits -- note metrics cannot pool their inputs (matching is per track),
-so this collects each item's reference and estimate note lists, then hands the whole
-nested list to each metric, which loops tracks internally.
+metric-specific behind ``NoteMetric``. The one difference is where the per-track step
+sits -- note metrics cannot pool their inputs (matching is per track), so this collects
+each item's reference and estimate note lists, then hands the whole nested list to each
+metric, which loops tracks internally (a frame metric pools frames and scores once).
 """
 
 import sys

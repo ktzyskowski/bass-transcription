@@ -1,10 +1,10 @@
 """``FrameMetric``: the contract for a frame-level metric.
 
-A ``FrameMetric`` receives two frame-aligned pitch arrays and returns a
-``MetricResult``. It does no resampling, no voicing inference, no aggregation --
-``FrameEvaluation`` has already done all of that (see ``stemify.evaluation.frame``).
-That is the whole point of the split: metrics stay stateless and comparable, and
-alignment is implemented once rather than once per metric.
+A ``FrameMetric`` receives two frame-aligned arrays and returns a ``MetricResult``.
+It does no resampling, no voicing inference, no aggregation -- ``CuesEvaluation`` has
+already done all of that (see ``stemify.evaluation.cues``). That is the whole point of
+the split: metrics stay stateless and comparable, and alignment is implemented once
+rather than once per metric.
 
 The contract for ``calculate(true, pred)``:
 
@@ -14,10 +14,9 @@ The contract for ``calculate(true, pred)``:
     reference defines where questions get asked, the estimate is resampled onto
     it
 
-Aggregation across a dataset is *not* a frame metric's concern. ``FrameEvaluation``
+Aggregation across a dataset is *not* a frame metric's concern. ``CuesEvaluation``
 pools frames from every track into one pair of arrays and calls ``calculate``
-once, which makes results frame-weighted by construction. Per-group breakdowns
-(per track, per string) are the same call on a boolean-masked subset. There is
+once, which makes results frame-weighted by construction. There is
 deliberately no ``combine`` step to get wrong -- which is exactly where the
 note-level family diverges: ``NoteMetric`` (``metrics.note``) *cannot* pool its
 inputs, so it scores per item and sums, and needs a combine step this one does

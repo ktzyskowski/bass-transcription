@@ -1,11 +1,11 @@
-"""Audio in, audio out -- preprocessing that sits between a dataset and a baseline.
+"""Audio in, audio out -- preprocessing that sits between a dataset and the encoder.
 
 The motivating case is source separation. In production a bass pitch model will
 not receive a clean stem; it will receive whatever a separator extracted from a
 full mix. Training and evaluating only on clean stems bakes in a train/deploy
 mismatch, so the harness needs a place to put "run this through Demucs first".
 
-A transform produces a **file**, not an array, for two reasons: baselines take
+A transform produces a **file**, not an array, for two reasons: the encoder takes
 paths (``librosa.load`` wants a filename), and separation is expensive enough
 that recomputing it per run would dominate everything else. ``apply`` therefore
 caches, and because a separator can take minutes per track, the write is atomic
@@ -13,8 +13,8 @@ caches, and because a separator can take minutes per track, the write is atomic
 
 **What gets cached is exactly what the transform produced.** No mono mixdown, no
 resampling, no bit-depth reduction, even though all three would shrink the cache
-considerably. Those are the consumer's decisions -- baselines already load with
-``mono=True`` and their own sample rate -- and baking them in here would make the
+considerably. Those are the consumer's decisions -- the encoder already loads with
+``mono=True`` and its own sample rate -- and baking them in here would make the
 cache lossy in ways a later consumer cannot undo. FLAC keeps the size honest
 without making that choice.
 

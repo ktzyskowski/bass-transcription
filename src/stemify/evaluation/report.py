@@ -5,8 +5,8 @@ returned nothing, so a result existed only in a scrollback -- impossible to diff
 across runs or read back from a stored job. Every report is therefore
 serialisable and renderable.
 
-Frame-level and note-level evaluations produce different reports (``FrameReport``
-in ``frame``, ``NoteReport`` in ``note``) -- they carry different numbers and lay
+Cues-level and note-level evaluations produce different reports (``CuesReport``
+in ``cues``, ``NoteReport`` in ``note``) -- they carry different numbers and lay
 themselves out differently. What they share is this surface: ``render`` for a
 human, ``to_dict`` for a machine, and ``write_json`` on top of ``to_dict``. The
 base supplies ``write_json`` once so neither subclass repeats it, and lets a
@@ -14,7 +14,7 @@ caller (the CLI, a comparison script) hold either report behind one type.
 
 The base is intentionally thin. Aggregation and formatting are level-specific and
 live with each subclass; forcing them into a shared template would abstract over
-almost nothing, since a frame report pools metric results by group while a note
+almost nothing, since a cues report lists per-channel frame metrics while a note
 report pools tp/fp/fn counts.
 """
 

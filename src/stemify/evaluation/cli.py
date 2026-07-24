@@ -1,43 +1,39 @@
-"""Command-line entry point for evaluating a baseline on a dataset.
+"""Command-line entry point for evaluating a model on a dataset.
 
-    uv run python -m stemify.evaluation.cli --baseline pyin --dataset idmt
-    uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --source mix
-    uv run python -m stemify.evaluation.cli --baseline pyin --dataset slakh --level note
+    uv run python -m stemify.evaluation.cli --encoder pyin --dataset slakh --level cues
+    uv run python -m stemify.evaluation.cli --encoder pyin --dataset slakh --level note
+    uv run python -m stemify.evaluation.cli --encoder learned --checkpoint m.pt \
+        --dataset slakh --level note --decoder semicrf
 
 This module is only argument parsing. The work is:
 
-    FrameEvaluation(dataset, baseline).run() -> FrameReport   (--level frame)
-    NoteEvaluation(dataset, baseline).run()  -> NoteReport    (--level note)
+    CuesEvaluation(dataset, encoder).run() -> CuesReport    (--level cues)
+    NoteEvaluation(dataset, Segmenter(encoder, decoder)).run() -> NoteReport  (--level note)
 
-Adding a dataset means writing a ``Dataset`` subclass and adding one line to
-``DATASETS`` -- the runners, the metrics and the reports need no changes, because
-a dataset owns how its own references are built.
+Both levels score the same encoder -- ``pyin`` is the DSP floor (``DSPEncoder``),
+``learned`` a trained ``FrameTagger`` (``NeuralEncoder``, needs ``--checkpoint``).
+Cues-level scores that encoder's per-frame evidence; note-level pairs it with a
+decoder and scores the notes. Adding a dataset means writing a ``Dataset`` subclass
+and one line in ``DATASETS``; the runners, metrics and reports need no changes.
 """
 
 import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from stemify.baselines.base import PitchBaseline
-from stemify.baselines.basic_pitch import BasicPitchBaseline
-from stemify.baselines.pesto import PestoBaseline
-from stemify.baselines.pyin import PyinBaseline
 from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.decoders.semicrf import SemiCRFDecoder
+from stemify.encoders.base import Encoder
 from stemify.encoders.dsp import DSPEncoder
-from stemify.evaluation import FrameEvaluation, NoteEvaluation
+from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.segmenter import Segmenter
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
-BASELINES: dict[str, type[PitchBaseline]] = {
-    "pyin": PyinBaseline,
-    "pesto": PestoBaseline,
-    "basic-pitch": BasicPitchBaseline,
-}
+ENCODERS = ("pyin", "learned")
 
 # Decoders available to the note harness. The heuristic is the DSP floor; semicrf is
 # the learned global decoder (untrained potentials unless a checkpoint carries them).
@@ -61,33 +57,26 @@ def load_tagger(checkpoint: Path):
     return model
 
 
-def build_note_transcriber(args: argparse.Namespace) -> Segmenter:
-    """Compose the ``Segmenter`` the note harness scores: a DSP or learned encoder
-    (pyin contour + onset cues, or a trained ``FrameTagger``) paired with a decoder.
+def build_encoder(args: argparse.Namespace) -> Encoder:
+    """The encoder both levels score: the pyin DSP floor, or a trained model.
 
-    ``--baseline pyin`` is the DSP floor; ``--baseline learned --checkpoint X`` runs a
-    trained model. The frame-only baselines (pesto, basic-pitch) are not note-native
-    -- they produce a contour, not notes -- so they are rejected here.
+    ``--encoder pyin`` is ``DSPEncoder`` (spectral-flux onset + pyin pitch), the floor.
+    ``--encoder learned --checkpoint X`` loads a trained ``FrameTagger`` into a
+    ``NeuralEncoder``. The learned encoder is CPU-pinned here -- eval is not the hot path.
     """
-    if args.baseline == "pyin":
-        encoder = DSPEncoder()
-    elif args.baseline == "learned":
-        if not args.checkpoint:
-            raise SystemExit("--baseline learned needs --checkpoint <model.pt>")
-        from stemify.encoders.neural import NeuralEncoder
+    if args.encoder == "pyin":
+        return DSPEncoder()
+    if not args.checkpoint:
+        raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
+    from stemify.encoders.neural import NeuralEncoder
 
-        encoder = NeuralEncoder(load_tagger(args.checkpoint), device="cpu")
-    else:
-        raise SystemExit(
-            f"note-level eval needs --baseline pyin or learned, not {args.baseline!r}"
-        )
-    return Segmenter(encoder, DECODERS[args.decoder]())
+    return NeuralEncoder(load_tagger(args.checkpoint), device="cpu")
 
-# Each entry is (default root, factory). Adding a dataset is one line here plus
-# the Dataset subclass itself -- the runner, metrics and report are untouched,
-# because a dataset owns how its own references are built. Factories take the
-# parsed args so a dataset can read whichever flags it cares about and ignore
-# the rest.
+
+# Each entry is (default root, factory). Adding a dataset is one line here plus the
+# Dataset subclass itself -- the runner, metrics and report are untouched, because a
+# dataset owns how its own references are built. Factories take the parsed args so a
+# dataset can read whichever flags it cares about and ignore the rest.
 DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset]]] = {
     "idmt": (
         "data/raw/idmt_smt_bass",
@@ -114,9 +103,8 @@ def build_dataset(args: argparse.Namespace) -> Dataset:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "--baseline", choices=[*BASELINES, "learned"], required=True,
-        help="frame: pyin/pesto/basic-pitch. note: pyin (DSP floor) or learned "
-        "(a trained FrameTagger, with --checkpoint).",
+        "--encoder", choices=ENCODERS, required=True,
+        help="pyin (DSP floor) or learned (a trained FrameTagger, with --checkpoint).",
     )
     ap.add_argument(
         "--decoder", choices=DECODERS, default="heuristic",
@@ -124,9 +112,9 @@ def main() -> None:
     )
     ap.add_argument(
         "--checkpoint", type=Path,
-        help="note --baseline learned: the trained model .pt to load.",
+        help="--encoder learned: the trained model .pt to load.",
     )
-    ap.add_argument("--dataset", choices=DATASETS, default="mdb")
+    ap.add_argument("--dataset", choices=DATASETS, default="slakh")
     ap.add_argument("--root", help="dataset root (defaults per dataset)")
     ap.add_argument(
         "--source",
@@ -148,58 +136,38 @@ def main() -> None:
         "lands entirely inside one technique and the numbers do not generalise.",
     )
     ap.add_argument(
-        "--group-by",
-        nargs="*",
-        help="breakdown keys (default: whatever the dataset's items declare)",
-    )
-    ap.add_argument(
         "--separate",
         choices=["none", "demucs"],
         default="none",
-        help="preprocess audio through a source separator before the baseline "
+        help="preprocess audio through a source separator before the encoder "
         "hears it. 'demucs' is the deployment condition; 'none' is the clean "
         "upper bound. Results are cached, so repeat runs are free.",
     )
     ap.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="process-pool width for scoring. Near-linear speedup on CPU-bound "
-        "conditions (pyin). Frame-level only. Keep at 1 for --separate demucs "
-        "on a cold cache.",
-    )
-    ap.add_argument(
         "--level",
-        choices=["frame", "note"],
-        default="frame",
-        help="frame: pitch per instant (RPA/RCA/Overall). note: discrete note "
-        "events (precision/recall/F1), which needs a note-native dataset "
-        "(slakh, idmt). Frame-level separation flags do not apply to note.",
+        choices=["cues", "note"],
+        default="note",
+        help="cues: the encoder's per-frame evidence (onset/voicing/pitch quality). "
+        "note: discrete note events (precision/recall/F1), which needs a note-native "
+        "dataset (slakh, idmt).",
     )
     ap.add_argument("--json", type=Path, help="also write the report here")
     args = ap.parse_args()
 
-    # Both failure modes here are the user's situation, not a bug: a dataset
-    # that was never downloaded, or filters that excluded everything. A
-    # traceback would bury the one sentence that says which.
+    # Both failure modes here are the user's situation, not a bug: a dataset that was
+    # never downloaded, or filters that excluded everything. A traceback would bury
+    # the one sentence that says which.
     transform: AudioTransform = (
         DemucsSeparator() if args.separate == "demucs" else Identity()
     )
     try:
         dataset = build_dataset(args)
+        encoder = build_encoder(args)
         if args.level == "note":
-            transcriber = build_note_transcriber(args)
+            transcriber = Segmenter(encoder, DECODERS[args.decoder]())
             report = NoteEvaluation(dataset, transcriber, transform=transform).run()
         else:
-            if args.baseline not in BASELINES:
-                raise SystemExit(f"frame-level eval needs a pitch baseline, not {args.baseline!r}")
-            report = FrameEvaluation(
-                dataset=dataset,
-                baseline=BASELINES[args.baseline](),
-                transform=transform,
-                group_by=args.group_by,
-                workers=args.workers,
-            ).run()
+            report = CuesEvaluation(dataset, encoder, transform=transform).run()
     except (FileNotFoundError, ValueError, NotImplementedError) as exc:
         raise SystemExit(str(exc)) from exc
 

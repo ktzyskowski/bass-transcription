@@ -1,25 +1,24 @@
-"""Scoring a pitch baseline against a dataset, frame-level and note-level.
+"""Scoring a model against a dataset, at two altitudes of the note pipeline.
 
-    from stemify.evaluation import FrameEvaluation, NoteEvaluation
-    frame = FrameEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
-    notes = NoteEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
+    from stemify.evaluation import CuesEvaluation, NoteEvaluation
+    cues  = CuesEvaluation(SlakhDataset("data/raw/slakh2100"), DSPEncoder()).run()
+    notes = NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
+                           Segmenter(DSPEncoder(), HeuristicDecoder())).run()
 
-Two parallel harnesses, same shape (dataset + baseline -> a ``Report``), different
-question:
+Two harnesses, same shape (dataset + object -> a ``Report``), different altitude:
 
-    frame.py  FrameEvaluation -> FrameReport   "what pitch at each instant"
-    note.py   NoteEvaluation  -> NoteReport     "did you find the right notes"
+    cues.py   CuesEvaluation -> CuesReport   scores an Encoder's per-frame cues
+    note.py   NoteEvaluation -> NoteReport   scores a whole Segmenter's notes
 
-They are separate rather than unified because the data flow genuinely differs --
-frame pooling and per-frame metrics on one side, note-interval matching and
-count pooling on the other. What they share is the ``Report`` surface (render,
-to_dict, write_json), so a caller can hold either behind one type.
+They are the two things worth scoring in ``Sources -> Encoder -> Cues -> Decoder ->
+notes``: the encoder's evidence and the end-to-end notes. Run together they localise
+a regression to the encoder or the decoder. Both share the ``Report`` surface
+(render, to_dict, write_json), so a caller can hold either behind one type.
 
-Both are re-exported here so callers never reach into a submodule. Supporting
-pieces stay in their modules:
+Supporting pieces stay in their modules:
 
     report.py      Report -- the shared render/to_dict/write_json surface
-    alignment.py   resampling onto the reference grid, and FrameSet pooling
+    alignment.py   voicing-aware resampling of a contour onto the reference grid
     ../metrics/    Metric.calculate(true, pred) -> MetricResult
     ../segmenter.py  Segmenter -- Sources -> notes, the object the note harness scores
     cli.py         argument parsing
@@ -27,13 +26,13 @@ pieces stay in their modules:
 Nothing here imports from the package root, so these re-exports cannot cycle.
 """
 
-from stemify.evaluation.frame import FrameEvaluation, FrameReport
+from stemify.evaluation.cues import CuesEvaluation, CuesReport
 from stemify.evaluation.note import NoteEvaluation, NoteReport
 from stemify.evaluation.report import Report
 
 __all__ = [
-    "FrameEvaluation",
-    "FrameReport",
+    "CuesEvaluation",
+    "CuesReport",
     "NoteEvaluation",
     "NoteReport",
     "Report",

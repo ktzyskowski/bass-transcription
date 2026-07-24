@@ -6,6 +6,7 @@ one pair and scores once (see ``stemify.evaluation.frame``).
 
 from stemify.metrics.frame.base import FrameMetric
 from stemify.metrics.frame.confusion import ConfusionResult, PitchConfusion
+from stemify.metrics.frame.onset import OnsetPR
 from stemify.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
 from stemify.metrics.frame.voicing import VoicingAUROC
 
@@ -16,4 +17,5 @@ __all__ = [
     "PitchConfusion",
     "ConfusionResult",
     "VoicingAUROC",
+    "OnsetPR",
 ]

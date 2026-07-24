@@ -6,11 +6,10 @@ is pyin (classic DSP); a learned pitch head will replace it later. Both are
 in with no change to the encoder -- the "encoder produces the contour" promise made
 concrete.
 
-This is deliberately distinct from ``baselines/``: a ``PitchEstimator`` is an
-*internal component* of the pipeline (pyin as the contour source inside
-``DSPEncoder``/``NeuralEncoder``), whereas a ``PitchBaseline`` is a whole system the
-evaluation harness scores. ``PyinBaseline`` now wraps ``PyinPitch`` rather than
-reimplementing it, so the DSP lives in one place and the two roles stay separate.
+A ``PitchEstimator`` is an *internal component* of the pipeline (pyin as the contour
+source inside ``DSPEncoder``/``NeuralEncoder``), not a whole system the harness scores
+-- cues-level evaluation scores the encoder that *holds* one of these, via its output
+``Cues.contour``, rather than the estimator directly.
 
 Onset and voicing get no such ABC: they are *outputs* of the ``FrameTagger``'s heads,
 not pluggable strategies with two implementations, so abstracting them would be
