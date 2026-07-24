@@ -1,32 +1,37 @@
-"""Note-level evaluation: bind a dataset, a baseline and note metrics, and run.
+"""Note-level evaluation: bind a dataset and a ``Segmenter``, and score notes.
 
-    NoteEvaluation(SlakhDataset("data/raw/slakh2100"), PyinBaseline()).run()
+    NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
+                   Segmenter(DSPEncoder(), HeuristicDecoder())).run()
 
 The frame-level harness (``FrameEvaluation``) asks "what pitch at each instant".
-This asks "did you find the right notes" -- the metric a tab is actually graded
-on, and the one a bass-transcription collaborator's F1 numbers use, so it is
-what makes those numbers comparable.
+This asks "did you find the right notes" -- the metric a tab is actually graded on,
+and the one a bass-transcription collaborator's F1 numbers use.
 
-Same shape as the frame harness (dataset + baseline -> a ``Report``), and the
-same division of labour: everything dataset-specific lives behind ``Dataset``,
-everything metric-specific behind ``NoteMetric``. The one difference is where
-the per-track step sits. Frame metrics receive pre-pooled arrays; note metrics
-cannot pool their inputs (matching is per track), so this harness collects each
-item's reference and estimate note lists -- the expensive part, running the
-baseline and the segmenter -- then hands the whole nested list to each metric,
-which loops tracks internally and returns one result.
+It scores the exact object deployment ships: a ``Segmenter(encoder, decoder)``. The
+DSP floor is ``Segmenter(DSPEncoder(), HeuristicDecoder())``; a trained model is
+``Segmenter(NeuralEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
+one object and cannot drift, and there is no separate "learned baseline" class. (A
+note-native transcriber that emits notes without a contour would plug in the same
+way once it exposes ``segment(sources) -> notes``.)
+
+Same shape as the frame harness (dataset + transcriber -> a ``Report``), and the same
+division of labour: everything dataset-specific lives behind ``Dataset``, everything
+metric-specific behind ``NoteMetric``. The one difference from frame is where the
+per-track step sits -- note metrics cannot pool their inputs (matching is per track),
+so this collects each item's reference and estimate note lists, then hands the whole
+nested list to each metric, which loops tracks internally.
 """
 
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from stemify.baselines.base import PitchBaseline
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
 from stemify.metrics import PRF, Fragmentation, MetricResult, NoteMetric
 from stemify.notes import NoteEvent
-from stemify.segmentation import HeuristicSegmenter, Segmenter
+from stemify.segmenter import Segmenter
+from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
 
 # PRF is the headline (what a tab is graded on); Fragmentation explains the
@@ -39,17 +44,15 @@ DEFAULT_METRICS: tuple[NoteMetric, ...] = (PRF(), Fragmentation())
 class NoteReport(Report):
     """Note-level result: each metric's output, plus per-item PRF for breakdown."""
 
-    baseline: str
-    segmenter: str
+    transcriber: str
     dataset: str
     n_items: int
     overall: list[MetricResult]
-    # How the audio was prepared before the baseline heard it. Defaulted so
-    # existing callers keep working, but always recorded: a result is not
-    # interpretable without knowing whether it came from a clean stem or a
-    # separated one.
+    # How the audio was prepared before the encoder heard it. Defaulted so existing
+    # callers keep working, but always recorded: a result is not interpretable
+    # without knowing whether it came from a clean stem or a separated one.
     transform: str = "identity"
-    # (name, PRF scalars) per item -- for ranking the tracks the segmenter fails
+    # (name, PRF scalars) per item -- for ranking the tracks the transcriber fails
     # outright, which a pooled F1 hides.
     per_item: list[tuple[str, dict[str, float]]] = field(default_factory=list)
 
@@ -62,8 +65,7 @@ class NoteReport(Report):
 
     def to_dict(self) -> dict:
         return {
-            "baseline": self.baseline,
-            "segmenter": self.segmenter,
+            "transcriber": self.transcriber,
             "dataset": self.dataset,
             "transform": self.transform,
             "level": "note",
@@ -84,13 +86,15 @@ class NoteReport(Report):
     def render(self, worst: int = 10) -> str:
         via = "" if self.transform == "identity" else f", audio via {self.transform}"
         lines = [
-            f"\n=== {self.baseline} + {self.segmenter} on {self.dataset} "
-            f"(note-level, {self.n_items:,} items{via}) ===",
+            (
+                f"\n=== {self.transcriber} on {self.dataset} "
+                f"(note-level, {self.n_items:,} items{via}) ==="
+            ),
         ]
         for result in self.overall:
             lines += [f"\n{result.name}", result.render()]
 
-        # A pooled F1 hides a handful of tracks the segmenter fails outright,
+        # A pooled F1 hides a handful of tracks the transcriber fails outright,
         # which is a different problem from being uniformly mediocre.
         if len(self.per_item) > 1 and worst:
             ranked = sorted(self.per_item, key=lambda pair: pair[1]["f1"])[:worst]
@@ -105,42 +109,30 @@ class NoteReport(Report):
 
 
 class NoteEvaluation:
-    """Bind a dataset, a baseline and a segmenter; ``run()`` scores notes.
+    """Bind a dataset and a ``Segmenter``; ``run()`` scores its notes.
 
-    ``segmenter`` turns the baseline's contour into notes. Pass ``None`` only for
-    a baseline that emits notes *natively* (a transcription model), in which case
-    ``predict_notes`` is used directly.
+    ``transform`` preprocesses the audio before the encoder hears it (separation,
+    principally); the reference notes are ground truth and untouched by it, so only
+    the estimate side sees the transformed audio.
     """
 
     def __init__(
         self,
         dataset: Dataset,
-        baseline: PitchBaseline,
-        segmenter: Segmenter | None = None,
+        transcriber: Segmenter,
         metrics: Iterable[NoteMetric] = DEFAULT_METRICS,
         transform: AudioTransform | None = None,
         progress: bool = True,
     ) -> None:
         self.dataset = dataset
-        self.baseline = baseline
-        self.segmenter = segmenter if segmenter is not None else HeuristicSegmenter()
+        self.transcriber = transcriber
         self.metrics = list(metrics)
-        # Preprocessing before the baseline hears the audio -- separation,
-        # principally. The reference notes are ground truth and untouched by it;
-        # only the estimate side sees the transformed audio, and both the pitch
-        # contour and the onset detection read the same transformed path so they
-        # stay consistent.
         self.transform = transform if transform is not None else Identity()
-        # None means "use the baseline's native note output" -- set by passing
-        # segmenter=..., unset means compose contour + segmenter.
-        self._native = segmenter is None and not baseline.is_frame_level
         self.progress = progress
 
     def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
         path = self.transform.apply(item.audio())
-        if self._native:
-            return self.baseline.predict_notes(path)
-        return self.segmenter.segment(self.baseline.predict_f0(path), path)
+        return self.transcriber.segment(Sources(bass=path))
 
     def run(self) -> NoteReport:
         items = list(self.dataset)
@@ -175,8 +167,7 @@ class NoteEvaluation:
         ]
 
         return NoteReport(
-            baseline=self.baseline.name,
-            segmenter="native" if self._native else self.segmenter.name,
+            transcriber=self.transcriber.name,
             dataset=self.dataset.name,
             transform=self.transform.name,
             n_items=len(names),

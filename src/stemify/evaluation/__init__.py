@@ -20,8 +20,8 @@ pieces stay in their modules:
 
     report.py      Report -- the shared render/to_dict/write_json surface
     alignment.py   resampling onto the reference grid, and FrameSet pooling
-    metrics/       Metric.calculate(true, pred) -> MetricResult   (frame-level)
-    ../segmentation.py  Segmenter -- contour -> notes, for the note harness
+    ../metrics/    Metric.calculate(true, pred) -> MetricResult
+    ../segmenter.py  Segmenter -- Sources -> notes, the object the note harness scores
     cli.py         argument parsing
 
 Nothing here imports from the package root, so these re-exports cannot cycle.

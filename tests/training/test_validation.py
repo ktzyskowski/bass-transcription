@@ -9,8 +9,9 @@ import torch
 from torch import nn
 
 from stemify.contour import Contour
+from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.encoders.neural import NeuralEncoder
 from stemify.notes import NoteEvent
-from stemify.segmentation.learned import LearnedSegmenter
 from stemify.training.cache import cached_f0
 from stemify.training.validation import (
     ValExample,
@@ -22,9 +23,15 @@ N_BINS = 8
 
 
 def _segment(model):
-    """The segment step the validator scores: wrap a (fake) model in a real
-    LearnedSegmenter and hand back its cache-fed segment_features."""
-    return LearnedSegmenter(model, device="cpu").segment_features
+    """The segment step the validator scores: the NeuralEncoder + HeuristicDecoder
+    pair deployment composes, fed cached (contour, features) -- the same path."""
+    encoder = NeuralEncoder(model, device="cpu")
+    decoder = HeuristicDecoder()
+
+    def segment(contour, features):
+        return decoder.decode(encoder.encode_features(contour, features))
+
+    return segment
 
 
 class _CountingBaseline:
@@ -139,7 +146,7 @@ class _FakeVoicingModel(nn.Module):
 def test_score_voicing_returns_auroc_against_the_label():
     ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
     ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
-    prob_fn = LearnedSegmenter(_FakeVoicingModel(), device="cpu").voicing_probs
+    prob_fn = NeuralEncoder(_FakeVoicingModel(), device="cpu").voicing_probs
     scores = score_voicing(prob_fn, [ex])
     assert scores["voicing_auroc"] == 1.0  # perfectly separates voiced from rest
 
@@ -147,5 +154,5 @@ def test_score_voicing_returns_auroc_against_the_label():
 def test_score_voicing_empty_for_onset_only_model():
     ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
     ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
-    prob_fn = LearnedSegmenter(_FakeOnsetModel([0]), device="cpu").voicing_probs
+    prob_fn = NeuralEncoder(_FakeOnsetModel([0]), device="cpu").voicing_probs
     assert score_voicing(prob_fn, [ex]) == {}  # no voicing head -> nothing to score

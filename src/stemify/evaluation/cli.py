@@ -26,7 +26,11 @@ from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
+from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.semicrf import SemiCRFDecoder
+from stemify.encoders.dsp import DSPEncoder
 from stemify.evaluation import FrameEvaluation, NoteEvaluation
+from stemify.segmenter import Segmenter
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 BASELINES: dict[str, type[PitchBaseline]] = {
@@ -34,6 +38,50 @@ BASELINES: dict[str, type[PitchBaseline]] = {
     "pesto": PestoBaseline,
     "basic-pitch": BasicPitchBaseline,
 }
+
+# Decoders available to the note harness. The heuristic is the DSP floor; semicrf is
+# the learned global decoder (untrained potentials unless a checkpoint carries them).
+DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
+
+
+def load_tagger(checkpoint: Path):
+    """Rebuild a ``FrameTagger`` from a saved checkpoint (state_dict + head list)."""
+    import torch
+
+    from stemify.encoders.heads import onset_head, voicing_head
+    from stemify.encoders.networks import TCN
+    from stemify.encoders.tagger import FrameTagger
+
+    ckpt = torch.load(checkpoint, map_location="cpu")
+    backbone = TCN()
+    builders = {"onset": onset_head, "voicing": voicing_head}
+    heads = {h: builders[h](backbone.hidden) for h in ckpt["heads"]}
+    model = FrameTagger(backbone, heads)
+    model.load_state_dict(ckpt["state_dict"])
+    return model
+
+
+def build_note_transcriber(args: argparse.Namespace) -> Segmenter:
+    """Compose the ``Segmenter`` the note harness scores: a DSP or learned encoder
+    (pyin contour + onset cues, or a trained ``FrameTagger``) paired with a decoder.
+
+    ``--baseline pyin`` is the DSP floor; ``--baseline learned --checkpoint X`` runs a
+    trained model. The frame-only baselines (pesto, basic-pitch) are not note-native
+    -- they produce a contour, not notes -- so they are rejected here.
+    """
+    if args.baseline == "pyin":
+        encoder = DSPEncoder()
+    elif args.baseline == "learned":
+        if not args.checkpoint:
+            raise SystemExit("--baseline learned needs --checkpoint <model.pt>")
+        from stemify.encoders.neural import NeuralEncoder
+
+        encoder = NeuralEncoder(load_tagger(args.checkpoint), device="cpu")
+    else:
+        raise SystemExit(
+            f"note-level eval needs --baseline pyin or learned, not {args.baseline!r}"
+        )
+    return Segmenter(encoder, DECODERS[args.decoder]())
 
 # Each entry is (default root, factory). Adding a dataset is one line here plus
 # the Dataset subclass itself -- the runner, metrics and report are untouched,
@@ -65,7 +113,19 @@ def build_dataset(args: argparse.Namespace) -> Dataset:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--baseline", choices=BASELINES, required=True)
+    ap.add_argument(
+        "--baseline", choices=[*BASELINES, "learned"], required=True,
+        help="frame: pyin/pesto/basic-pitch. note: pyin (DSP floor) or learned "
+        "(a trained FrameTagger, with --checkpoint).",
+    )
+    ap.add_argument(
+        "--decoder", choices=DECODERS, default="heuristic",
+        help="note only: how cues become notes -- heuristic (greedy) or semicrf.",
+    )
+    ap.add_argument(
+        "--checkpoint", type=Path,
+        help="note --baseline learned: the trained model .pt to load.",
+    )
     ap.add_argument("--dataset", choices=DATASETS, default="mdb")
     ap.add_argument("--root", help="dataset root (defaults per dataset)")
     ap.add_argument(
@@ -127,13 +187,15 @@ def main() -> None:
     )
     try:
         dataset = build_dataset(args)
-        baseline = BASELINES[args.baseline]()
         if args.level == "note":
-            report = NoteEvaluation(dataset, baseline).run()
+            transcriber = build_note_transcriber(args)
+            report = NoteEvaluation(dataset, transcriber, transform=transform).run()
         else:
+            if args.baseline not in BASELINES:
+                raise SystemExit(f"frame-level eval needs a pitch baseline, not {args.baseline!r}")
             report = FrameEvaluation(
                 dataset=dataset,
-                baseline=baseline,
+                baseline=BASELINES[args.baseline](),
                 transform=transform,
                 group_by=args.group_by,
                 workers=args.workers,
