@@ -22,6 +22,7 @@ from stemify.training.callbacks import (
 )
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import collate
+from stemify.training.losses import FrameBCELoss
 from stemify.training.trainer import Trainer
 
 
@@ -45,8 +46,9 @@ def _loader(n=4, window=16):
 
 def _trainer(max_epochs=3):
     model = FrameTagger(TCN(), {"onset": onset_head()})
-    return Trainer(model, TrainConfig(heads=("onset",), device="cpu",
-                                      max_epochs=max_epochs, patience=99))
+    return Trainer(model, FrameBCELoss(("onset",)),
+                   TrainConfig(heads=("onset",), device="cpu",
+                               max_epochs=max_epochs, patience=99))
 
 
 class _Recorder(Callback):

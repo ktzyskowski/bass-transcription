@@ -16,7 +16,8 @@ from stemify.encoders.tagger import FrameTagger
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import collate
-from stemify.training.trainer import Trainer, build_losses
+from stemify.training.losses import FrameBCELoss
+from stemify.training.trainer import Trainer
 
 
 class _FixedMapping(Dataset):
@@ -42,7 +43,7 @@ def test_fit_reduces_loss():
         heads=("onset",), device="cpu", max_epochs=20,
         learning_rate=1e-2, patience=99,
     )
-    history = Trainer(model, config).fit(loader)
+    history = Trainer(model, FrameBCELoss(("onset",)), config).fit(loader)
     assert history.train_loss[-1] < history.train_loss[0]
 
 
@@ -50,7 +51,7 @@ def test_best_checkpoint_is_restored():
     loader = DataLoader(_FixedMapping(4, window=16), batch_size=4, collate_fn=collate)
     model = FrameTagger(TCN(), {"onset": onset_head()})
     config = TrainConfig(heads=("onset",), device="cpu", max_epochs=5, patience=99)
-    history = Trainer(model, config).fit(loader)
+    history = Trainer(model, FrameBCELoss(("onset",)), config).fit(loader)
     assert 0 <= history.best_epoch < len(history.val_loss)
     # best_epoch tracks the minimum up to the 1e-5 improvement threshold the
     # early-stopper uses, so it is at (or within that threshold of) the minimum.
@@ -59,7 +60,7 @@ def test_best_checkpoint_is_restored():
 
 def test_pitch_head_loss_is_refused():
     with pytest.raises(NotImplementedError):
-        build_losses(["pitch"], pos_weight={}, device=torch.device("cpu"))
+        FrameBCELoss(["pitch"])
 
 
 def test_on_batch_fires_per_train_batch_with_monotonic_steps():
@@ -81,7 +82,7 @@ def test_on_batch_fires_per_train_batch_with_monotonic_steps():
         def on_train_end(self, best_epoch):
             ...
 
-    Trainer(model, config).fit(train, val, callbacks=[_BatchRecorder()])
+    Trainer(model, FrameBCELoss(("onset",)), config).fit(train, val, callbacks=[_BatchRecorder()])
     steps = [s for s, _ in calls]
     assert steps == [1, 2, 3, 4]                     # 2 batches x 2 epochs, val excluded
     # per-head dict incl. the total; onset is the one trained head here

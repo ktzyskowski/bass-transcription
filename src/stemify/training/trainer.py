@@ -1,54 +1,31 @@
-"""The training loop -- head-agnostic, driven by a loss per head.
+"""The training loop -- generic over the objective (a ``Loss``) and the batch shape.
 
-The model returns a dict of per-frame logits, one entry per head; the trainer
-sums a per-head loss over whichever heads are present, so training one head
-(onset first) or several (joint) is the same code. Onset and voicing are binary
-per-frame, so their loss is BCE-with-logits, class-weighted because onsets are a
-few percent of frames. Pitch is deferred: its target encoding (plain classes vs
-the two-hot cents target) is still open, so ``build_losses`` refuses it rather
-than guess.
+The loop owns only what every paradigm shares: one optimiser (spanning the model
+*and* any parameters the objective adds), the epoch iteration, backward/step,
+early-stopping on the monitored ``"total"`` metric, callbacks and best-checkpoint
+restore. What varies -- how a batch becomes a scalar loss, and what a batch even is
+-- lives in the injected ``Loss`` and the loader's dataset/collate. So the same
+``Trainer`` drives per-frame BCE over windows and the structured semi-CRF NLL over
+padded sequences, without a branch.
 
-Early stopping is on validation loss, the cheap proxy. The number that actually
+Early stopping is on the monitored loss, the cheap proxy. The number that actually
 matters is note-level F1 from the eval harness, but running that every epoch is
-expensive; the intended use is a periodic harness eval on the side, with val loss
-picking the checkpoint between.
+expensive; the intended use is a periodic harness eval on the side (a callback),
+with the monitored loss picking the checkpoint between.
 """
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from itertools import chain
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from stemify.encoders.tagger import FrameTagger
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
 from stemify.training.device import best_device
-
-BINARY_HEADS = ("onset", "voicing")
-
-
-def build_losses(
-    heads: Iterable[str],
-    pos_weight: dict[str, float | None],
-    device: torch.device,
-) -> dict[str, nn.Module]:
-    """A loss module per head. Binary heads get weighted BCE; pitch is refused
-    until its encoding is decided."""
-    losses: dict[str, nn.Module] = {}
-    for h in heads:
-        if h in BINARY_HEADS:
-            pw = pos_weight.get(h)
-            weight = None if pw is None else torch.tensor(pw, device=device)
-            losses[h] = nn.BCEWithLogitsLoss(pos_weight=weight)
-        else:
-            raise NotImplementedError(
-                f"No loss for head '{h}'. Binary heads {BINARY_HEADS} use weighted "
-                "BCE; pitch needs its target encoding (classes vs two-hot cents) "
-                "settled first."
-            )
-    return losses
+from stemify.training.losses import Loss
 
 
 @dataclass
@@ -59,29 +36,20 @@ class History:
 
 
 class Trainer:
-    """Fit a ``FrameTagger`` with one optimiser and a per-head loss sum."""
+    """Fit a model under a ``Loss`` with one optimiser over both their parameters."""
 
-    def __init__(self, model: FrameTagger, config: TrainConfig) -> None:
+    def __init__(self, model: nn.Module, loss: Loss, config: TrainConfig) -> None:
         self.config = config
         self.device = torch.device(config.device or best_device())
         self.model = model.to(self.device)
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-        self.losses = build_losses(config.heads, config.pos_weight, self.device)
+        self.loss = loss.to(self.device)
+        # One optimiser spans the model and any parameters the objective adds (a
+        # structured decoder trains jointly with the encoder); for a plain frame
+        # loss, loss.parameters() is empty and this is just the model's.
+        self.optimizer = torch.optim.Adam(
+            chain(model.parameters(), loss.parameters()), lr=config.learning_rate
+        )
         self._global_step = 0  # monotonic over train batches, for step-indexed logging
-
-    def _batch_loss(
-        self, x: torch.Tensor, y: dict[str, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
-        """Per-head loss tensors. The caller sums them for backward and syncs each
-        for logging, so onset and voicing are tracked separately, not only summed."""
-        logits = self.model(x.to(self.device))
-        per_head: dict[str, torch.Tensor] = {}
-        for head, loss_fn in self.losses.items():
-            pred = logits[head]
-            if pred.shape[-1] == 1:  # binary head: (B, T, 1) -> (B, T)
-                pred = pred.squeeze(-1)
-            per_head[head] = loss_fn(pred, y[head].to(self.device))
-        return per_head
 
     def _run_epoch(
         self,
@@ -89,32 +57,28 @@ class Trainer:
         train: bool,
         on_batch: Callable[[int, dict[str, float]], None] | None = None,
     ) -> dict[str, float]:
-        """Average loss over the epoch as ``{"total": ..., <head>: ...}`` -- per-head
-        so the caller (and MLflow) can see which head is still learning."""
+        """Average the objective's metrics over the epoch. Keys are the objective's
+        own (per-head for BCE, ``"nll"`` for the CRF), always including ``"total"`` --
+        so the caller and MLflow see the breakdown without knowing the paradigm."""
         self.model.train(train)
         totals: dict[str, float] = {}
         n = 0
         with torch.set_grad_enabled(train):
-            for x, y in loader:
-                per_head = self._batch_loss(x, y)
-                loss = sum(per_head.values())  # tensor sum, for backward
+            for batch in loader:
+                loss_t, metrics = self.loss.compute(self.model, batch, self.device)
                 if train:
                     self.optimizer.zero_grad()
-                    loss.backward()
+                    loss_t.backward()
                     self.optimizer.step()
-                # One .item() per head is the only device sync (total is their sum,
-                # needing no extra one); was a single sync for onset alone.
-                batch = {h: v.detach().item() for h, v in per_head.items()}
-                batch["total"] = sum(batch.values())
-                bs = x.shape[0]
-                for h, v in batch.items():
-                    totals[h] = totals.get(h, 0.0) + v * bs
+                bs = self.loss.batch_size(batch)
+                for k, v in metrics.items():
+                    totals[k] = totals.get(k, 0.0) + v * bs
                 n += bs
                 # Only train batches carry a step; val batches are averaged, not logged.
                 if train and on_batch is not None:
                     self._global_step += 1
-                    on_batch(self._global_step, batch)
-        return {h: v / max(n, 1) for h, v in totals.items()}
+                    on_batch(self._global_step, metrics)
+        return {k: v / max(n, 1) for k, v in totals.items()}
 
     def fit(
         self,

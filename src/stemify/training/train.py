@@ -42,6 +42,7 @@ from stemify.training.callbacks import (
 from stemify.training.config import TrainConfig
 from stemify.training.dataset import FrameWindowDataset, collate
 from stemify.training.examples import prepare_examples
+from stemify.training.losses import FrameBCELoss
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
@@ -185,7 +186,7 @@ def train(
     train_loader = DataLoader(_windows(train_paths, config), shuffle=True, **loader_kw)
     val_loader = DataLoader(_windows(val_paths, config), **loader_kw)
 
-    trainer = Trainer(build_model(), config)
+    trainer = Trainer(build_model(), FrameBCELoss(HEADS, config.pos_weight), config)
 
     callbacks: list = [ConsoleCallback()]
     mlflow = None
