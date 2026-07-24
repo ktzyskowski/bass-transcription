@@ -16,6 +16,11 @@ pass -- there is no windowing here, because the DP needs the entire sequence at 
 reuse ``FrameWindowDataset`` and gets its own whole-track path.
 """
 
+import random
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from itertools import chain
+
 import numpy as np
 import torch
 
@@ -56,3 +61,88 @@ def crf_loss(
     )
     cues = TensorCues.from_logits(contour, onset_logit, frame_times, voicing_logit)
     return decoder.nll(cues, notes)
+
+
+@dataclass
+class CrfExample:
+    """One whole track's inputs for CRF training: the CQT, its grid, the pyin
+    contour and the reference notes. The audio-derived pieces (CQT, contour) are
+    computed and cached once by the builder; this bundle is what a fit step consumes.
+    """
+
+    features: np.ndarray            # (n_bins, T) CQT
+    frame_times: np.ndarray         # (T,)
+    contour: Contour                # pyin pitch track
+    notes: list[NoteEvent]          # reference notes -> gold segmentation
+
+
+class SemiCRFTrainer:
+    """Fit a ``FrameTagger`` + ``SemiCRFDecoder`` jointly on the segmental NLL.
+
+    A separate loop from the frame-head ``Trainer``: that one serves fixed windows
+    and sums per-frame BCE; this one iterates *whole tracks* and minimises the
+    decoder's structured NLL, one optimiser over both the encoder's and the CRF's
+    parameters. A minibatch loss is the mean per-track NLL, summed sequentially (the
+    padded batched DP is a GPU-throughput optimisation, deferred). MLflow, validation
+    note-F1 and checkpointing are the caller's to wire via ``on_epoch`` -- kept out so
+    the loop stays unit-testable with fake tracks."""
+
+    def __init__(
+        self,
+        model: FrameTagger,
+        decoder: SemiCRFDecoder,
+        learning_rate: float = 0.01,
+        device: torch.device | None = None,
+    ) -> None:
+        self.device = device or torch.device("cpu")
+        self.model = model.to(self.device)
+        self.decoder = decoder.to(self.device)
+        self.optimizer = torch.optim.Adam(
+            chain(self.model.parameters(), self.decoder.parameters()), lr=learning_rate
+        )
+
+    def loss_on(self, example: CrfExample) -> torch.Tensor:
+        return crf_loss(
+            self.model, self.decoder, example.features, example.frame_times,
+            example.contour, example.notes, device=self.device,
+        )
+
+    def step(self, batch: Sequence[CrfExample]) -> float:
+        """One optimiser step on a minibatch; returns the mean NLL."""
+        self.optimizer.zero_grad()
+        loss = torch.stack([self.loss_on(e) for e in batch]).mean()
+        loss.backward()
+        self.optimizer.step()
+        return float(loss.item())
+
+    def fit(
+        self,
+        examples: Sequence[CrfExample],
+        epochs: int = 10,
+        batch_size: int = 8,
+        shuffle: bool = True,
+        on_epoch: Callable[[int, float], None] | None = None,
+        seed: int = 0,
+    ) -> list[float]:
+        """Train for ``epochs`` over ``examples``; return the per-epoch mean NLL.
+
+        ``on_epoch(epoch, mean_nll)`` is the hook for validation / logging /
+        checkpointing -- called after each epoch with the model in its current state.
+        """
+        rng = random.Random(seed)
+        order = list(range(len(examples)))
+        history: list[float] = []
+        for epoch in range(epochs):
+            if shuffle:
+                rng.shuffle(order)
+            self.model.train()
+            total, n = 0.0, 0
+            for start in range(0, len(order), batch_size):
+                batch = [examples[i] for i in order[start:start + batch_size]]
+                total += self.step(batch) * len(batch)
+                n += len(batch)
+            mean = total / max(n, 1)
+            history.append(mean)
+            if on_epoch is not None:
+                on_epoch(epoch, mean)
+        return history

@@ -12,7 +12,7 @@ from torch import nn
 from stemify.contour import Contour
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.notes import NoteEvent
-from stemify.training.semicrf import crf_loss
+from stemify.training.semicrf import CrfExample, SemiCRFTrainer, crf_loss
 
 DT = 0.0116
 T = 240
@@ -93,3 +93,33 @@ def test_crf_loss_without_voicing_head():
 
     loss = crf_loss(_OnsetOnly(), SemiCRFDecoder(), features, TIMES, contour, notes)
     assert torch.isfinite(loss) and loss.requires_grad
+
+
+def _example(spans, pitches_hz):
+    onset, voicing, contour, notes, features = _track(spans, pitches_hz)
+    return CrfExample(features, TIMES, contour, notes), onset, voicing
+
+
+def test_trainer_fit_drives_nll_down_and_fires_on_epoch():
+    ex_a, onset, voicing = _example([(0.2, 0.9), (1.2, 1.9)], [110, 146])
+    ex_b, _, _ = _example([(0.3, 0.8), (1.4, 2.0)], [98, 130])
+    model = _ScaledHeads(onset, voicing)  # a real trainable param behind the heads
+    trainer = SemiCRFTrainer(model, SemiCRFDecoder(), learning_rate=0.1)
+
+    seen: list[int] = []
+    history = trainer.fit(
+        [ex_a, ex_b], epochs=6, batch_size=2, on_epoch=lambda e, _: seen.append(e)
+    )
+    assert seen == [0, 1, 2, 3, 4, 5]
+    assert len(history) == 6
+    assert history[-1] < history[0]  # the loop actually learns
+
+
+def test_trainer_step_returns_mean_and_updates_params():
+    ex, onset, voicing = _example([(0.2, 0.9), (1.2, 1.9)], [110, 146])
+    model = _ScaledHeads(onset, voicing)
+    trainer = SemiCRFTrainer(model, SemiCRFDecoder(), learning_rate=0.1)
+    before = model.gain.item()
+    loss = trainer.step([ex])
+    assert isinstance(loss, float)
+    assert model.gain.item() != before  # a step moved the encoder parameter
