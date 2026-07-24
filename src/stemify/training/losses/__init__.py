@@ -18,5 +18,6 @@ PyTorch extension points.
 
 from stemify.training.losses.base import Loss
 from stemify.training.losses.frame import FrameBCELoss
+from stemify.training.losses.segmental import SemiCRFLoss
 
-__all__ = ["FrameBCELoss", "Loss"]
+__all__ = ["FrameBCELoss", "Loss", "SemiCRFLoss"]
