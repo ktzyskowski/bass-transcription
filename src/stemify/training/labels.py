@@ -13,7 +13,7 @@ invent half-voiced frames or smear an onset across two.
 
 import numpy as np
 
-from stemify.decoders.frames import _nearest_frame, resample_mask
+from stemify.grids import _nearest_frame, resample_mask
 
 
 def onset_targets(

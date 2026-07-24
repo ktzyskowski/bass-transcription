@@ -19,7 +19,7 @@ import numpy as np
 
 from stemify.contour import Contour
 from stemify.data.base import Dataset
-from stemify.features import Features, extract_features
+from stemify.features import FrameFeatures, extract_features
 from stemify.metrics import PRF, Fragmentation
 from stemify.metrics.frame import VoicingAUROC
 from stemify.notes import NoteEvent
@@ -32,17 +32,17 @@ from stemify.transforms import AudioTransform, Identity
 # A segmentation step: cached features + their contour -> notes. The validator
 # depends on this shape, not on any concrete encoder/decoder -- the caller wraps a
 # checkpoint's NeuralEncoder + a Decoder and passes their composed step.
-SegmentFn = Callable[[Contour, Features], list[NoteEvent]]
+SegmentFn = Callable[[Contour, FrameFeatures], list[NoteEvent]]
 # The raw voicing step: cached features -> per-frame P(voiced), or None with no
 # voicing head. Its threshold-free counterpart to SegmentFn, for the AUROC path.
-VoicingProbFn = Callable[[Features], "np.ndarray | None"]
+VoicingProbFn = Callable[[FrameFeatures], "np.ndarray | None"]
 
 
 @dataclass
 class ValExample:
     """One val track, everything fixed across checkpoints precomputed.
 
-    Features are held either in memory (``features``, e.g. tests or the no-cache
+    FrameFeatures are held either in memory (``features``, e.g. tests or the no-cache
     path) or lazily on disk (``feature_path``, the cached path). Holding all val
     features in memory for a full-scale val set is ~21 GB across three conditions,
     so when they are cached to disk we keep only the path and load the tensor
@@ -56,14 +56,14 @@ class ValExample:
     feature_path: Path | None = None        # else load from disk on demand
     voicing_target: np.ndarray | None = None  # (T,) gt voiced mask, for voicing AUROC
 
-    def load_features(self) -> Features:
+    def load_features(self) -> FrameFeatures:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
         read is transient -- freed after each score -- so memory stays flat over the
         run. ``feature_path`` is the TrackExample npz; the CQT is its .npy sidecar."""
         values = self.features
         if values is None:
             values = np.load(features_npy(self.feature_path))
-        return Features(values, self.frame_times)
+        return FrameFeatures(values, self.frame_times)
 
 
 def score_examples(

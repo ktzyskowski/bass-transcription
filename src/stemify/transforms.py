@@ -31,26 +31,9 @@ from pathlib import Path
 import numpy as np
 
 from stemify.atomic import atomic_write
+from stemify.device import best_device
 
 DEFAULT_CACHE = Path("data/cache/transforms")
-
-
-def _best_device() -> str:
-    """The fastest accelerator torch can reach here.
-
-    Deliberately not delegated to the library: Demucs defaults to ``"cpu"`` and
-    never probes for an accelerator, so anything relying on its default runs on
-    CPU without saying so.
-    """
-    try:
-        import torch
-    except ImportError:  # pragma: no cover - torch is a hard dependency
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
 
 
 class AudioTransform(ABC):
@@ -148,7 +131,7 @@ class DemucsSeparator(AudioTransform):
         # accelerator -- so leaving this unset silently gives up a large
         # speedup. On an M-series Mac, MPS measured 14x realtime against CPU's
         # 4.4x on a 171 s track.
-        self.device = device or _best_device()
+        self.device = device or best_device()
         self._separator = None
 
     @property

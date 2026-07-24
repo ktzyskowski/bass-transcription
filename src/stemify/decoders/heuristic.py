@@ -22,7 +22,7 @@ from scipy.signal import find_peaks
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.base import Decoder
-from stemify.decoders.frames import resample_mask
+from stemify.grids import resample_mask
 from stemify.notes import NoteEvent
 
 # Below this, a "note" is a tracker blip (onset transient, a frame of octave

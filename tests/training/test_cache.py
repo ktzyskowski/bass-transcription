@@ -59,7 +59,7 @@ def test_cache_features_computes_once_then_skips(tmp_path, monkeypatch):
     def fake_extract(path):
         calls["n"] += 1
         t = np.arange(10) * 0.0116
-        return features_mod.Features(np.random.rand(4, 10).astype(np.float32), t)
+        return features_mod.FrameFeatures(np.random.rand(4, 10).astype(np.float32), t)
 
     monkeypatch.setattr(cache_mod, "extract_features", fake_extract)
     wav = tmp_path / "trk.wav"

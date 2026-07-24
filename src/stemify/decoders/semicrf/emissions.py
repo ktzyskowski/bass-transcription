@@ -22,7 +22,7 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.decoders.frames import resample_mask
+from stemify.grids import resample_mask
 from stemify.decoders.heuristic import PITCH_SPLIT_SEMITONES
 
 

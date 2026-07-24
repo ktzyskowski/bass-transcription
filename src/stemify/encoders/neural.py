@@ -17,7 +17,7 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.encoders.base import Encoder
 from stemify.encoders.tagger import FrameTagger
-from stemify.features import Features, extract_features
+from stemify.features import FrameFeatures, extract_features
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 from stemify.training.device import best_device
@@ -56,7 +56,7 @@ class NeuralEncoder(Encoder):
         contour = self.pitch.estimate(sources.bass)
         return self.encode_features(contour, feats)
 
-    def encode_features(self, contour: Contour, features: Features) -> Cues:
+    def encode_features(self, contour: Contour, features: FrameFeatures) -> Cues:
         """``Cues`` from a precomputed CQT and contour -- the cache-friendly path the
         async validator uses (no CQT/pyin recompute, both already cached per track).
         ``encode`` is this over a freshly computed CQT and pyin contour."""
@@ -68,7 +68,7 @@ class NeuralEncoder(Encoder):
             voicing=voicing,
         )
 
-    def voicing_probs(self, features: Features) -> np.ndarray | None:
+    def voicing_probs(self, features: FrameFeatures) -> np.ndarray | None:
         """Raw per-frame P(voiced) over a track, or ``None`` with no voicing head --
         the un-thresholded signal the threshold-free voicing AUROC metric needs,
         distinct from the thresholded mask the decoder places rests with."""

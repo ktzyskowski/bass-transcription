@@ -9,12 +9,11 @@ The CQT is log-frequency spaced, so a pitch change is a fixed shift along the
 frequency axis regardless of register -- which is what lets a convolutional
 model share weights across pitches.
 
-**Status:** ``load_audio`` is used by the pyin baseline. ``cqt`` and
-``midi_to_bin`` have no callers yet -- they are the front-end for the CNN that
-does not exist. They are kept rather than deleted because the constants encode
-decisions that would otherwise have to be re-derived (why 3 bins per semitone,
-why 6 octaves starting a semitone below the open low E), and that reasoning is
-the expensive part, not the code.
+The constants encode decisions that would otherwise have to be re-derived (why 3
+bins per semitone, why 6 octaves starting a semitone below the open low E): the
+reasoning is the expensive part, not the code. ``midi_to_bin`` has no caller yet
+(it is for a future pitch head that regresses onto the CQT grid), kept for the
+same reason.
 """
 
 from dataclasses import dataclass
@@ -78,7 +77,7 @@ def frame_times_for(features: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
 
 
 @dataclass(frozen=True)
-class Features:
+class FrameFeatures:
     """CQT features and the frame-time grid they live on.
 
     Kept together because a slice of features is meaningless without the times its
@@ -91,11 +90,11 @@ class Features:
     frame_times: np.ndarray   # (T,)
 
 
-def extract_features(path: str | Path, sr: int = SAMPLE_RATE) -> Features:
+def extract_features(path: str | Path, sr: int = SAMPLE_RATE) -> FrameFeatures:
     """Audio file -> CQT features with the frame grid they sit on.
 
     The audio->model-input step every caller shares (training prep, the segmenter,
     validation), in one place so the CQT is never recomputed with drifting params.
     Takes a path (not audio) because callers pass a transform-resolved file."""
     values = cqt(load_audio(path, sr=sr), sr=sr)
-    return Features(values, frame_times_for(values, sr=sr))
+    return FrameFeatures(values, frame_times_for(values, sr=sr))

@@ -12,7 +12,7 @@ from torch import nn
 from stemify.contour import Contour
 from stemify.decoders.heuristic import HeuristicDecoder, onset_times_from_probs
 from stemify.encoders.neural import NeuralEncoder
-from stemify.features import SAMPLE_RATE, Features
+from stemify.features import SAMPLE_RATE, FrameFeatures
 from stemify.sources import Sources
 
 
@@ -42,10 +42,10 @@ class _FakeOnsetVoicingModel(nn.Module):
         return {"onset": onset, "voicing": voicing}
 
 
-def _held(n: int) -> tuple[Contour, Features]:
+def _held(n: int) -> tuple[Contour, FrameFeatures]:
     frame_times = np.arange(n) * 0.0116
     contour = Contour(frame_times, np.full(n, 110.0))  # voiced everywhere per pyin
-    features = Features(np.random.rand(8, n).astype(np.float32), frame_times)
+    features = FrameFeatures(np.random.rand(8, n).astype(np.float32), frame_times)
     return contour, features
 
 
