@@ -12,10 +12,10 @@ import hashlib
 import logging
 from pathlib import Path
 
-from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.features import extract_features
+from stemify.pitch import PitchEstimator
 from stemify.serde import TrackExample, load_contour, save_contour
 from stemify.transforms import AudioTransform, Identity
 
@@ -68,24 +68,24 @@ def cache_features(
 
 
 def cached_f0(
-    baseline: PyinBaseline, audio_path: str | Path, cache_dir: Path | None
+    estimator: PitchEstimator, audio_path: str | Path, cache_dir: Path | None
 ) -> Contour:
-    """pyin contour for an audio file, memoised to disk.
+    """A ``PitchEstimator``'s contour for an audio file, memoised to disk.
 
-    The contour is a pure function of the (already transform-resolved) audio and
-    pyin's fixed params, so it is computed once per file and reused across every
+    The contour is a pure function of the (already transform-resolved) audio and the
+    estimator's fixed params, so it is computed once per file and reused across every
     checkpoint *and every future run* -- the same disk-cache rationale as the CQT
-    features, and the reason a large val set becomes affordable. Keyed on the
-    resolved audio path, so each condition's file (clean stem, mix, separated bass)
-    caches independently and never collides. ``cache_dir=None`` disables caching.
+    features, and the reason a large val set becomes affordable. Keyed on the estimator
+    name + the resolved audio path, so each condition's file (clean stem, mix, separated
+    bass) caches independently and never collides. ``cache_dir=None`` disables caching.
     """
     if cache_dir is None:
-        return baseline.predict_f0(audio_path)
+        return estimator.estimate(audio_path)
     audio_path = Path(audio_path)
-    key = hashlib.sha1(f"{baseline.name}\0{audio_path.resolve()}".encode()).hexdigest()
+    key = hashlib.sha1(f"{estimator.name}\0{audio_path.resolve()}".encode()).hexdigest()
     dst = cache_dir / f"{audio_path.stem}-{key[:16]}.npz"
     if dst.exists():
         return load_contour(dst)
-    contour = baseline.predict_f0(audio_path)
+    contour = estimator.estimate(audio_path)
     save_contour(contour, dst)  # atomic_write mkdirs the parent
     return contour

@@ -13,9 +13,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.baselines.pyin import PyinBaseline
 from stemify.cues import Cues
 from stemify.encoders.base import Encoder
+from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 
 # Peak-picking threshold for onset detection: an onset must rise this far above
@@ -55,18 +55,18 @@ class DSPEncoder(Encoder):
 
     def __init__(
         self,
-        baseline: PyinBaseline | None = None,
+        pitch: PitchEstimator | None = None,
         onset_delta: float | None = ONSET_DELTA,
         use_onsets: bool = True,
     ) -> None:
-        self.baseline = baseline or PyinBaseline()
+        self.pitch = pitch or PyinPitch()
         self.onset_delta = onset_delta
         # Onsets are the only cue for a same-pitch re-articulation; off, those notes
         # merge -- useful when measuring how much onset detection contributes.
         self.use_onsets = use_onsets
 
     def encode(self, sources: Sources) -> Cues:
-        contour = self.baseline.predict_f0(sources.bass)
+        contour = self.pitch.estimate(sources.bass)
         onset = np.zeros(contour.times.shape, dtype=np.float32)
         if self.use_onsets and contour.times.size:
             times = detect_onsets(sources.bass, delta=self.onset_delta)

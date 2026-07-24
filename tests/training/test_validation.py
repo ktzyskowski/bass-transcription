@@ -35,14 +35,14 @@ def _segment(model):
 
 
 class _CountingBaseline:
-    """Stands in for PyinBaseline: returns a fixed contour, counts computations."""
+    """Stands in for a PitchEstimator: returns a fixed contour, counts calls."""
 
     name = "pyin"
 
     def __init__(self):
         self.calls = 0
 
-    def predict_f0(self, path):
+    def estimate(self, path):
         self.calls += 1
         times = np.linspace(0, 1, 5)
         return Contour(times=times, freqs=np.full(5, 110.0),

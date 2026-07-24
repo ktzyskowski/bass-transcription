@@ -3,9 +3,9 @@
 Runs a ``FrameTagger`` over a track's CQT to produce per-frame onset (and voicing,
 when the model has that head) probabilities, pairs them with the pyin pitch contour,
 and returns a ``Cues``. The model is fully convolutional over time, so the whole
-track goes through in one pass -- no windowing at inference. Pitch is still pyin
-until a learned pitch head replaces it (at which point the contour comes from a head
-and this class stops calling the baseline -- the interface does not change).
+track goes through in one pass -- no windowing at inference. Pitch comes from an
+injected ``PitchEstimator`` (``PyinPitch`` by default); a learned pitch head is just
+another ``PitchEstimator`` that drops in here with no change to this class.
 
 The torch-bearing encoder, imported explicitly so the light DSP path never pulls it.
 """
@@ -13,12 +13,12 @@ The torch-bearing encoder, imported explicitly so the light DSP path never pulls
 import numpy as np
 import torch
 
-from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.encoders.base import Encoder
 from stemify.encoders.tagger import FrameTagger
 from stemify.features import Features, extract_features
+from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 from stemify.training.device import best_device
 
@@ -32,11 +32,11 @@ class NeuralEncoder(Encoder):
         self,
         model: FrameTagger,
         device: str | None = None,
-        baseline: PyinBaseline | None = None,
+        pitch: PitchEstimator | None = None,
     ) -> None:
         self.device = torch.device(device or best_device())
         self.model = model.to(self.device).eval()
-        self.baseline = baseline or PyinBaseline()
+        self.pitch = pitch or PyinPitch()
 
     @torch.no_grad()
     def _forward(self, features: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
@@ -53,7 +53,7 @@ class NeuralEncoder(Encoder):
 
     def encode(self, sources: Sources) -> Cues:
         feats = extract_features(sources.bass)
-        contour = self.baseline.predict_f0(sources.bass)
+        contour = self.pitch.estimate(sources.bass)
         return self.encode_features(contour, feats)
 
     def encode_features(self, contour: Contour, features: Features) -> Cues:

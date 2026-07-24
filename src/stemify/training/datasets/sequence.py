@@ -22,10 +22,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
+from stemify.pitch import PyinPitch
 from stemify.serde import TrackExample
 from stemify.training.cache import cache_features, cached_f0, example_path
 from stemify.transforms import AudioTransform, Identity
@@ -95,13 +95,13 @@ class SequenceDataset(Dataset):
         contour_cache: Path | None = None,
     ) -> None:
         transform = transform or Identity()
-        baseline = PyinBaseline()
+        estimator = PyinPitch()
         cache_features(dataset, cache_dir, transform)
         self._items: list[tuple[Path, Contour, list[NoteEvent]]] = []
         for item in dataset:
             fpath = example_path(cache_dir, item.name, transform.name)
             audio = transform.apply(item.audio())
-            contour = cached_f0(baseline, audio, contour_cache)
+            contour = cached_f0(estimator, audio, contour_cache)
             self._items.append((fpath, contour, item.reference_notes()))
 
     def __len__(self) -> int:

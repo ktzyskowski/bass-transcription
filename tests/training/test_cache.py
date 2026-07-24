@@ -80,14 +80,14 @@ def test_cache_features_computes_once_then_skips(tmp_path, monkeypatch):
 # cached_f0: the pyin contour computed once per resolved audio path           #
 # --------------------------------------------------------------------------- #
 class _CountingBaseline:
-    """Stands in for PyinBaseline: returns a fixed contour, counts computations."""
+    """Stands in for a PitchEstimator: returns a fixed contour, counts calls."""
 
     name = "pyin"
 
     def __init__(self):
         self.calls = 0
 
-    def predict_f0(self, path):
+    def estimate(self, path):
         self.calls += 1
         times = np.linspace(0, 1, 5)
         return Contour(times=times, freqs=np.full(5, 110.0),

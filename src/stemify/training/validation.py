@@ -17,13 +17,13 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset
 from stemify.features import Features, extract_features
 from stemify.metrics import PRF, Fragmentation
 from stemify.metrics.frame import VoicingAUROC
 from stemify.notes import NoteEvent
+from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
 from stemify.training.cache import cached_f0, example_path
 from stemify.training.examples import prepare_examples
@@ -133,7 +133,7 @@ class OnsetValidator:
         feature_cache: Path | None = None,
     ) -> None:
         transform = transform or Identity()
-        baseline = PyinBaseline()
+        estimator = PyinPitch()
 
         # The CQT is the same the training pipeline already caches. With
         # ``feature_cache`` set, populate it once (``prepare_examples``, disk-cached
@@ -168,7 +168,7 @@ class OnsetValidator:
             self.examples.append(
                 ValExample(
                     frame_times=frame_times,
-                    contour=cached_f0(baseline, path, contour_cache),
+                    contour=cached_f0(estimator, path, contour_cache),
                     notes=item.reference_notes(),
                     features=features,
                     feature_path=fpath,
