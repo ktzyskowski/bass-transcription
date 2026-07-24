@@ -141,6 +141,41 @@ def test_decode_recovers_two_notes_after_fitting():
     assert abs(pitches[0] - 45) < 1.5 and abs(pitches[1] - 50) < 1.5
 
 
+def test_batched_nll_equals_single_track_padded():
+    # The batched scan over a padded minibatch must equal the per-track scan, track
+    # for track -- padding (different lengths) must not leak into a track's log Z.
+    dec = SemiCRFDecoder()
+    a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
+    # a shorter track, so the batch pads
+    short = Cues(
+        contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
+        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
+    )
+    ns = _notes([(0.2, 0.9)], [45])
+
+    batched = dec.nll_batch([a, short], [na, ns])
+    single = torch.stack([dec.nll(a, na), dec.nll(short, ns)])
+    assert torch.allclose(batched, single, atol=1e-4)
+
+
+def test_batched_nll_grad_survives_padding():
+    # The padded-batch build scatters graph tensors into a zeros buffer; check grad
+    # still reaches an encoder stand-in through the batched scan.
+    dec = SemiCRFDecoder()
+    a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    bias = torch.zeros(1, requires_grad=True)
+    onset_logit = torch.logit(torch.from_numpy(a.onset).clamp(1e-6, 1 - 1e-6)) + bias
+    voicing_logit = torch.logit(torch.from_numpy(a.voicing).clamp(1e-6, 1 - 1e-6))
+    tcues = TensorCues.from_logits(a.contour, onset_logit, a.frame_times, voicing_logit)
+
+    short = _two_note_cues([(0.3, 0.8)], [98.0])
+    dec.nll_batch(
+        [tcues, short], [_notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), _notes([(0.3, 0.8)], [43])]
+    ).mean().backward()
+    assert bias.grad is not None and bias.grad.abs().item() > 0
+
+
 def test_decode_empty_contour_is_no_notes():
     empty = Cues(
         contour=Contour.empty(),

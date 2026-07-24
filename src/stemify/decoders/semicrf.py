@@ -98,7 +98,7 @@ class TensorCues:
         onset_logit: torch.Tensor,
         frame_times: np.ndarray,
         voicing_logit: torch.Tensor | None = None,
-    ) -> "TensorCues":
+    ) -> TensorCues:
         """Wrap a model's raw head logits, squashing to the probabilities ``Cues``
         carries so the two intermediaries hold the same quantity in the same range."""
         voicing = None if voicing_logit is None else torch.sigmoid(voicing_logit)
@@ -126,6 +126,42 @@ class _Emissions:
     @property
     def T(self) -> int:
         return int(self.onset_logit.shape[0])
+
+
+@dataclass
+class _BatchEmissions:
+    """A minibatch of ``_Emissions`` padded to a common length for the batched scan.
+
+    The forward algorithm is a scan (``alpha[j]`` depends on ``alpha[i<j]``) --
+    sequential over time like an RNN, but fully parallel across tracks. Padding to a
+    common ``Tmax`` turns a per-track Python loop into one ``j``-loop over
+    ``(B, ...)`` tensors. ``onset`` pads with 0 and the cumsums pad *flat* (the last
+    value repeated), so no voiced/onset mass accrues past a track's true end; the
+    scan is read out at each track's own ``lengths[b]``, so the padding never
+    contributes to a real partition."""
+
+    onset_logit: torch.Tensor  # (B, Tmax)
+    Vc: torch.Tensor           # (B, Tmax+1)
+    Uc: torch.Tensor           # (B, Tmax+1)
+    Jc: torch.Tensor           # (B, Tmax+1)
+    lengths: list[int]
+
+
+def _pad_emissions(emissions: list[_Emissions]) -> _BatchEmissions:
+    """Pad single-track ``_Emissions`` into a ``_BatchEmissions`` (grad-preserving)."""
+    lengths = [e.T for e in emissions]
+    B, Tmax = len(emissions), max(lengths)
+    onset = emissions[0].onset_logit.new_zeros(B, Tmax)
+    Vc = onset.new_zeros(B, Tmax + 1)
+    Uc = onset.new_zeros(B, Tmax + 1)
+    Jc = onset.new_zeros(B, Tmax + 1)
+    for b, e in enumerate(emissions):
+        t = e.T
+        onset[b, :t] = e.onset_logit
+        Vc[b, : t + 1], Vc[b, t + 1 :] = e.Vc, e.Vc[-1]  # flat past the end
+        Uc[b, : t + 1], Uc[b, t + 1 :] = e.Uc, e.Uc[-1]
+        Jc[b, : t + 1], Jc[b, t + 1 :] = e.Jc, e.Jc[-1]
+    return _BatchEmissions(onset, Vc, Uc, Jc, lengths)
 
 
 def _pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
@@ -159,7 +195,7 @@ def _pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
 
 
 def _voiced_logcumsum(
-    voicing: "np.ndarray | torch.Tensor | None",
+    voicing: np.ndarray | torch.Tensor | None,
     contour: Contour,
     frame_times: np.ndarray,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -183,7 +219,7 @@ def _voiced_logcumsum(
     return Vc, Uc
 
 
-def _emissions(cues: "Cues | TensorCues", stride: int) -> _Emissions:
+def _emissions(cues: Cues | TensorCues, stride: int) -> _Emissions:
     """Build the strided ``_Emissions`` the DP scans from ``Cues`` or ``TensorCues``.
 
     The two intermediaries share every field name and hold probabilities in the same
@@ -364,7 +400,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
             prev = label
         return score
 
-    def nll(self, cues: "Cues | TensorCues", notes: list[NoteEvent]) -> torch.Tensor:
+    def nll(self, cues: Cues | TensorCues, notes: list[NoteEvent]) -> torch.Tensor:
         """Negative log-likelihood of the gold segmentation (from ``notes``) under
         the model, given ``cues``: ``log Z - score(gold)``. The differentiable
         training objective -- with a ``TensorCues`` (the training intermediary),
@@ -374,6 +410,60 @@ class SemiCRFDecoder(Decoder, nn.Module):
         dmax, dur_bucket = self._grid(e.frame_times)
         gold = _gold_segments(e.frame_times, notes, dmax)
         return self._log_partition(e, dmax, dur_bucket) - self._gold_score(e, gold, dur_bucket)
+
+    # ---- batched forward (log Z over a padded minibatch) ------------------ #
+    def _batched_log_partition(
+        self, batch: _BatchEmissions, dmax: int, dur_bucket: torch.Tensor
+    ) -> torch.Tensor:
+        """``log Z`` for every track in a padded minibatch: the same recurrence as
+        ``_log_partition`` run over ``(B, ...)`` tensors in one ``j``-loop, read out
+        at each track's true length. Equal to the per-track scan track-for-track;
+        this is only the throughput form (one kernel per step, not per track)."""
+        onset, Vc, Uc, Jc = batch.onset_logit, batch.Vc, batch.Uc, batch.Jc
+        B, Tmax = onset.shape
+        trans_to = self._trans_to()                      # (3, 2)
+        neg_col = onset.new_full((B, 1), _NEG)
+
+        a0 = onset.new_full((B, 3), _NEG)
+        a0[:, START] = 0.0
+        alpha = [a0]                                     # position 0: must be START
+        for j in range(1, Tmax + 1):
+            lo = max(0, j - dmax)
+            idx = torch.arange(lo, j)
+            d = j - idx                                  # (W,)
+            vsum = Vc[:, j : j + 1] - Vc[:, idx]         # (B, W)
+            usum = Uc[:, j : j + 1] - Uc[:, idx]
+            jmp = Jc[:, j : j + 1] - Jc[:, idx + 1]      # interior pitch changes
+            dur_term = self.dur[dur_bucket[d]]           # (W,)
+            note = (self.w_on * onset[:, idx] + self.w_v * vsum + self.w_pitch * jmp
+                    + self.b_note + dur_term.unsqueeze(0))
+            rest = self.w_u * usum + self.b_rest
+            seg = torch.stack([note, rest], dim=-1)      # (B, W, 2=next)
+            prev = torch.stack(alpha[lo:j], dim=1)       # (B, W, 3=prev)
+            term = prev.unsqueeze(-1) + trans_to.view(1, 1, 3, 2) + seg.unsqueeze(2)
+            val = torch.logsumexp(term.reshape(B, -1, 2), dim=1)  # (B, 2)
+            alpha.append(torch.cat([val, neg_col], dim=1))        # (B, 3)
+        final = torch.stack([alpha[batch.lengths[b]][b] for b in range(B)])  # (B, 3)
+        return torch.logsumexp(final[:, :2], dim=1)      # (B,)
+
+    def nll_batch(
+        self,
+        cues_list: list[Cues | TensorCues],
+        notes_list: list[list[NoteEvent]],
+    ) -> torch.Tensor:
+        """Per-track NLL ``(B,)`` for a minibatch: one batched ``log Z`` scan over the
+        padded emissions, minus each track's gold score (gold is cheap and per-track,
+        as in the prototype). The loop's ``SemiCRFLoss`` means these; grad reaches the
+        encoder through each ``TensorCues``. All tracks share one feature hop, so
+        ``dmax``/``dur_bucket`` are computed once."""
+        emissions = [_emissions(c, self.stride) for c in cues_list]
+        dmax, dur_bucket = self._grid(emissions[0].frame_times)
+        logZ = self._batched_log_partition(_pad_emissions(emissions), dmax, dur_bucket)
+        gold = torch.stack([
+            self._gold_score(e, _gold_segments(e.frame_times, n, dmax), dur_bucket)
+            for e, n in zip(emissions, notes_list)
+        ])
+        return logZ - gold
 
     # ---- segmental Viterbi decode ----------------------------------------- #
     @torch.no_grad()
