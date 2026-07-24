@@ -4,10 +4,10 @@
 one pair and scores once (see ``stemify.evaluation.frame``).
 """
 
-from stemify.evaluation.metrics.frame.base import FrameMetric
-from stemify.evaluation.metrics.frame.confusion import ConfusionResult, PitchConfusion
-from stemify.evaluation.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
-from stemify.evaluation.metrics.frame.voicing import VoicingAUROC
+from stemify.metrics.frame.base import FrameMetric
+from stemify.metrics.frame.confusion import ConfusionResult, PitchConfusion
+from stemify.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
+from stemify.metrics.frame.voicing import VoicingAUROC
 
 __all__ = [
     "FrameMetric",

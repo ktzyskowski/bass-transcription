@@ -17,8 +17,8 @@ maximises frame-F1 and that F1, so the gap between the optimal cut and the defau
 import numpy as np
 from sklearn.metrics import precision_recall_curve, roc_auc_score, roc_curve
 
-from stemify.evaluation.metrics.base import MetricResult
-from stemify.evaluation.metrics.frame.base import FrameMetric
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.base import FrameMetric
 
 
 class VoicingAUROC(FrameMetric):

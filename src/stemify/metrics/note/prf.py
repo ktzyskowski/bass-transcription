@@ -6,8 +6,8 @@ are summed across tracks, then the rates are derived once from the totals --
 per-track F1 cannot be averaged.
 """
 
-from stemify.evaluation.metrics.base import MetricResult
-from stemify.evaluation.metrics.note.base import NoteMetric, count_matches
+from stemify.metrics.base import MetricResult
+from stemify.metrics.note.base import NoteMetric, count_matches
 from stemify.notes import NoteEvent
 
 

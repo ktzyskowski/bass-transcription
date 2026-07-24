@@ -8,19 +8,19 @@ Two families, each in its own subpackage, split by input shape (see ``base``):
   - ``note`` -- ``NoteMetric`` over lists of per-track note lists. ``PRF``,
     ``Fragmentation``. Matching (``matched_pairs``) is shared within the subpackage.
 
-Everything is re-exported here, so callers import from ``stemify.evaluation.metrics``
+Everything is re-exported here, so callers import from ``stemify.metrics``
 regardless of which subpackage a metric lives in.
 """
 
-from stemify.evaluation.metrics.base import MetricResult
-from stemify.evaluation.metrics.frame import (
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame import (
     ConfusionResult,
     FrameMetric,
     PitchAccuracy,
     PitchAccuracyResult,
     PitchConfusion,
 )
-from stemify.evaluation.metrics.note import (
+from stemify.metrics.note import (
     PRF,
     Fragmentation,
     FragmentationResult,
