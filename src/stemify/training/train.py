@@ -40,7 +40,7 @@ from stemify.training.callbacks import (
     MLflowCallback,
 )
 from stemify.training.config import TrainConfig
-from stemify.training.dataset import FrameWindowDataset, collate
+from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import prepare_examples
 from stemify.training.losses import FrameBCELoss
 from stemify.training.trainer import Trainer

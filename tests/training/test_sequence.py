@@ -14,7 +14,7 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.features import SAMPLE_RATE
 from stemify.notes import NoteEvent
-from stemify.training.sequence import (
+from stemify.training.datasets.sequence import (
     SequenceBatch,
     SequenceDataset,
     SequenceExample,

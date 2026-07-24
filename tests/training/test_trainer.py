@@ -15,7 +15,7 @@ from stemify.encoders.networks import TCN
 from stemify.encoders.tagger import FrameTagger
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
-from stemify.training.dataset import collate
+from stemify.training.datasets.frame import collate
 from stemify.training.losses import FrameBCELoss
 from stemify.training.trainer import Trainer
 

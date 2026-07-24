@@ -11,7 +11,7 @@ from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from pathlib import Path
 
-from stemify.training.dataset import FrameWindowDataset, collate
+from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import TrackExample, build_example, example_path
 
 
