@@ -16,12 +16,17 @@ regardless of which subpackage a metric lives in.
 from stemify.metrics.base import MetricResult
 from stemify.metrics.frame import (
     ConfusionResult,
+    CuesChannels,
     FrameMetric,
+    OnsetPR,
     PitchAccuracy,
     PitchAccuracyResult,
     PitchConfusion,
+    VoicingAUROC,
+    score_cues,
 )
 from stemify.metrics.note import (
+    DEFAULT_NOTE_METRICS,
     PRF,
     Fragmentation,
     FragmentationResult,
@@ -29,6 +34,8 @@ from stemify.metrics.note import (
     PRFResult,
     count_matches,
     matched_pairs,
+    per_item_prf,
+    score_notes,
 )
 
 __all__ = [
@@ -39,10 +46,17 @@ __all__ = [
     "PitchAccuracyResult",
     "PitchConfusion",
     "ConfusionResult",
+    "OnsetPR",
+    "VoicingAUROC",
+    "CuesChannels",
+    "score_cues",
     "PRF",
     "PRFResult",
     "Fragmentation",
     "FragmentationResult",
+    "DEFAULT_NOTE_METRICS",
+    "score_notes",
+    "per_item_prf",
     "matched_pairs",
     "count_matches",
 ]

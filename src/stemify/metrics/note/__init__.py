@@ -15,6 +15,11 @@ from stemify.metrics.note.fragmentation import (
     FragmentationResult,
 )
 from stemify.metrics.note.prf import PRF, PRFResult
+from stemify.metrics.note.scoring import (
+    DEFAULT_NOTE_METRICS,
+    per_item_prf,
+    score_notes,
+)
 
 __all__ = [
     "NoteMetric",
@@ -24,4 +29,7 @@ __all__ = [
     "PRFResult",
     "Fragmentation",
     "FragmentationResult",
+    "DEFAULT_NOTE_METRICS",
+    "score_notes",
+    "per_item_prf",
 ]

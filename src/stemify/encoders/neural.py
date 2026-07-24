@@ -67,10 +67,3 @@ class NeuralEncoder(Encoder):
             frame_times=features.frame_times,
             voicing=voicing,
         )
-
-    def voicing_probs(self, features: FrameFeatures) -> np.ndarray | None:
-        """Raw per-frame P(voiced) over a track, or ``None`` with no voicing head --
-        the un-thresholded signal the threshold-free voicing AUROC metric needs,
-        distinct from the thresholded mask the decoder places rests with."""
-        _, voicing = self._forward(features.values)
-        return voicing

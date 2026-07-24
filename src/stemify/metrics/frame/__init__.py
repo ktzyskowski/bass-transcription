@@ -8,6 +8,7 @@ from stemify.metrics.frame.base import FrameMetric
 from stemify.metrics.frame.confusion import ConfusionResult, PitchConfusion
 from stemify.metrics.frame.onset import OnsetPR
 from stemify.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
+from stemify.metrics.frame.scoring import CuesChannels, score_cues
 from stemify.metrics.frame.voicing import VoicingAUROC
 
 __all__ = [
@@ -18,4 +19,6 @@ __all__ = [
     "ConfusionResult",
     "VoicingAUROC",
     "OnsetPR",
+    "CuesChannels",
+    "score_cues",
 ]

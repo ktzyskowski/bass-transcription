@@ -73,13 +73,6 @@ def test_encode_features_without_voicing_falls_back_to_contour():
     assert len(HeuristicDecoder(merge_gap_s=None).decode(cues)) == 1
 
 
-def test_voicing_probs_are_dense_or_none():
-    _, features = _held(20)
-    probs = NeuralEncoder(_FakeOnsetVoicingModel(), device="cpu").voicing_probs(features)
-    assert probs.shape == (20,)
-    assert NeuralEncoder(_FakeOnsetModel([]), device="cpu").voicing_probs(features) is None
-
-
 def test_encode_from_audio_peaks_the_onset_curve(tmp_path):
     wav = tmp_path / "tone.wav"
     dur_s = 1.0

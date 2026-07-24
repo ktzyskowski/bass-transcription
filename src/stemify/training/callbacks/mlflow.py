@@ -67,9 +67,14 @@ class MLflowCallback(Callback):
         if self._batch_log_every and step % self._batch_log_every == 0:
             self.sink({f"loss/{h}/step": v for h, v in smoothed.items()}, step)
 
-    def log_artifact(self, path: os.PathLike[str] | str) -> None:
-        """Attach a file (e.g. the saved model checkpoint) to this run."""
-        self._client.log_artifact(self._run_id, str(path))
+    def log_artifact(
+        self, path: os.PathLike[str] | str, artifact_path: str | None = None
+    ) -> None:
+        """Attach a file (the saved checkpoint, a per-epoch validation report) to this
+        run, optionally under an ``artifact_path`` subdir so a family of files (one per
+        epoch) groups together. Thread-safe (``MlflowClient``), so the async validator
+        worker can call it directly."""
+        self._client.log_artifact(self._run_id, str(path), artifact_path=artifact_path)
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
         # Slash-namespaced so MLflow groups them: loss/<head>/{train,val} sit under a

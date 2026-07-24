@@ -22,8 +22,8 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.grids import resample_mask
 from stemify.decoders.heuristic import PITCH_SPLIT_SEMITONES
+from stemify.grids import resample_mask
 
 
 @dataclass(frozen=True)

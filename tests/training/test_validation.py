@@ -15,8 +15,8 @@ from stemify.notes import NoteEvent
 from stemify.training.cache import cached_f0
 from stemify.training.validation import (
     ValExample,
+    score_cues_examples,
     score_examples,
-    score_voicing,
 )
 
 N_BINS = 8
@@ -143,16 +143,23 @@ class _FakeVoicingModel(nn.Module):
         return {"onset": onset, "voicing": voicing}
 
 
-def test_score_voicing_returns_auroc_against_the_label():
-    ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
-    ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
-    prob_fn = NeuralEncoder(_FakeVoicingModel(), device="cpu").voicing_probs
-    scores = score_voicing(prob_fn, [ex])
-    assert scores["voicing_auroc"] == 1.0  # perfectly separates voiced from rest
+def _encode(model):
+    """The encode step the validator scores cues through: a checkpoint's
+    NeuralEncoder over cached (contour, features)."""
+    return NeuralEncoder(model, device="cpu").encode_features
 
 
-def test_score_voicing_empty_for_onset_only_model():
+def test_score_cues_returns_voicing_auroc_against_the_label():
     ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
     ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
-    prob_fn = NeuralEncoder(_FakeOnsetModel([0]), device="cpu").voicing_probs
-    assert score_voicing(prob_fn, [ex]) == {}  # no voicing head -> nothing to score
+    results = {r.name: r.scalars for r in score_cues_examples(_encode(_FakeVoicingModel()), [ex])}
+    assert results["voicing_auroc"]["voicing_auroc"] == 1.0  # separates voiced from rest
+    assert "onset_pr" in results  # onset is always scored
+
+
+def test_score_cues_no_voicing_channel_for_onset_only_model():
+    ex, _ = _example(40, hop=0.0116, held_pitch=45, onset_frames=[0])
+    ex.voicing_target = np.concatenate([np.ones(20), np.zeros(20)]).astype(np.float32)
+    names = {r.name for r in score_cues_examples(_encode(_FakeOnsetModel([0])), [ex])}
+    assert "voicing_auroc" not in names  # no voicing head -> channel dropped
+    assert "onset_pr" in names

@@ -14,14 +14,18 @@ stem,mix,demucs), not just clean stems: cheap BCE val loss on the stem set drive
 early stopping inline, while ``AsyncValidationCallback`` scores each checkpoint
 through the real ``NeuralEncoder`` + ``HeuristicDecoder`` pair -- one
 ``OnsetValidator`` per condition, each caching its pyin contours so a score is a
-model forward, not a pyin re-run -- and logs
-``note_f1_<condition>`` to MLflow. The gap between ``note_f1_stem`` and
-``note_f1_demucs`` is the verdict on how well the learned onsets survive separation
-(the DSP stem floor is ~80% on val / 73% on test).
+model forward, not a pyin re-run. From that one forward it logs both altitudes to
+MLflow -- ``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap,
+voicing_auroc}`` (encoder) -- and attaches a per-epoch ``validation/`` JSON artifact
+with the full breakdown. The gap between ``note/stem/f1`` and ``note/demucs/f1`` is
+the verdict on how well the learned onsets survive separation (the DSP stem floor is
+~80% on val / 73% on test).
 """
 
 import argparse
+import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -105,19 +109,29 @@ def build_validators(
     return validators
 
 
-def _eval_fn(validators: dict[str, OnsetValidator]):
+def _eval_fn(
+    validators: dict[str, OnsetValidator],
+    report_dir: Path | None = None,
+    log_artifact: Callable[[Path, int], None] | None = None,
+):
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
-    score it through each cached validator (off the training device). Metric names
-    are suffixed with the condition tag (``note_f1_stem``, ``note_f1_demucs``, ...)
-    so MLflow charts one series per condition and the robustness gap is visible."""
+    score it through each cached validator (off the training device). Every metric is
+    namespaced ``<level>/<condition>/<key>`` so MLflow charts one series per condition
+    and the robustness gap between stem and demucs is visible.
+
+    Each checkpoint is scored at both altitudes from the *same* model pass per track:
+    note-level (the decoder over the encoder's cues) and cues-level (the encoder's
+    onset/voicing head quality, via ``metrics.cues.score_cues`` -- the same core the
+    offline ``CuesEvaluation`` uses). If ``report_dir``/``log_artifact`` are given, the
+    full breakdown is also written as a per-epoch JSON and attached to the run, so a
+    checkpoint's scores survive as a diffable artifact, not only as metric points."""
 
     def eval_fn(state_dict, epoch):
         model = build_model()
         model.load_state_dict(state_dict)
-        # Wrap the checkpoint once (CPU, off the training device) as the encoder/
-        # decoder pair deployment composes into a Segmenter. Note scoring runs the
-        # decoder on the encoder's cued features; voicing (frame-level) scoring runs
-        # the encoder alone -- the same encoder-for-frames, decoder-for-notes split.
+        # Wrap the checkpoint once (CPU, off the training device) as the encoder/decoder
+        # pair deployment composes into a Segmenter. The decoder scores notes over the
+        # encoder's cues; the encoder alone scores its own cues -- one forward, both.
         encoder = NeuralEncoder(model, device="cpu")
         decoder = HeuristicDecoder()
 
@@ -125,12 +139,24 @@ def _eval_fn(validators: dict[str, OnsetValidator]):
             return decoder.decode(encoder.encode_features(contour, features))
 
         metrics: dict[str, float] = {}
+        report: dict = {"epoch": epoch, "conditions": {}}
         for tag, validator in validators.items():
-            for key, value in validator.score(segment).items():
+            note = validator.score(segment)
+            for key, value in note.items():
                 metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
-            # Threshold-free voicing-head quality (empty for an onset-only model).
-            for key, value in validator.score_voicing(encoder.voicing_probs).items():
-                metrics[f"voicing/{tag}/{key.removeprefix('voicing_')}"] = value
+            # Cues-level (encoder) quality: onset-curve AP and voicing-head AUROC,
+            # threshold-free. Empty voicing for an onset-only model.
+            cues = {r.name: r.scalars for r in validator.score_cues(encoder.encode_features)}
+            for scalars in cues.values():
+                for key, value in scalars.items():
+                    metrics[f"cues/{tag}/{key}"] = value
+            report["conditions"][tag] = {"note": note, "cues": cues}
+
+        if report_dir is not None and log_artifact is not None:
+            report_dir.mkdir(parents=True, exist_ok=True)
+            path = report_dir / f"validation_epoch{epoch:03d}.json"
+            path.write_text(json.dumps(report, indent=2))
+            log_artifact(path, epoch)
         return metrics
 
     return eval_fn
@@ -216,9 +242,17 @@ def train(
             contour_cache=cache_dir / "val_contours",
             feature_cache_root=cache_dir / "val",
         )
+        # Per-epoch validation reports (all conditions x note+cues) are written here
+        # and attached to the run under "validation/", so each scored checkpoint leaves
+        # a diffable JSON artifact, not only metric points.
+        eval_fn = _eval_fn(
+            validators,
+            report_dir=cache_dir / "val_reports",
+            log_artifact=lambda p, _e: mlflow.log_artifact(p, artifact_path="validation"),
+        )
         callbacks += [
             mlflow,
-            AsyncValidationCallback(_eval_fn(validators), mlflow.sink, every=val_every),
+            AsyncValidationCallback(eval_fn, mlflow.sink, every=val_every),
         ]
 
     trainer.fit(train_loader, val_loader, callbacks=callbacks)

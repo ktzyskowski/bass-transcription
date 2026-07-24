@@ -18,93 +18,51 @@ if both drop, the *encoder* did. That attribution is exactly what a pooled note-
 cannot give, and it is the principled home for frame-level pitch scoring now that the
 pitch-tracker harness is gone -- measured on the real encoder output, not a baseline.
 
-The scoring core (``score_cues``) is pure over precomputed ``ScoredCues`` -- the same
-split ``NoteEvaluation``/``score_examples`` use -- so the async validator scores the
-encoder every epoch from its cached features through this exact code, no drift.
-
-Frame metrics pool by concatenation (the ``FrameMetric`` contract), so each channel's
-frames are gathered across every track and scored once, frame-weighted by construction.
-A channel is scored only when every track supplies its truth: onset always (from the
-reference notes), voicing when the encoder has a voicing head and a per-frame voiced
-label is supplied, pitch when a reference contour is supplied (the offline path; the
-async validator omits it, since pyin pitch does not move between checkpoints).
+The pooling/scoring is ``metrics.cues.score_cues`` (a leaf the async validator shares,
+so the in-training numbers cannot drift from this harness). This module only turns a
+dataset item + the encoder's ``Cues`` into the aligned per-channel pairs it wants:
+onset target from the reference notes, voicing target from the reference contour, and
+the contour resampled onto the reference grid for pitch.
 """
 
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
-from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset, EvalItem
 from stemify.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
-from stemify.metrics import MetricResult, PitchAccuracy
-from stemify.metrics.frame import OnsetPR, VoicingAUROC
-from stemify.notes import NoteEvent
+from stemify.metrics import CuesChannels, MetricResult, score_cues
 from stemify.sources import Sources
 from stemify.training.labels import onset_targets, voicing_targets
 from stemify.transforms import AudioTransform, Identity
 
 
-@dataclass(frozen=True)
-class ScoredCues:
-    """One track's encoder output plus the reference truth to score it against.
+def channels_for(cues: Cues, item: EvalItem) -> CuesChannels:
+    """The aligned per-channel pairs for one track: what ``score_cues`` scores.
 
-    ``cues`` is the encoder's whole-track output. ``reference_notes`` gives the onset
-    channel its target (impulses on the frame grid). ``voicing_target`` is a per-frame
-    voiced label already on ``cues.frame_times`` (the offline path builds it from the
-    reference contour; the async validator passes its cached training target) -- kept
-    explicit because its truth source legitimately differs between the two callers.
-    ``reference_contour`` drives the pitch channel and is optional: absent (async),
-    pitch is simply not scored."""
-
-    cues: Cues
-    reference_notes: list[NoteEvent]
-    voicing_target: np.ndarray | None = None
-    reference_contour: Contour | None = None
-
-
-def score_cues(items: Sequence[ScoredCues]) -> list[MetricResult]:
-    """Score whichever channels every track can supply, pooled across tracks.
-
-    Pure given ``items`` -- no dataset, no encoder, no audio -- so both the offline
-    ``CuesEvaluation`` and the async validator score through it identically."""
-    results: list[MetricResult] = []
-    if not items:
-        return results
-
-    # Onset -- always available (reference notes give the onsets).
-    onset_true = np.concatenate(
-        [
-            onset_targets(
-                np.array([n.onset for n in it.reference_notes], dtype=float),
-                it.cues.frame_times,
-            )
-            for it in items
-        ]
+    Onset target is impulses on the frame grid at the reference onsets; voicing target
+    is the reference contour's voiced mask resampled onto the frame grid; pitch pairs
+    the encoder's own contour (resampled onto the reference grid, voicing-aware) with
+    the reference. Voicing is dropped when the encoder has no voicing head."""
+    reference = item.reference()
+    onset_true = onset_targets(
+        np.array([n.onset for n in item.reference_notes()], dtype=float),
+        cues.frame_times,
     )
-    onset_pred = np.concatenate([it.cues.onset for it in items])
-    results.append(OnsetPR().calculate(onset_true, onset_pred))
-
-    # Voicing -- only if the encoder has the head and every track carries a label.
-    if all(it.cues.voicing is not None and it.voicing_target is not None for it in items):
-        voi_true = np.concatenate([it.voicing_target for it in items])
-        voi_pred = np.concatenate([it.cues.voicing for it in items])
-        results.append(VoicingAUROC().calculate(voi_true, voi_pred))
-
-    # Pitch -- only when a reference contour is supplied (the offline path). The
-    # estimate is the encoder's own contour, resampled onto the reference grid.
-    if all(it.reference_contour is not None for it in items):
-        parts = [align(it.reference_contour, it.cues.contour) for it in items]
-        pitch_true = np.concatenate([t for t, _ in parts])
-        pitch_pred = np.concatenate([p for _, p in parts])
-        results.append(PitchAccuracy().calculate(pitch_true, pitch_pred))
-
-    return results
+    voicing = None
+    if cues.voicing is not None:
+        voi_true = voicing_targets(reference.times, reference.voiced, cues.frame_times)
+        voicing = (cues.voicing, voi_true)
+    ref_hz, est_hz = align(reference, cues.contour)
+    return CuesChannels(
+        onset=(cues.onset, onset_true),
+        voicing=voicing,
+        pitch=(est_hz, ref_hz),
+    )
 
 
 @dataclass(frozen=True)
@@ -172,30 +130,22 @@ class CuesEvaluation:
         self.transform = transform if transform is not None else Identity()
         self.progress = progress
 
-    def _scored(self, item: EvalItem) -> ScoredCues:
+    def _channels(self, item: EvalItem) -> CuesChannels:
         path = self.transform.apply(item.audio())
         cues = self.encoder.encode(Sources(bass=path))
-        reference = item.reference()
-        return ScoredCues(
-            cues=cues,
-            reference_notes=item.reference_notes(),
-            voicing_target=voicing_targets(
-                reference.times, reference.voiced, cues.frame_times
-            ),
-            reference_contour=reference,
-        )
+        return channels_for(cues, item)
 
     def run(self) -> CuesReport:
         items = list(self.dataset)
-        scored: list[ScoredCues] = []
+        tracks: list[CuesChannels] = []
         for i, item in enumerate(items, 1):
-            scored.append(self._scored(item))
+            tracks.append(self._channels(item))
             if self.progress:
                 print(f"  {i}/{len(items)} {item.name[:44]:<44}", end="\r", file=sys.stderr)
         if self.progress:
             print(file=sys.stderr)
 
-        if not scored:
+        if not tracks:
             raise ValueError(
                 f"No items to evaluate for {self.dataset.name}. Check the dataset "
                 "root, and whether filters (polyphony, split, limit) excluded "
@@ -206,6 +156,6 @@ class CuesEvaluation:
             encoder=self.encoder.name,
             dataset=self.dataset.name,
             transform=self.transform.name,
-            n_items=len(scored),
-            overall=score_cues(scored),
+            n_items=len(tracks),
+            overall=score_cues(tracks),
         )

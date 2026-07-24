@@ -28,16 +28,18 @@ from dataclasses import dataclass, field
 
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
-from stemify.metrics import PRF, Fragmentation, MetricResult, NoteMetric
+from stemify.metrics import (
+    DEFAULT_NOTE_METRICS,
+    PRF,
+    MetricResult,
+    NoteMetric,
+    per_item_prf,
+    score_notes,
+)
 from stemify.notes import NoteEvent
 from stemify.segmenter import Segmenter
 from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
-
-# PRF is the headline (what a tab is graded on); Fragmentation explains the
-# false positives PRF only counts. Both read the same match, so they always
-# agree on which estimates were wrong.
-DEFAULT_METRICS: tuple[NoteMetric, ...] = (PRF(), Fragmentation())
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,7 @@ class NoteEvaluation:
         self,
         dataset: Dataset,
         transcriber: Segmenter,
-        metrics: Iterable[NoteMetric] = DEFAULT_METRICS,
+        metrics: Iterable[NoteMetric] = DEFAULT_NOTE_METRICS,
         transform: AudioTransform | None = None,
         progress: bool = True,
     ) -> None:
@@ -155,16 +157,12 @@ class NoteEvaluation:
                 "everything."
             )
 
-        overall = [m.calculate(references, estimates) for m in self.metrics]
+        overall = score_notes(references, estimates, self.metrics)
 
-        # Per-item PRF for the worst-item breakdown: the same metric on a
-        # one-track dataset. Reuse a PRF from the metrics list so its tolerances
-        # match the reported numbers; fall back to a default if none is present.
-        ranker = next((m for m in self.metrics if isinstance(m, PRF)), PRF())
-        per_item = [
-            (name, ranker.calculate([ref], [est]).scalars)
-            for name, ref, est in zip(names, references, estimates)
-        ]
+        # Per-item PRF for the worst-item breakdown. Reuse a PRF from the metrics list
+        # so its tolerances match the reported numbers; a default is used if none is.
+        ranker = next((m for m in self.metrics if isinstance(m, PRF)), None)
+        per_item = per_item_prf(names, references, estimates, ranker)
 
         return NoteReport(
             transcriber=self.transcriber.name,
