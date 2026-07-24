@@ -8,14 +8,10 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.decoders.semicrf import (
-    NOTE,
-    REST,
-    SemiCRFDecoder,
-    TensorCues,
-    _emissions,
-    _gold_segments,
-)
+from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
+from stemify.decoders.semicrf.constants import NOTE, REST
+from stemify.decoders.semicrf.emissions import build_emissions
+from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
 
 DT = 0.0116  # feature hop, seconds
@@ -56,9 +52,9 @@ def _notes(spans: list[tuple[float, float]], midis: list[float]) -> list[NoteEve
 def test_gold_rest_across_audible_gap():
     # 0.9 -> 1.2 is a 0.3 s gap (> GAP_REST_S): a real rest between the two notes.
     dec = SemiCRFDecoder()
-    e = _emissions(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
-    dmax, _ = dec._grid(e.frame_times)
-    gold = _gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    e = build_emissions(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
+    dmax, _ = dec.pot.grid(e.frame_times)
+    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     labels = [lab for lab, _, _ in gold]
     assert labels.count(NOTE) == 2
     assert REST in labels  # the audible gap became a rest
@@ -68,9 +64,9 @@ def test_gold_closes_a_note_off_artifact_gap():
     # 0.5 -> 0.55 is a 0.05 s gap (< GAP_REST_S): a note-off artifact, so the notes
     # are made contiguous (note -> note) with no interior rest.
     dec = SemiCRFDecoder()
-    e = _emissions(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
-    dmax, _ = dec._grid(e.frame_times)
-    gold = _gold_segments(e.frame_times, _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
+    e = build_emissions(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
+    dmax, _ = dec.pot.grid(e.frame_times)
+    gold = gold_segments(e.frame_times, _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
     # No rest between the notes: everything from the first note to the last is NOTE.
     note_idx = [k for k, (lab, _, _) in enumerate(gold) if lab == NOTE]
     between = gold[note_idx[0] : note_idx[-1] + 1]
@@ -90,7 +86,7 @@ def test_nll_is_differentiable_and_trains_down():
         loss = dec.nll(cues, notes)
         loss.backward()
         # a learned potential receives gradient -> the encoder would too, end to end
-        assert dec.w_on.grad is not None
+        assert dec.pot.w_on.grad is not None
         opt.step()
     assert dec.nll(cues, notes).item() < first.item()
 
@@ -118,7 +114,7 @@ def test_numpy_cues_nll_does_not_reach_the_inputs():
     # only in the CRF's own potentials -- never the (already-computed) cues.
     dec = SemiCRFDecoder()
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    e = _emissions(cues, dec.stride)
+    e = build_emissions(cues, dec.stride)
     assert not e.onset_logit.requires_grad
 
 
