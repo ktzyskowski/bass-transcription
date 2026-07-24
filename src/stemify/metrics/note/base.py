@@ -19,8 +19,9 @@ The difference is only in *why the input has the shape it does*:
 
 That internal sum is the whole reason the input is nested rather than flat, and
 it is why rates (precision, F1) are derived once at the end from pooled counts,
-never averaged per track (per-track F1 is not averageable). A per-track number
--- for ranking the worst items -- is the same ``calculate`` on a one-track list.
+never averaged per track (per-track F1 is not averageable). The per-track counts the
+sum is built from are kept, not recomputed: ``PRF`` stores them in its result's
+``arrays`` so a harness can rank the worst items off the same single match.
 
 ``matched_pairs`` is defined here, once, and shared by every note metric (``prf``,
 ``fragmentation``), so P/R/F and the fragmentation breakdown can never

@@ -30,16 +30,33 @@ from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
 from stemify.metrics import (
     DEFAULT_NOTE_METRICS,
-    PRF,
     MetricResult,
     NoteMetric,
-    per_item_prf,
+    prf_rates,
     score_notes,
 )
 from stemify.notes import NoteEvent
 from stemify.segmenter import Segmenter
 from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
+
+
+def _per_item_prf(
+    overall: list[MetricResult], names: list[str]
+) -> list[tuple[str, dict[str, float]]]:
+    """``(name, PRF scalars)`` per track, projected from PRF's ``per_item_counts``.
+
+    Finds the PRF result among the scored metrics and turns each track's stored
+    ``(tp, fp, fn)`` row into P/R/F via the same ``prf_rates`` the pooled totals use --
+    so the worst-item ranking and the headline numbers come from one match. Empty when
+    no PRF was scored."""
+    counts = next(
+        (r.arrays["per_item_counts"] for r in overall if "per_item_counts" in r.arrays),
+        None,
+    )
+    if counts is None:
+        return []
+    return [(name, prf_rates(*(int(c) for c in row))) for name, row in zip(names, counts)]
 
 
 @dataclass(frozen=True)
@@ -159,10 +176,10 @@ class NoteEvaluation:
 
         overall = score_notes(references, estimates, self.metrics)
 
-        # Per-item PRF for the worst-item breakdown. Reuse a PRF from the metrics list
-        # so its tolerances match the reported numbers; a default is used if none is.
-        ranker = next((m for m in self.metrics if isinstance(m, PRF)), None)
-        per_item = per_item_prf(names, references, estimates, ranker)
+        # The worst-item breakdown reads PRF's per-track counts straight off its result
+        # -- the same single match the pooled numbers came from, no re-scoring. Empty if
+        # the metric list carries no PRF (nothing to rank tracks by).
+        per_item = _per_item_prf(overall, names)
 
         return NoteReport(
             transcriber=self.transcriber.name,

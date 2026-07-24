@@ -34,7 +34,7 @@ from stemify.metrics.note import (
     PRFResult,
     count_matches,
     matched_pairs,
-    per_item_prf,
+    prf_rates,
     score_notes,
 )
 
@@ -56,7 +56,7 @@ __all__ = [
     "FragmentationResult",
     "DEFAULT_NOTE_METRICS",
     "score_notes",
-    "per_item_prf",
+    "prf_rates",
     "matched_pairs",
     "count_matches",
 ]
