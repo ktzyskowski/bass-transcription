@@ -17,14 +17,14 @@ baseline and the segmenter -- then hands the whole nested list to each metric,
 which loops tracks internally and returns one result.
 """
 
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-import sys
 
 from stemify.baselines.base import PitchBaseline
 from stemify.data.base import Dataset, EvalItem
-from stemify.evaluation.metrics import PRF, Fragmentation, MetricResult, NoteMetric
 from stemify.evaluation.report import Report, jsonable
+from stemify.metrics import PRF, Fragmentation, MetricResult, NoteMetric
 from stemify.notes import NoteEvent
 from stemify.segmentation import HeuristicSegmenter, Segmenter
 from stemify.transforms import AudioTransform, Identity

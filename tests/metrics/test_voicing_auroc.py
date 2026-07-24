@@ -9,7 +9,7 @@ import math
 import numpy as np
 import pytest
 
-from stemify.evaluation.metrics.frame import VoicingAUROC
+from stemify.metrics.frame import VoicingAUROC
 
 
 def test_perfect_ranking_scores_one():

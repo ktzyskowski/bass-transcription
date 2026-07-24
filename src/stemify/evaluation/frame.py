@@ -32,9 +32,9 @@ from stemify.baselines.base import PitchBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.alignment import FrameSet, ItemRef, align
-from stemify.evaluation.metrics import FrameMetric, PitchAccuracy, PitchConfusion
-from stemify.evaluation.metrics.base import MetricResult
 from stemify.evaluation.report import Report, jsonable
+from stemify.metrics import FrameMetric, PitchAccuracy, PitchConfusion
+from stemify.metrics.base import MetricResult
 from stemify.parallel import parallel_map
 from stemify.transforms import AudioTransform, Identity
 
