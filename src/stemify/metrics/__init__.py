@@ -16,12 +16,12 @@ regardless of which subpackage a metric lives in.
 from stemify.metrics.base import MetricResult
 from stemify.metrics.frame import (
     ConfusionResult,
-    CuesChannels,
     FrameMetric,
     OnsetPR,
     PitchAccuracy,
     PitchAccuracyResult,
     PitchConfusion,
+    ReferenceAlignedCues,
     VoicingAUROC,
     score_cues,
 )
@@ -48,7 +48,7 @@ __all__ = [
     "ConfusionResult",
     "OnsetPR",
     "VoicingAUROC",
-    "CuesChannels",
+    "ReferenceAlignedCues",
     "score_cues",
     "PRF",
     "PRFResult",

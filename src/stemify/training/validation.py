@@ -24,7 +24,7 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset
 from stemify.features import FrameFeatures, extract_features
-from stemify.metrics import CuesChannels, MetricResult, score_cues, score_notes
+from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues, score_notes
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
@@ -116,9 +116,9 @@ def score_cues_examples(
     does not move between checkpoints, so it belongs to the offline ``CuesEvaluation``,
     not the per-epoch loop. Voicing drops out for an onset-only model. Like
     ``score_examples`` this takes a callable, not a model, so the validator stays
-    model-agnostic; the shared ``metrics.cues.score_cues`` keeps it from drifting from
+    model-agnostic; the shared ``metrics.frame.scoring.score_cues`` keeps it from drifting from
     the offline harness."""
-    tracks: list[CuesChannels] = []
+    tracks: list[ReferenceAlignedCues] = []
     for ex in examples:
         cues = encode(ex.contour, ex.load_features())
         onset_true = onset_targets(
@@ -127,7 +127,7 @@ def score_cues_examples(
         voicing = None
         if cues.voicing is not None and ex.voicing_target is not None:
             voicing = (cues.voicing, ex.voicing_target)
-        tracks.append(CuesChannels(onset=(cues.onset, onset_true), voicing=voicing))
+        tracks.append(ReferenceAlignedCues(onset=(cues.onset, onset_true), voicing=voicing))
     return score_cues(tracks)
 
 

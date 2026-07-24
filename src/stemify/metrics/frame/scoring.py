@@ -35,7 +35,7 @@ Pair = tuple[np.ndarray, np.ndarray]
 
 
 @dataclass(frozen=True)
-class CuesChannels:
+class ReferenceAlignedCues:
     """One track's aligned ``(prediction, truth)`` pairs, ready to pool and score.
 
     ``onset`` is always present. ``voicing`` is ``None`` for an encoder with no
@@ -54,7 +54,7 @@ def _pool(pairs: list[Pair]) -> Pair:
     return preds, truths
 
 
-def score_cues(tracks: Sequence[CuesChannels]) -> list[MetricResult]:
+def score_cues(tracks: Sequence[ReferenceAlignedCues]) -> list[MetricResult]:
     """Score whichever channels every track supplies, pooled across tracks.
 
     Pure given ``tracks`` -- no encoder, no dataset, no audio -- so the offline harness
