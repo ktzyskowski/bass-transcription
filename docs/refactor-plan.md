@@ -39,7 +39,7 @@ independently testable units:
 Each file gets its own focused test module. No behavior change; pure decomposition.
 Biggest risk-reduction in the list. Medium effort, low risk (tests pin behavior).
 
-### 6 / 6a — A `pitch` abstraction; stop `NeuralEncoder` hardcoding `PyinBaseline`  ✅ DO
+### 6 / 6a — A `pitch` abstraction; stop `NeuralEncoder` hardcoding `PyinBaseline`  ✅ DONE (009e777)
 Real coupling: `NeuralEncoder.__init__` defaults `baseline=PyinBaseline()` and calls
 it for the contour, and `PyinBaseline` lives in `baselines/` (the *eval* package). So a
 production model depends on an eval baseline — role confusion (your 6a).
