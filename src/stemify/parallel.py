@@ -14,7 +14,7 @@ pickle, and neither will an object holding a torch/MPS handle. Pass plain data
 """
 
 import multiprocessing
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -44,7 +44,7 @@ def parallel_map(
     """
     items = list(items)
 
-    def drain(results: object) -> list[R]:
+    def drain(results: Iterable[R]) -> list[R]:
         collected: list[R] = []
         for index, result in enumerate(results, start=1):
             if on_result is not None:
