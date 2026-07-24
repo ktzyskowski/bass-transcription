@@ -17,7 +17,9 @@ Two faces, one recurrence (the segmental scan ``alpha[j] = f(alpha[i<j])``):
     logsumexp semiring) for ``log Z``, and scores the gold segmentation built from
     the reference notes; ``log Z - gold`` is the negative log-likelihood, fully
     differentiable, so the potentials -- and, end to end, the encoder feeding them --
-    train by gradient descent. See ``docs/semi-crf.md``.
+    train by gradient descent. See ``docs/semi-crf.md``. In training the cues are a
+    ``TensorCues`` (grad-bearing tensors straight from the encoder's heads), so the
+    gradient reaches the encoder; a numpy ``Cues`` gives an inference-only score.
 
 The CRF consumes the *soft* cues directly (onset logit, per-frame log P(voiced)),
 which is how it can keep a sub-threshold onset the heuristic's peak-pick would drop.
@@ -72,8 +74,39 @@ NOTE, REST, START = 0, 1, 2
 _NEG = -1e9  # log 0, for unreachable states
 
 
+@dataclass(frozen=True)
+class TensorCues:
+    """The tensor peer of ``Cues``: the training-time intermediary.
+
+    Field-for-field a ``Cues``, but ``onset``/``voicing`` are grad-bearing tensors
+    (the encoder's forward output) rather than detached numpy, so a loss over them
+    -- ``SemiCRFDecoder.nll`` -- backprops into the encoder. ``contour`` and
+    ``frame_times`` stay numpy: they are constants (pyin's pitch, the time grid) that
+    never need gradients. ``Cues`` remains the *inference* intermediary; this is only
+    built inside a training step, from the model's logits. It lives here, not beside
+    ``Cues``, so ``cues.py`` stays torch-free and the light DSP path never pulls torch."""
+
+    contour: Contour               # pyin pitch track (numpy) -- the pitch source
+    onset: torch.Tensor            # (T,) P(onset), differentiable
+    frame_times: np.ndarray        # (T,) feature-grid times, seconds
+    voicing: torch.Tensor | None = None  # (T,) P(voiced), differentiable, or None
+
+    @classmethod
+    def from_logits(
+        cls,
+        contour: Contour,
+        onset_logit: torch.Tensor,
+        frame_times: np.ndarray,
+        voicing_logit: torch.Tensor | None = None,
+    ) -> "TensorCues":
+        """Wrap a model's raw head logits, squashing to the probabilities ``Cues``
+        carries so the two intermediaries hold the same quantity in the same range."""
+        voicing = None if voicing_logit is None else torch.sigmoid(voicing_logit)
+        return cls(contour, torch.sigmoid(onset_logit), frame_times, voicing)
+
+
 # --------------------------------------------------------------------------- #
-# emissions: Cues -> the per-frame tensors the DP scans                       #
+# emissions: Cues | TensorCues -> the per-frame tensors the DP scans          #
 # --------------------------------------------------------------------------- #
 @dataclass
 class _Emissions:
@@ -125,33 +158,45 @@ def _pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
     return jump
 
 
-def _voiced_logprobs(cues: Cues) -> tuple[np.ndarray, np.ndarray]:
-    """Per-frame ``(log P(voiced), log P(unvoiced))`` on ``cues.frame_times``.
+def _voiced_logcumsum(
+    voicing: "np.ndarray | torch.Tensor | None",
+    contour: Contour,
+    frame_times: np.ndarray,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Prefix cumsums of ``(log P(voiced), log P(unvoiced))`` on the strided grid.
 
     Prefer the voicing head; with none, fall back to pyin's own voiced mask
     (``freqs > 0``) resampled to the frame grid, as a near-hard 0/1 probability --
-    the CRF still runs on DSP-only cues, just without a learned rest signal."""
-    if cues.voicing is not None:
-        vp = np.clip(cues.voicing, 1e-6, 1 - 1e-6)
+    the CRF still runs on DSP-only cues, just without a learned rest signal.
+    ``torch.as_tensor`` keeps a numpy voicing detached (inference) but a tensor
+    voicing on the graph (training), so grad reaches the encoder's voicing head."""
+    if voicing is not None:
+        v = torch.as_tensor(voicing).float().clamp(1e-6, 1 - 1e-6)
+        vlp, ulp = torch.log(v), torch.log1p(-v)
     else:
-        mask = resample_mask(
-            cues.contour.times, cues.contour.freqs > 0, cues.frame_times
-        )
+        mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
         vp = np.clip(mask, 1e-6, 1 - 1e-6)
-    return np.log(vp), np.log(1 - vp)
+        vlp = torch.from_numpy(np.log(vp).astype(np.float32))
+        ulp = torch.from_numpy(np.log1p(-vp).astype(np.float32))
+    Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
+    Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
+    return Vc, Uc
 
 
-def _emissions(cues: Cues, stride: int) -> _Emissions:
-    """Build the strided ``_Emissions`` the DP scans from soft ``Cues``."""
-    op = np.clip(cues.onset[::stride], 1e-6, 1 - 1e-6)
-    onset_logit = torch.from_numpy(np.log(op / (1 - op)).astype(np.float32))
+def _emissions(cues: "Cues | TensorCues", stride: int) -> _Emissions:
+    """Build the strided ``_Emissions`` the DP scans from ``Cues`` or ``TensorCues``.
+
+    The two intermediaries share every field name and hold probabilities in the same
+    range, so one builder serves both: ``torch.as_tensor`` treats a numpy ``Cues``
+    field as a constant (inference/decode) and a tensor ``TensorCues`` field as a
+    graph node (training), which is the whole reason the DP is backend-agnostic."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
 
-    vlp_full, ulp_full = _voiced_logprobs(cues)
-    vlp = torch.from_numpy(np.ascontiguousarray(vlp_full[::stride]).astype(np.float32))
-    ulp = torch.from_numpy(np.ascontiguousarray(ulp_full[::stride]).astype(np.float32))
-    Vc = torch.cat([torch.zeros(1), torch.cumsum(vlp, 0)])
-    Uc = torch.cat([torch.zeros(1), torch.cumsum(ulp, 0)])
+    onset = torch.as_tensor(cues.onset).float()[::stride]
+    onset_logit = torch.logit(onset.clamp(1e-6, 1 - 1e-6))
+
+    voicing = cues.voicing[::stride] if cues.voicing is not None else None
+    Vc, Uc = _voiced_logcumsum(voicing, cues.contour, frame_times)
 
     jump = _pitch_jumps(cues.contour, frame_times)
     Jc = torch.cat([torch.zeros(1), torch.cumsum(torch.from_numpy(jump), 0)])
@@ -319,10 +364,12 @@ class SemiCRFDecoder(Decoder, nn.Module):
             prev = label
         return score
 
-    def nll(self, cues: Cues, notes: list[NoteEvent]) -> torch.Tensor:
+    def nll(self, cues: "Cues | TensorCues", notes: list[NoteEvent]) -> torch.Tensor:
         """Negative log-likelihood of the gold segmentation (from ``notes``) under
         the model, given ``cues``: ``log Z - score(gold)``. The differentiable
-        training objective -- backprop reaches the encoder that produced ``cues``."""
+        training objective -- with a ``TensorCues`` (the training intermediary),
+        backprop reaches the encoder that produced it; with a numpy ``Cues`` it is
+        differentiable only in the CRF's own potentials (an eval/inference score)."""
         e = _emissions(cues, self.stride)
         dmax, dur_bucket = self._grid(e.frame_times)
         gold = _gold_segments(e.frame_times, notes, dmax)

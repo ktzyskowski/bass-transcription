@@ -12,6 +12,7 @@ from stemify.decoders.semicrf import (
     NOTE,
     REST,
     SemiCRFDecoder,
+    TensorCues,
     _emissions,
     _gold_segments,
 )
@@ -92,6 +93,33 @@ def test_nll_is_differentiable_and_trains_down():
         assert dec.w_on.grad is not None
         opt.step()
     assert dec.nll(cues, notes).item() < first.item()
+
+
+def test_nll_grad_reaches_the_encoder_through_tensor_cues():
+    # A stand-in "encoder": a learnable bias added to the onset logits. If the CRF
+    # loss puts gradient on it through TensorCues, the same path reaches a real
+    # backbone's heads -- this is what makes end-to-end training possible.
+    dec = SemiCRFDecoder()
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
+    onset_logit = torch.logit(torch.from_numpy(cues.onset).clamp(1e-6, 1 - 1e-6))
+    voicing_logit = torch.logit(torch.from_numpy(cues.voicing).clamp(1e-6, 1 - 1e-6))
+    bias = torch.zeros(1, requires_grad=True)  # the "encoder parameter"
+
+    tcues = TensorCues.from_logits(
+        cues.contour, onset_logit + bias, cues.frame_times, voicing_logit
+    )
+    dec.nll(tcues, notes).backward()
+    assert bias.grad is not None and bias.grad.abs().item() > 0
+
+
+def test_numpy_cues_nll_does_not_reach_the_inputs():
+    # The inference path: a numpy Cues is a constant, so the loss is differentiable
+    # only in the CRF's own potentials -- never the (already-computed) cues.
+    dec = SemiCRFDecoder()
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    e = _emissions(cues, dec.stride)
+    assert not e.onset_logit.requires_grad
 
 
 def test_decode_recovers_two_notes_after_fitting():
