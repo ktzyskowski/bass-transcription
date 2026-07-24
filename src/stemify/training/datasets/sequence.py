@@ -26,8 +26,7 @@ from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
-from stemify.training.examples import TrackExample, example_path, prepare_examples
-from stemify.training.validation import cached_f0
+from stemify.training.cache import TrackExample, cache_features, cached_f0, example_path
 from stemify.transforms import AudioTransform, Identity
 
 
@@ -80,7 +79,7 @@ def collate(batch: Sequence[SequenceExample]) -> SequenceBatch:
 class SequenceDataset(Dataset):
     """Whole-track examples for a dataset, caching the CQT + pyin contour once.
 
-    Mirrors the async validator's prep (``prepare_examples`` for the CQT, ``cached_f0``
+    Mirrors the async validator's prep (``cache_features`` for the CQT, ``cached_f0``
     for the contour) minus the per-frame targets -- the structured loss reads notes,
     not frame labels. Labels always come from the clean stem's notes, whatever audio
     the features were drawn from. Items hold only the feature *path* (loaded per
@@ -96,7 +95,7 @@ class SequenceDataset(Dataset):
     ) -> None:
         transform = transform or Identity()
         baseline = PyinBaseline()
-        prepare_examples(dataset, [], cache_dir, transform)  # cache the CQT, no targets
+        cache_features(dataset, cache_dir, transform)
         self._items: list[tuple[Path, Contour, list[NoteEvent]]] = []
         for item in dataset:
             fpath = example_path(cache_dir, item.name, transform.name)

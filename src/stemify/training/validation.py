@@ -11,8 +11,6 @@ enough to leave on.
 is tested with synthetic inputs and a fake model, no audio.
 """
 
-import hashlib
-import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,11 +24,8 @@ from stemify.evaluation.metrics import PRF, Fragmentation
 from stemify.evaluation.metrics.frame import VoicingAUROC
 from stemify.features import Features, extract_features
 from stemify.notes import NoteEvent
-from stemify.training.examples import (
-    example_path,
-    features_npy,
-    prepare_examples,
-)
+from stemify.training.cache import cached_f0, example_path, features_npy
+from stemify.training.examples import prepare_examples
 from stemify.transforms import AudioTransform, Identity
 
 # A segmentation step: cached features + their contour -> notes. The validator
@@ -40,44 +35,6 @@ SegmentFn = Callable[[Contour, Features], list[NoteEvent]]
 # The raw voicing step: cached features -> per-frame P(voiced), or None with no
 # voicing head. Its threshold-free counterpart to SegmentFn, for the AUROC path.
 VoicingProbFn = Callable[[Features], "np.ndarray | None"]
-
-
-def cached_f0(
-    baseline: PyinBaseline, audio_path: str | Path, cache_dir: Path | None
-) -> Contour:
-    """pyin contour for an audio file, memoised to disk.
-
-    The contour is a pure function of the (already transform-resolved) audio and
-    pyin's fixed params, so it is computed once per file and reused across every
-    checkpoint *and every future run* -- the same disk-cache rationale as the CQT
-    features, and the reason a large val set becomes affordable. Keyed on the
-    resolved audio path, so each condition's file (clean stem, mix, separated bass)
-    caches independently and never collides. ``cache_dir=None`` disables caching.
-    """
-    if cache_dir is None:
-        return baseline.predict_f0(audio_path)
-    audio_path = Path(audio_path)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha1(f"{baseline.name}\0{audio_path.resolve()}".encode()).hexdigest()
-    dst = cache_dir / f"{audio_path.stem}-{key[:16]}.npz"
-    if dst.exists():
-        data = np.load(dst)
-        conf = data["confidence"] if "confidence" in data.files else None
-        return Contour(times=data["times"], freqs=data["freqs"], confidence=conf)
-
-    contour = baseline.predict_f0(audio_path)
-    arrays = {"times": contour.times, "freqs": contour.freqs}
-    if contour.confidence is not None:
-        arrays["confidence"] = contour.confidence
-    # Write-aside-and-rename: an interrupted pyin must not leave a truncated npz
-    # that later reads back as a cache hit (same guard as the transforms cache).
-    partial = dst.with_name(f"{dst.stem}.{os.getpid()}.partial.npz")
-    try:
-        np.savez(partial, **arrays)
-        partial.replace(dst)
-    finally:
-        partial.unlink(missing_ok=True)
-    return contour
 
 
 @dataclass

@@ -11,9 +11,9 @@ from torch import nn
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.segmentation.learned import LearnedSegmenter
+from stemify.training.cache import cached_f0
 from stemify.training.validation import (
     ValExample,
-    cached_f0,
     score_examples,
     score_voicing,
 )
