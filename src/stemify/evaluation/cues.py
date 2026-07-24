@@ -41,7 +41,7 @@ from stemify.training.labels import onset_targets, voicing_targets
 from stemify.transforms import AudioTransform, Identity
 
 
-def channels_for(cues: Cues, item: EvalItem) -> ReferenceAlignedCues:
+def reference_aligned_cues(cues: Cues, item: EvalItem) -> ReferenceAlignedCues:
     """The aligned per-channel pairs for one track: what ``score_cues`` scores.
 
     Onset target is impulses on the frame grid at the reference onsets; voicing target
@@ -133,7 +133,7 @@ class CuesEvaluation:
     def _channels(self, item: EvalItem) -> ReferenceAlignedCues:
         path = self.transform.apply(item.audio())
         cues = self.encoder.encode(Sources(bass=path))
-        return channels_for(cues, item)
+        return reference_aligned_cues(cues, item)
 
     def run(self) -> CuesReport:
         items = list(self.dataset)
