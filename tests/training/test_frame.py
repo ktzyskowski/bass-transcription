@@ -10,7 +10,8 @@ import numpy as np
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
-from stemify.training.cache import TrackExample, example_path
+from stemify.serde import TrackExample
+from stemify.training.cache import example_path
 from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import build_example
 
@@ -72,7 +73,7 @@ def test_short_track_is_padded_not_dropped(tmp_path):
 
 def test_prepare_backfills_missing_target_without_recomputing_features(tmp_path):
     from stemify.contour import Contour
-    from stemify.training.cache import features_npy
+    from stemify.serde import features_npy
     from stemify.training.examples import prepare_examples
     from stemify.transforms import Identity
 

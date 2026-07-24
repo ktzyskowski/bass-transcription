@@ -24,7 +24,8 @@ from stemify.features import Features, extract_features
 from stemify.metrics import PRF, Fragmentation
 from stemify.metrics.frame import VoicingAUROC
 from stemify.notes import NoteEvent
-from stemify.training.cache import cached_f0, example_path, features_npy
+from stemify.serde import features_npy
+from stemify.training.cache import cached_f0, example_path
 from stemify.training.examples import prepare_examples
 from stemify.transforms import AudioTransform, Identity
 

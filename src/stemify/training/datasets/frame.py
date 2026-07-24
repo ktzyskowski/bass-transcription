@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from stemify.training.examples import TrackExample
+from stemify.serde import TrackExample
 
 
 class FrameWindowDataset(Dataset):

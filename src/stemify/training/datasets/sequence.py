@@ -26,7 +26,8 @@ from stemify.baselines.pyin import PyinBaseline
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
-from stemify.training.cache import TrackExample, cache_features, cached_f0, example_path
+from stemify.serde import TrackExample
+from stemify.training.cache import cache_features, cached_f0, example_path
 from stemify.transforms import AudioTransform, Identity
 
 

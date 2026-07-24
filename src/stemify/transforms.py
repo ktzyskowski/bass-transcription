@@ -25,11 +25,12 @@ directory invalidates its cache.
 """
 
 import hashlib
-import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
+
+from stemify.atomic import atomic_write
 
 DEFAULT_CACHE = Path("data/cache/transforms")
 
@@ -89,20 +90,9 @@ class AudioTransform(ABC):
         if dest.exists():
             return dest
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        # Write aside and rename: rename is atomic within a filesystem, so an
-        # interrupted separation leaves no half-written file masquerading as a
-        # cache hit. Without this a Ctrl-C mid-track silently poisons the cache.
-        # The temp name carries this process's pid so two processes separating
-        # the same source concurrently (a pre-warm pass alongside an eval run)
-        # write to distinct temp files -- last rename wins, both are valid, and
-        # neither sees a half-written partial from the other.
-        partial = dest.with_name(f"{dest.name}.{os.getpid()}.partial")
-        try:
-            self._run(source, partial)
-            partial.replace(dest)
-        finally:
-            partial.unlink(missing_ok=True)
+        # Atomic write: an interrupted separation must never leave a half-written
+        # file masquerading as a cache hit (a Ctrl-C mid-track would poison it).
+        atomic_write(dest, lambda partial: self._run(source, partial))
         return dest
 
 
@@ -193,7 +183,7 @@ class DemucsSeparator(AudioTransform):
         import soundfile as sf
 
         separator = self._load()
-        _origin, stems = separator.separate_audio_file(str(source))
+        _origin, stems = separator.separate_audio_file(source)
         if self.stem not in stems:
             raise KeyError(
                 f"{self.model} produced stems {sorted(stems)}, not {self.stem!r}"

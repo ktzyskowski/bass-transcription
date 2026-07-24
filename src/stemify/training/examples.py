@@ -25,7 +25,8 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.data.base import EvalItem
 from stemify.notes import NoteEvent
-from stemify.training.cache import TrackExample, cache_features
+from stemify.serde import TrackExample
+from stemify.training.cache import cache_features
 from stemify.training.labels import onset_targets, pitch_targets, voicing_targets
 from stemify.transforms import AudioTransform
 
