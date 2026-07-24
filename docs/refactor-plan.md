@@ -95,7 +95,7 @@ the package-per-family pattern now established by `losses/`, `datasets/`, `encod
 `decoders/`: `callbacks/{base,console,mlflow,async_validation}.py`. Pure move, low risk,
 consistency win. Do it when touching callbacks anyway.
 
-### transforms `_best_device` vs `training/device.py`  ✅ DO (your call is right)
+### transforms `_best_device` vs `training/device.py`  ✅ DONE (7fed310)
 Genuine duplication, but the naive "import `device.best_device`" doesn't work:
 `training/device.py` imports torch at module top, while `transforms._best_device` guards
 the import (keeping the light audio path torch-free). The *transforms* version is the
@@ -105,14 +105,14 @@ more robust one.
 lazy-import guard, and have both `training/device.py` (re-export) and `transforms` call
 it. Resolves the dup without pulling torch into the light path. Tiny effort.
 
-### #4 — Explicit `frame/note/sequence/track` naming  ✅ DO (batch it)
+### #4 — Explicit `frame/note/sequence/track` naming  ✅ DONE (7fed310)
 Agreed on altitude. Clearest win: **`Features` → `FrameFeatures`** (it's CQT-per-frame).
 Audit the rest — `Cues` (frame-level, fine as a domain term), `Contour` (frame-level
 pitch, established term), `*Example`/`*Batch` already say track/sequence. Mostly a
 rename sweep; do it in one pass to avoid churn dribble. Low risk. Also update
 `features.py`'s **stale status docstring** ("the CNN that does not exist" — it exists now).
 
-### `decoders/frames.py` relocation (the real #8)  ✅ DO  — see #8 disagreement below
+### `decoders/frames.py` relocation (the real #8)  ✅ DONE (7fed310) — see #8 disagreement below
 The nearest-neighbour grid resampler (`resample_mask`, `_nearest_frame`) is the actual
 shared grid primitive, and it's oddly parked under `decoders/`. Move it to a neutral
 top-level home (`stemify/grids.py`, or fold into `metrics`/`features`) so `labels.py`
@@ -176,7 +176,7 @@ it's `frames.py` (relocate it, Tier 2). `alignment.py` stays eval-specific.
 1. **#5** metrics → `stemify/metrics/` (unblocks the rest of the eval story)
 2. **#7** split `semicrf/` (highest risk reduction; independent)
 3. **6/6a** `pitch/` module + un-hardcode `NeuralEncoder`
-4. **device.py** unify + **frames.py** relocate + **#4** `FrameFeatures` (small, batchable)
+4. **device.py** unify + **frames.py** relocate + **#4** `FrameFeatures` (small, batchable) ✅ DONE (7fed310)
 5. **#9** `callbacks/` package
 6. **#1** cache unification (design, then rerun on 5090)
 7. **eval-harness redesign** → `LearnedBaseline`, then delete `segmentation/`
