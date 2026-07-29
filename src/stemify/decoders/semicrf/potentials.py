@@ -42,14 +42,19 @@ class SemiCRFPotentials(nn.Module):
     def grid(self, frame_times: np.ndarray) -> tuple[int, torch.Tensor]:
         """``(dmax_frames, dur_bucket)`` for a frame grid: the max segment length in
         frames and the length->bucket map indexing ``self.dur``. Derived from the
-        grid's hop rather than stored, so the decoder is agnostic to the exact hop."""
+        grid's hop rather than stored, so the decoder is agnostic to the exact hop.
+
+        Computed in torch on the module's own device. The bucket map indexes
+        ``self.dur``, so it must land beside it; the previous numpy round trip both
+        stranded it on CPU and could not run at all once ``dur_edges_s`` -- a buffer,
+        and so moved by ``.to()`` -- was off CPU. ``torch.searchsorted`` with
+        ``right=False`` is ``np.searchsorted``'s default ``side='left'``, and both
+        round half-to-even, so the bucket edges are bit-for-bit the previous ones."""
         hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.01
         dmax = max(1, round(self.dmax_s / hop))
-        edges = np.round(self.dur_edges_s.numpy() / hop).astype(int)
-        dur_bucket = torch.from_numpy(
-            np.searchsorted(edges, np.arange(dmax + 1)).astype(np.int64)
-        )
-        return dmax, dur_bucket
+        edges = torch.round(self.dur_edges_s / hop).to(torch.int64)
+        lengths = torch.arange(dmax + 1, device=edges.device)
+        return dmax, torch.searchsorted(edges, lengths)
 
     def trans_to(self) -> torch.Tensor:
         """(3, 2): rows = prev in {note, rest, START}, cols = next in {note, rest}."""

@@ -66,13 +66,24 @@ class SemiCRFDecoder(Decoder, nn.Module):
         self.stride = stride
         self.pot = SemiCRFPotentials(dmax_s, dur_edges_s)
 
+    @property
+    def device(self) -> torch.device:
+        """Where the potentials live -- and so where the emissions are built.
+
+        The module is the authority on placement, not the cues: a numpy ``Cues`` has
+        no device of its own, and the DP adds its evidence straight to the parameters.
+        Sourcing it here is what lets a CUDA-resident decoder score CPU-born cues, and
+        keeps ``Emissions``' one-device invariant aligned with the parameters rather
+        than merely self-consistent."""
+        return self.pot.dur.device
+
     def nll(self, cues: Cues | TensorCues, notes: list[NoteEvent]) -> torch.Tensor:
         """Negative log-likelihood of the gold segmentation (from ``notes``) under
         the model, given ``cues``: ``log Z - score(gold)``. The differentiable
         training objective -- with a ``TensorCues`` (the training intermediary),
         backprop reaches the encoder that produced it; with a numpy ``Cues`` it is
         differentiable only in the CRF's own potentials (an eval/inference score)."""
-        e = build_emissions(cues, self.stride)
+        e = build_emissions(cues, self.stride, self.device)
         dmax, dur_bucket = self.pot.grid(e.frame_times)
         gold = gold_segments(e.frame_times, notes, dmax)
         return log_partition(self.pot, e, dmax, dur_bucket) - gold_score(
@@ -89,7 +100,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         ``SemiCRFLoss`` means these; grad reaches the encoder through each
         ``TensorCues``. All tracks share one feature hop, so ``dmax``/``dur_bucket``
         are computed once."""
-        emissions = [build_emissions(c, self.stride) for c in cues_list]
+        emissions = [build_emissions(c, self.stride, self.device) for c in cues_list]
         dmax, dur_bucket = self.pot.grid(emissions[0].frame_times)
         logZ = batched_log_partition(self.pot, pad_emissions(emissions), dmax, dur_bucket)
         gold = torch.stack([
@@ -100,7 +111,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
     def decode(self, cues: Cues) -> list[NoteEvent]:
         """The notes implied by ``cues`` under the learned potentials (Viterbi)."""
-        e = build_emissions(cues, self.stride)
+        e = build_emissions(cues, self.stride, self.device)
         if e.T == 0:
             return []
         dmax, dur_bucket = self.pot.grid(e.frame_times)

@@ -11,6 +11,13 @@ the semiring changes:
 
 Free functions over ``(potentials, emissions)`` -- they never touch a raw parameter,
 so each is testable against a hand-set ``SemiCRFPotentials``. See ``docs/semi-crf.md``.
+
+Every index tensor is built on the emissions' device (``Emissions`` guarantees there
+is exactly one). Left on the default it would be CPU, which still *works* against
+CUDA operands -- indexing silently transfers -- but pays a host-to-device copy per
+step of a scan that runs the length of the track. Callers must hand in potentials and
+emissions that agree; ``SemiCRFDecoder`` builds the emissions on the module's device
+so that holds by construction.
 """
 
 import torch
@@ -34,7 +41,7 @@ def log_partition(
     alpha = [a0]
     for j in range(1, T + 1):
         lo = max(0, j - dmax)
-        idx = torch.arange(lo, j)
+        idx = torch.arange(lo, j, device=e.device)
         note = pot.note_potentials(e, idx, j, dur_bucket)
         rest = pot.rest_potentials(e, idx, j)
         seg = torch.stack([note, rest], dim=-1)          # (W, 2=next)
@@ -62,7 +69,7 @@ def batched_log_partition(
     alpha = [a0]                                      # position 0: must be START
     for j in range(1, Tmax + 1):
         lo = max(0, j - dmax)
-        idx = torch.arange(lo, j)
+        idx = torch.arange(lo, j, device=onset.device)
         d = j - idx                                  # (W,)
         vsum = Vc[:, j : j + 1] - Vc[:, idx]         # (B, W)
         usum = Uc[:, j : j + 1] - Uc[:, idx]
@@ -91,7 +98,7 @@ def gold_score(
     score = e.onset_logit.new_zeros(())
     prev = START
     for label, i, j in gold:
-        idx = torch.tensor([i])
+        idx = torch.tensor([i], device=e.device)
         if label == NOTE:
             unary = pot.note_potentials(e, idx, j, dur_bucket)[0]
         else:
@@ -117,7 +124,7 @@ def viterbi(
     back: list[dict | None] = [None]
     for j in range(1, T + 1):
         lo = max(0, j - dmax)
-        idx = torch.arange(lo, j)
+        idx = torch.arange(lo, j, device=e.device)
         note = pot.note_potentials(e, idx, j, dur_bucket)
         rest = pot.rest_potentials(e, idx, j)
         seg = torch.stack([note, rest], dim=-1)          # (W, 2)

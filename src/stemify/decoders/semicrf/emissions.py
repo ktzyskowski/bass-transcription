@@ -26,6 +26,36 @@ from stemify.decoders.heuristic import PITCH_SPLIT_SEMITONES
 from stemify.grids import resample_mask
 
 
+def _check_one_device(what: str, **fields: torch.Tensor) -> None:
+    """Raise unless every named field shares a device. The guard behind the one-device
+    invariant: it names the offending field, which a ``RuntimeError`` raised deep in
+    the recurrence does not."""
+    by_device: dict[torch.device, list[str]] = {}
+    for name, t in fields.items():
+        by_device.setdefault(t.device, []).append(name)
+    if len(by_device) > 1:
+        detail = ", ".join(
+            f"{'/'.join(sorted(names))} on {dev}" for dev, names in by_device.items()
+        )
+        raise ValueError(f"{what} fields span multiple devices: {detail}")
+
+
+def _on(x: np.ndarray | torch.Tensor, device: torch.device) -> torch.Tensor:
+    """``x`` as a tensor on ``device``. ``as_tensor`` keeps a numpy input a constant
+    and a tensor input on the autograd graph; ``.to`` is itself differentiable, so a
+    grad-bearing cue survives the placement."""
+    return torch.as_tensor(x).to(device)
+
+
+def _cues_device(cues: Cues | TensorCues) -> torch.device:
+    """Where a cues bundle's evidence already lives: the encoder's device for a
+    ``TensorCues``, CPU for a numpy ``Cues``. Only a fallback -- callers that own a
+    module (``SemiCRFDecoder``) pass its device explicitly instead."""
+    if isinstance(cues.onset, torch.Tensor):
+        return cues.onset.device
+    return torch.device("cpu")
+
+
 @dataclass(frozen=True)
 class TensorCues:
     """The tensor peer of ``Cues``: the training-time intermediary.
@@ -63,7 +93,18 @@ class Emissions:
 
     Voicing and the pitch-change cue enter as prefix cumsums so a segment's mass is
     an O(1) difference ``C[j] - C[i]`` rather than a re-sum per candidate span --
-    what keeps the scan linear in the segment cap."""
+    what keeps the scan linear in the segment cap.
+
+    **Device invariant: all four tensor fields live on one device.** This is the type
+    that needs it, because it is where the two provenances meet: ``onset_logit``,
+    ``Vc`` and ``Uc`` descend from ``TensorCues``' grad-bearing tensors and follow the
+    encoder onto its accelerator, while ``Jc`` descends from ``contour`` -- numpy by
+    ``TensorCues``' own invariant, so CPU-born. The DP adds them together term by term
+    (``note_potentials``), so a split here is a hard error the moment the encoder is
+    not on CPU. ``Cues``/``TensorCues`` cannot carry this invariant: their tensor-ness
+    is about *gradients*, an orthogonal axis, and two of their fields are numpy by
+    design. ``__post_init__`` enforces it here rather than letting it surface as a
+    stack trace from inside the recurrence."""
 
     onset_logit: torch.Tensor  # (T,) logit P(onset) per frame
     Vc: torch.Tensor           # (T+1,) cumsum log P(voiced)
@@ -72,9 +113,20 @@ class Emissions:
     frame_times: np.ndarray    # (T,) strided grid, absolute seconds
     contour: Contour           # pyin pitch track, for reading note pitches
 
+    def __post_init__(self) -> None:
+        _check_one_device(
+            "Emissions",
+            onset_logit=self.onset_logit, Vc=self.Vc, Uc=self.Uc, Jc=self.Jc,
+        )
+
     @property
     def T(self) -> int:
         return int(self.onset_logit.shape[0])
+
+    @property
+    def device(self) -> torch.device:
+        """The one device every tensor field lives on (see the class invariant)."""
+        return self.onset_logit.device
 
 
 @dataclass
@@ -87,7 +139,9 @@ class BatchEmissions:
     ``(B, ...)`` tensors. ``onset`` pads with 0 and the cumsums pad *flat* (the last
     value repeated), so no voiced/onset mass accrues past a track's true end; the
     scan is read out at each track's own ``lengths[b]``, so the padding never
-    contributes to a real partition."""
+    contributes to a real partition.
+
+    Carries ``Emissions``' one-device invariant across the batch."""
 
     onset_logit: torch.Tensor  # (B, Tmax)
     Vc: torch.Tensor           # (B, Tmax+1)
@@ -95,9 +149,27 @@ class BatchEmissions:
     Jc: torch.Tensor           # (B, Tmax+1)
     lengths: list[int]
 
+    def __post_init__(self) -> None:
+        _check_one_device(
+            "BatchEmissions",
+            onset_logit=self.onset_logit, Vc=self.Vc, Uc=self.Uc, Jc=self.Jc,
+        )
+
+    @property
+    def device(self) -> torch.device:
+        return self.onset_logit.device
+
 
 def pad_emissions(emissions: list[Emissions]) -> BatchEmissions:
-    """Pad single-track ``Emissions`` into a ``BatchEmissions`` (grad-preserving)."""
+    """Pad single-track ``Emissions`` into a ``BatchEmissions`` (grad-preserving).
+
+    Each input is internally one-device by construction; this additionally requires
+    the *batch* to agree, since the padded buffers are allocated off the first track
+    and every other track is scattered into them."""
+    _check_one_device(
+        "pad_emissions batch",
+        **{f"track{b}": e.onset_logit for b, e in enumerate(emissions)},
+    )
     lengths = [e.T for e in emissions]
     B, Tmax = len(emissions), max(lengths)
     onset = emissions[0].onset_logit.new_zeros(B, Tmax)
@@ -147,6 +219,7 @@ def voiced_logcumsum(
     voicing: np.ndarray | torch.Tensor | None,
     contour: Contour,
     frame_times: np.ndarray,
+    device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Prefix cumsums of ``(log P(voiced), log P(unvoiced))`` on the strided grid.
 
@@ -154,35 +227,50 @@ def voiced_logcumsum(
     (``freqs > 0``) resampled to the frame grid, as a near-hard 0/1 probability --
     the CRF still runs on DSP-only cues, just without a learned rest signal.
     ``torch.as_tensor`` keeps a numpy voicing detached (inference) but a tensor
-    voicing on the graph (training), so grad reaches the encoder's voicing head."""
+    voicing on the graph (training), so grad reaches the encoder's voicing head.
+    Both branches land on ``device`` -- the fallback is numpy-born and would otherwise
+    pin the cumsums to CPU while a head-fed run put them on the accelerator."""
     if voicing is not None:
-        v = torch.as_tensor(voicing).float().clamp(1e-6, 1 - 1e-6)
+        v = _on(voicing, device).float().clamp(1e-6, 1 - 1e-6)
         vlp, ulp = torch.log(v), torch.log1p(-v)
     else:
         mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
         vp = np.clip(mask, 1e-6, 1 - 1e-6)
-        vlp = torch.from_numpy(np.log(vp).astype(np.float32))
-        ulp = torch.from_numpy(np.log1p(-vp).astype(np.float32))
+        vlp = _on(np.log(vp).astype(np.float32), device)
+        ulp = _on(np.log1p(-vp).astype(np.float32), device)
     Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
     Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
     return Vc, Uc
 
 
-def build_emissions(cues: Cues | TensorCues, stride: int) -> Emissions:
+def build_emissions(
+    cues: Cues | TensorCues, stride: int, device: torch.device | str | None = None
+) -> Emissions:
     """Build the strided ``Emissions`` the DP scans from ``Cues`` or ``TensorCues``.
 
     The two intermediaries share every field name and hold probabilities in the same
     range, so one builder serves both: ``torch.as_tensor`` treats a numpy ``Cues``
     field as a constant (inference/decode) and a tensor ``TensorCues`` field as a
-    graph node (training), which is the whole reason the DP is backend-agnostic."""
-    frame_times = np.ascontiguousarray(cues.frame_times[::stride])
+    graph node (training), which is the whole reason the DP is backend-agnostic.
 
-    onset = torch.as_tensor(cues.onset).float()[::stride]
+    ``device`` is the single placement every field is built onto, establishing
+    ``Emissions``' one-device invariant. Callers that own the potentials pass *their*
+    module's device, so the numpy-born ``Jc`` follows the parameters it will be added
+    to -- which is what makes a numpy ``Cues`` decodable by a module on an
+    accelerator. Defaults to wherever the cues' own evidence already lives."""
+    frame_times = np.ascontiguousarray(cues.frame_times[::stride])
+    device = _cues_device(cues) if device is None else torch.device(device)
+
+    # Stride first, place second: the slice is cheap on the source device and only the
+    # decimated grid crosses the bus.
+    onset = _on(torch.as_tensor(cues.onset).float()[::stride], device)
     onset_logit = torch.logit(onset.clamp(1e-6, 1 - 1e-6))
 
     voicing = cues.voicing[::stride] if cues.voicing is not None else None
-    Vc, Uc = voiced_logcumsum(voicing, cues.contour, frame_times)
+    Vc, Uc = voiced_logcumsum(voicing, cues.contour, frame_times, device)
 
-    jump = pitch_jumps(cues.contour, frame_times)
-    Jc = torch.cat([torch.zeros(1), torch.cumsum(torch.from_numpy(jump), 0)])
+    # `jump` reads the pyin contour, which is numpy by TensorCues' invariant, so this
+    # is the field that would otherwise strand the DP across two devices.
+    jump = _on(pitch_jumps(cues.contour, frame_times), device)
+    Jc = torch.cat([jump.new_zeros(1), torch.cumsum(jump, 0)])
     return Emissions(onset_logit, Vc, Uc, Jc, frame_times, cues.contour)

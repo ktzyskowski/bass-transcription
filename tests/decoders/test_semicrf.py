@@ -1,18 +1,28 @@
 """SemiCRFDecoder -- gold construction, a differentiable NLL that trains, and a
 Viterbi decode that recovers the notes after a few fit steps. No audio, no model:
 synthetic onset/voicing curves and a pyin-style contour drive the whole path.
+
+The last section sweeps the same paths over ``cpu`` and ``cuda`` (see the ``device``
+fixture) and asserts the two agree numerically. Running is not enough: a device fix
+that quietly changes the arithmetic would still "work" everywhere, so parity against
+CPU is what actually pins the behaviour.
 """
 
 import numpy as np
+import pytest
 import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.constants import NOTE, REST
-from stemify.decoders.semicrf.emissions import build_emissions
+from stemify.decoders.semicrf.emissions import Emissions, build_emissions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
+
+SPANS = [(0.2, 0.9), (1.2, 1.9)]
+HZ = [110.0, 146.0]
+MIDI = [45, 50]
 
 DT = 0.0116  # feature hop, seconds
 T = 240
@@ -170,6 +180,107 @@ def test_batched_nll_grad_survives_padding():
         [tcues, short], [_notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), _notes([(0.3, 0.8)], [43])]
     ).mean().backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
+
+
+# --- device placement -------------------------------------------------------------
+# The semi-CRF had never run off CPU: both entry points that build a NeuralEncoder
+# hardcode device="cpu", and there is no semi-CRF training entry point yet, so nothing
+# ever called .to() on the potentials. Two fields were stranded on the host as a
+# result -- the dur_edges_s buffer (read via .numpy(), which raises once moved) and Jc
+# (built from the numpy contour). These tests are what keep that from returning.
+
+
+def _tensor_cues(cues: Cues, device, bias: torch.Tensor | None = None) -> TensorCues:
+    """``cues`` as the grad-bearing TensorCues an encoder on ``device`` would emit.
+    ``bias`` stands in for an encoder parameter, so grad has somewhere to land."""
+    onset_logit = torch.logit(torch.from_numpy(cues.onset).clamp(1e-6, 1 - 1e-6)).to(device)
+    voicing_logit = torch.logit(torch.from_numpy(cues.voicing).clamp(1e-6, 1 - 1e-6)).to(device)
+    if bias is not None:
+        onset_logit = onset_logit + bias
+    return TensorCues.from_logits(
+        cues.contour, onset_logit, cues.frame_times, voicing_logit
+    )
+
+
+def _fitted(cues: Cues, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDecoder:
+    dec = SemiCRFDecoder()
+    opt = torch.optim.Adam(dec.parameters(), lr=0.2)
+    for _ in range(steps):
+        opt.zero_grad()
+        dec.nll(cues, notes).backward()
+        opt.step()
+    return dec
+
+
+def test_numpy_cues_decode_on_device(device):
+    # The offline-eval path: numpy Cues have no device of their own, so the module's
+    # placement is the authority and the emissions must follow the parameters.
+    dec = SemiCRFDecoder().to(device)
+    cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
+    nll = dec.nll(cues, notes)
+    assert nll.device.type == device.type
+    assert isinstance(dec.decode(cues), list)
+
+
+def test_tensor_cues_grad_reaches_encoder_on_device(device):
+    # The training path: heads on `device` feeding a decoder on `device`, end to end.
+    dec = SemiCRFDecoder().to(device)
+    bias = torch.zeros(1, device=device, requires_grad=True)
+    tcues = _tensor_cues(_two_note_cues(SPANS, HZ), device, bias)
+    dec.nll(tcues, _notes(SPANS, MIDI)).backward()
+    assert bias.grad is not None and bias.grad.abs().item() > 0
+    assert dec.pot.w_on.grad is not None
+
+
+def test_nll_batch_on_device(device):
+    # The batched scan is what SemiCRFLoss actually calls, so it needs its own sweep.
+    dec = SemiCRFDecoder().to(device)
+    full = _two_note_cues(SPANS, HZ)
+    short = _two_note_cues([(0.3, 0.8)], [98.0])
+    out = dec.nll_batch(
+        [_tensor_cues(full, device), _tensor_cues(short, device)],
+        [_notes(SPANS, MIDI), _notes([(0.3, 0.8)], [43])],
+    )
+    assert out.shape == (2,) and out.device.type == device.type
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device available")
+def test_cuda_nll_matches_cpu():
+    # Parity, not just liveness: the same potentials must score the same track the
+    # same on either backend, or a "device fix" has changed the model.
+    cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
+    cpu = SemiCRFDecoder()
+    gpu = SemiCRFDecoder()
+    gpu.load_state_dict(cpu.state_dict())
+    assert torch.allclose(cpu.nll(cues, notes), gpu.to("cuda").nll(cues, notes).cpu(),
+                          atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device available")
+def test_cuda_decode_matches_cpu():
+    # Viterbi picks discrete boundaries, so a fitted model must decode to the *same*
+    # notes on both backends -- onsets are read off the frame grid, not interpolated.
+    cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
+    cpu = _fitted(cues, notes)
+    gpu = SemiCRFDecoder()
+    gpu.load_state_dict(cpu.state_dict())
+    gpu = gpu.to("cuda")
+
+    on_cpu, on_gpu = cpu.decode(cues), gpu.decode(cues)
+    assert len(on_cpu) == len(on_gpu) == 2
+    for a, b in zip(on_cpu, on_gpu):
+        assert a.onset == pytest.approx(b.onset)
+        assert a.offset == pytest.approx(b.offset)
+        assert a.midi_pitch == pytest.approx(b.midi_pitch, abs=1e-4)
+
+
+def test_emissions_rejects_fields_on_different_devices():
+    # The invariant's guard. A "meta" tensor is device-distinct from CPU without
+    # needing an accelerator, so this runs everywhere -- including the laptop where
+    # the original bug was invisible.
+    t, cum = torch.zeros(4), torch.zeros(5)
+    with pytest.raises(ValueError, match="span multiple devices"):
+        Emissions(t, cum, cum, torch.zeros(5, device="meta"), np.zeros(4), Contour.empty())
 
 
 def test_decode_empty_contour_is_no_notes():
