@@ -8,10 +8,10 @@ path is covered too.
 
 import numpy as np
 
+from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
-from stemify.training.cache import example_path
 from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import build_example
 
@@ -71,38 +71,91 @@ def test_short_track_is_padded_not_dropped(tmp_path):
     assert y["onset"][3] == 0.0           # target pad is zero
 
 
-def test_prepare_backfills_missing_target_without_recomputing_features(tmp_path):
+def test_prepare_backfills_missing_target_without_recomputing_features(
+    tmp_path, monkeypatch
+):
     from stemify.contour import Contour
     from stemify.serde import features_npy
     from stemify.training.examples import prepare_examples
     from stemify.transforms import Identity
 
-    # Pre-save an onset-only example, as a prior (onset-only) run would have.
-    name = "trk"
+    # Pre-save an onset-only example, as a prior (onset-only) run would have. The
+    # cache decides the filename, so the backfill has to find it by the same key the
+    # writer used -- the resolved audio path.
+    audio = tmp_path / "trk.wav"
+    audio.write_text("x")
+    cache = Cache(tmp_path / "cache")
     ft = np.arange(8) * 0.0116
     TrackExample(
-        name, np.random.rand(5, 8).astype(np.float32),
+        "trk", np.random.rand(5, 8).astype(np.float32),
         {"onset": np.zeros(8, np.float32)}, ft,
-    ).save(example_path(tmp_path, name, Identity().name))
-    path = example_path(tmp_path, name, Identity().name)
+    ).save(cache.feature_path(audio))
+    path = cache.feature_path(audio)
     feat_mtime = features_npy(path).stat().st_mtime_ns  # CQT sidecar must not change
 
     ref = Contour(ft, np.where(np.arange(8) < 4, 110.0, 0.0))  # voiced first half
 
+    # The point of the test: the backfill must not reach the CQT. (audio() itself is
+    # now called for the cache *key*, but that is a path lookup, not a decode.)
+    def _no_cqt(path):
+        raise AssertionError("backfill must not recompute the CQT")
+
+    monkeypatch.setattr("stemify.cache.extract_features", _no_cqt)
+
     class _Item:
         name = "trk"
         def audio(self):
-            raise AssertionError("backfill must not load audio / recompute CQT")
+            return audio
         def reference(self):
             return ref
         def reference_notes(self):
             return [NoteEvent(onset=0.0, offset=0.05, midi_pitch=45.0)]
 
     # Requesting a head the cache lacks backfills it from the reference alone.
-    prepare_examples([_Item()], ["onset", "voicing"], tmp_path, Identity())
+    prepare_examples([_Item()], ["onset", "voicing"], cache, Identity())
 
     loaded = TrackExample.load(path)
     assert "voicing" in loaded.targets                          # added
     assert "onset" in loaded.targets                            # kept
     assert loaded.targets["voicing"][:4].all()                 # voiced first half
     assert features_npy(path).stat().st_mtime_ns == feat_mtime  # features untouched
+
+
+def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypatch):
+    # Content-addressing means one audio file -> one cache entry. That is correct for
+    # the CQT but not for targets, so two *different* items pointing at the same audio
+    # must fail loudly rather than let the second item's labels vanish. Slakh cannot
+    # produce this today (mix sources are filtered to single-bass tracks); the guard
+    # exists so relaxing that filter cannot silently mislabel training data.
+    import pytest
+
+    from stemify.cache import Cache
+    from stemify.contour import Contour
+    from stemify.training.examples import prepare_examples
+    from stemify.transforms import Identity
+
+    audio = tmp_path / "mix.wav"
+    audio.write_text("x")
+    ft = np.arange(8) * 0.0116
+
+    def fake_extract(path):
+        from stemify.features import FrameFeatures
+        return FrameFeatures(np.random.rand(5, 8).astype(np.float32), ft)
+
+    monkeypatch.setattr("stemify.cache.extract_features", fake_extract)
+
+    class _Item:
+        def __init__(self, name):
+            self.name = name
+        def audio(self):
+            return audio            # both items resolve to the SAME file
+        def reference(self):
+            return Contour(ft, np.full(8, 110.0))
+        def reference_notes(self):
+            return [NoteEvent(onset=0.0, offset=0.05, midi_pitch=45.0)]
+
+    with pytest.raises(ValueError, match="share cached features"):
+        prepare_examples(
+            [_Item("Track01/S00"), _Item("Track01/S01")],
+            ["onset"], Cache(tmp_path / "cache"), Identity(),
+        )

@@ -31,8 +31,12 @@ def _write_npy(dest: Path, arr: np.ndarray) -> None:
         np.save(f, arr)
 
 
-def _write_npz(dest: Path, *, compressed: bool, **arrays: np.ndarray) -> None:
-    # Same reason as _write_npy: a handle stops np.savez appending '.npz'.
+def write_npz(dest: Path, *, compressed: bool, **arrays: np.ndarray) -> None:
+    """Write arrays as an npz. Public because callers that rewrite *part* of a cached
+    example (the targets backfill) need the same handle trick and the same atomicity,
+    and reimplementing either is how a truncated file ends up trusted as a cache hit.
+
+    Same reason as _write_npy: a handle stops np.savez appending '.npz'."""
     with open(dest, "wb") as f:
         (np.savez_compressed if compressed else np.savez)(f, **arrays)
 
@@ -68,7 +72,7 @@ class TrackExample:
         atomic_write(features_npy(path), lambda p: _write_npy(p, self.features))
         atomic_write(
             path,
-            lambda p: _write_npz(
+            lambda p: write_npz(
                 p, compressed=True, name=self.name, frame_times=self.frame_times,
                 **{f"target_{k}": v for k, v in self.targets.items()},
             ),
@@ -107,7 +111,7 @@ def save_contour(contour: Contour, path: Path) -> None:
     arrays = {"times": contour.times, "freqs": contour.freqs}
     if contour.confidence is not None:
         arrays["confidence"] = contour.confidence
-    atomic_write(path, lambda p: _write_npz(p, compressed=False, **arrays))
+    atomic_write(path, lambda p: write_npz(p, compressed=False, **arrays))
 
 
 def load_contour(path: Path) -> Contour:

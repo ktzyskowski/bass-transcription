@@ -63,14 +63,36 @@ harness scores." Medium effort, low risk. Depends on nothing; pairs naturally wi
 
 ## Tier 2 — worthwhile, independent
 
-### #1 — Unify the cache  ⚙️ PART A DONE (885cecc); PART B queued for the 5090 rerun
-**A (done):** `stemify/atomic.py` (shared `atomic_write`) + `stemify/serde.py` (formats;
+### #1 — Unify the cache  ✅ DONE (A: 885cecc; B + `Cache`)
+**A:** `stemify/atomic.py` (shared `atomic_write`) + `stemify/serde.py` (formats;
 `TrackExample` moved here) + `cache.py` as pure policy. Fixed the non-atomic
-`TrackExample.save` corruption bug. **B (queued):** content-address features by
-`(cqt, resolved_audio_path)` to match `contour`/`separation`; delete the `cache_dir/tag`
-partitioning in `train.py`; update the `validation.py`/`sequence.py` readers. B changes
-every features key → full rebuild, so land it **immediately before** the 5090 rerun, not
-before.
+`TrackExample.save` corruption bug.
+
+**B:** features are content-addressed on `(features.SIGNATURE, resolved_audio_path)`,
+matching `contour`/`separation`; the `cache_dir/<split>/<tag>` partitioning is gone.
+The condition no longer needs spelling into the directory tree — a stem, a mix and a
+separated mix already resolve to three different files — so every condition shares one
+features directory and the validator reusing the loader's work is automatic rather than
+a stem-tag special case.
+
+**The `Cache(root)` object earned its keep** (the conditional this item left open). It
+removed 9 cache-path parameters across 7 signatures — `SequenceDataset`,
+`OnsetValidator` and `build_validators` each took two — and moved layout out of
+`train.py`, which had been hand-building five subdirectories. It lives at
+**`stemify/cache.py`**, not under `training/`: the eval harness runs the same
+transforms over the same corpora and was recomputing pyin and the CQT every launch
+with no way to reach what training had already built.
+
+`Cache` owns the layout for all three artifacts (`features/`, `contours/`,
+`transforms/`) and the keying convention (`content_key`), but the *transform* still
+does its own writing — `cache.separator()` hands `DemucsSeparator` a directory. That
+keeps the dependency one-way (`cache` imports `transforms`, never the reverse) so the
+light audio path never pulls the cache in.
+
+Two things fixed in passing: the targets backfill in `examples.py` wrote its npz
+non-atomically (the same corruption class A fixed for `TrackExample.save`), and
+`Identity.cache_path` inherited a digest path naming a `.flac` that is never written —
+harmless while only `apply` used it, wrong once it doubles as the resolved-audio key.
 
 Original design notes:
 

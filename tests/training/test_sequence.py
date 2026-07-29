@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 from torch.utils.data import DataLoader
 
+from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.features import SAMPLE_RATE
@@ -89,10 +90,7 @@ def test_sequence_dataset_caches_and_serves_whole_tracks(tmp_path):
     paths = [tmp_path / "a.wav", tmp_path / "b.wav"]
     _write_tone(paths[0], 110.0)
     _write_tone(paths[1], 146.0)
-    ds = SequenceDataset(
-        _ToneSet(paths), cache_dir=tmp_path / "cache",
-        contour_cache=tmp_path / "contours",
-    )
+    ds = SequenceDataset(_ToneSet(paths), Cache(tmp_path / "cache"))
     assert len(ds) == 2
     ex = ds[0]
     assert isinstance(ex, SequenceExample)

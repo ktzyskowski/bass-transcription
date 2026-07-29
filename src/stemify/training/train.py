@@ -32,6 +32,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
+from stemify.cache import Cache
 from stemify.data.slakh import SlakhDataset
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.heads import onset_head, voicing_head
@@ -83,30 +84,30 @@ def build_validators(
     root: str,
     val_limit: int,
     conditions: list[str],
-    contour_cache: Path | None = None,
-    feature_cache_root: Path | None = None,
+    cache: Cache | None = None,
 ) -> dict[str, OnsetValidator]:
     """One ``OnsetValidator`` per condition, keyed by tag. A condition is just a
     ``(source, transform)`` pair -- exactly what a validator wraps -- so the same
     ``SOURCES`` table that defines the *training* conditions defines the validation
-    ones. Contours are memoised to ``contour_cache`` (shared across conditions --
-    keyed on each condition's resolved audio path), so pyin runs once per file ever
-    rather than at every launch, which is what makes a large val set affordable -- and
-    since pyin already parallelises its own FFTs across cores, the per-track loop is
-    left serial rather than stacked under a process pool that only oversubscribes. CQT
-    features are memoised under ``feature_cache_root/<tag>`` (the stem tag reuses the
-    cache the BCE loader already built), so the validator loads them from disk rather
-    than recomputing in memory each launch. The demucs condition separates its val
-    audio through the (cached) DemucsSeparator at construction."""
-    validators: dict[str, OnsetValidator] = {}
-    for tag in conditions:
-        source, transform = SOURCES[tag]
-        ds = SlakhDataset(root, split="validation", source=source, limit=val_limit)
-        feature_cache = feature_cache_root / tag if feature_cache_root else None
-        validators[tag] = OnsetValidator(
-            ds, transform, contour_cache=contour_cache, feature_cache=feature_cache
+    ones.
+
+    Every condition shares the one ``cache``: contours and CQTs are keyed on each
+    condition's *resolved* audio path, so they cannot collide and no per-tag
+    subdirectory is needed. pyin then runs once per file ever rather than at every
+    launch -- what makes a large val set affordable -- and since pyin already
+    parallelises its own FFTs across cores, the per-track loop is left serial rather
+    than stacked under a process pool that only oversubscribes. The demucs condition
+    separates its val audio through the (cached) DemucsSeparator at construction."""
+    return {
+        tag: OnsetValidator(
+            SlakhDataset(
+                root, split="validation", source=SOURCES[tag][0], limit=val_limit
+            ),
+            SOURCES[tag][1],
+            cache=cache,
         )
-    return validators
+        for tag in conditions
+    }
 
 
 def _eval_fn(
@@ -186,18 +187,21 @@ def train(
     # F1 gap between stem and demucs is visible during training rather than only
     # at final test. Independent of train sources: monitor the full breakdown.
     val_conditions = val_conditions or ["stem", "mix", "demucs"]
+    cache = Cache(cache_dir)
     out = out or cache_dir / "onset_model.pt"
 
-    # One feature cache per source (separate subdir, so stem and mix -- both the
-    # identity transform -- do not collide), unioned for domain randomisation.
+    # One cache for every condition and both splits. Features are content-addressed on
+    # the resolved audio path, so a stem, a mix and a separated mix of the same track
+    # land on distinct keys without any tag/split subdirectory to keep them apart --
+    # and the val conditions transparently reuse whatever this loop already built.
     train_paths = []
     for tag in sources:
         source, transform = SOURCES[tag]
         ds = SlakhDataset(root, split="train", source=source, limit=limit)
-        train_paths += prepare_examples(ds, HEADS, cache_dir / "train" / tag, transform)
+        train_paths += prepare_examples(ds, HEADS, cache, transform)
 
     val_ds = SlakhDataset(root, split="validation", source="stem", limit=val_limit)
-    val_paths = prepare_examples(val_ds, HEADS, cache_dir / "val" / "stem")
+    val_paths = prepare_examples(val_ds, HEADS, cache)
 
     # persistent_workers keeps the worker pool alive between epochs -- without it
     # the fork cost is paid every epoch and cancels the benefit on short epochs.
@@ -237,11 +241,7 @@ def train(
             "caching val contours for %d tracks x conditions %s...",
             val_limit, val_conditions,
         )
-        validators = build_validators(
-            root, val_limit, val_conditions,
-            contour_cache=cache_dir / "val_contours",
-            feature_cache_root=cache_dir / "val",
-        )
+        validators = build_validators(root, val_limit, val_conditions, cache=cache)
         # Per-epoch validation reports (all conditions x note+cues) are written here
         # and attached to the run under "validation/", so each scored checkpoint leaves
         # a diffable JSON artifact, not only metric points.

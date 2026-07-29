@@ -59,6 +59,15 @@ class AudioTransform(ABC):
         """Do the work, writing to ``dest``. Its parent already exists."""
 
     def cache_path(self, source: Path) -> Path:
+        """Where this transform's output for ``source`` lives -- a *pure* function
+        that does no work.
+
+        Load-bearing beyond naming a file: it is the resolved audio path every
+        downstream artifact is keyed on (``stemify.cache``), and callers need that
+        key before deciding whether to compute anything. Were it only obtainable
+        from ``apply``, asking "is the CQT for this track cached?" would separate
+        the track first -- minutes of Demucs per cache *hit*.
+        """
         digest = hashlib.sha256(
             f"{self.name}\0{Path(source).resolve()}".encode()
         ).hexdigest()[:16]
@@ -95,8 +104,18 @@ class Identity(AudioTransform):
     def _run(self, source: Path, dest: Path) -> None:  # pragma: no cover
         raise AssertionError("Identity.apply short-circuits; _run is unreachable")
 
-    def apply(self, source: str | Path) -> Path:
+    def cache_path(self, source: Path) -> Path:
+        """Identity's output *is* the source file, so that is where it "lives".
+
+        Overridden because the inherited digest path would name a ``.flac`` that is
+        never written -- harmless while only ``apply`` was used (it short-circuits),
+        but wrong once this doubles as the resolved-audio key: a stem and its
+        untransformed self would key to different phantom paths, and every cached
+        feature would address a file that does not exist."""
         return Path(source)
+
+    def apply(self, source: str | Path) -> Path:
+        return self.cache_path(source)
 
 
 class DemucsSeparator(AudioTransform):

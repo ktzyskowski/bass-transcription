@@ -27,7 +27,7 @@ from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import TrackExample
-from stemify.training.cache import cache_features, cached_f0, example_path
+from stemify.cache import Cache
 from stemify.transforms import AudioTransform, Identity
 
 
@@ -80,8 +80,8 @@ def collate(batch: Sequence[SequenceExample]) -> SequenceBatch:
 class SequenceDataset(Dataset):
     """Whole-track examples for a dataset, caching the CQT + pyin contour once.
 
-    Mirrors the async validator's prep (``cache_features`` for the CQT, ``cached_f0``
-    for the contour) minus the per-frame targets -- the structured loss reads notes,
+    Mirrors the async validator's prep (``Cache.ensure_features`` for the CQT,
+    ``Cache.contour`` for the contour) minus the per-frame targets -- the structured loss reads notes,
     not frame labels. Labels always come from the clean stem's notes, whatever audio
     the features were drawn from. Items hold only the feature *path* (loaded per
     ``__getitem__``) plus the small contour/notes, so a large set never sits in RAM
@@ -90,19 +90,19 @@ class SequenceDataset(Dataset):
     def __init__(
         self,
         dataset: SlakhLikeDataset,
-        cache_dir: Path,
+        cache: Cache,
         transform: AudioTransform | None = None,
-        contour_cache: Path | None = None,
     ) -> None:
         transform = transform or Identity()
         estimator = PyinPitch()
-        cache_features(dataset, cache_dir, transform)
+        cache.ensure_features(dataset, transform)
         self._items: list[tuple[Path, Contour, list[NoteEvent]]] = []
         for item in dataset:
-            fpath = example_path(cache_dir, item.name, transform.name)
             audio = transform.apply(item.audio())
-            contour = cached_f0(estimator, audio, contour_cache)
-            self._items.append((fpath, contour, item.reference_notes()))
+            self._items.append(
+                (cache.feature_path(audio), cache.contour(estimator, audio),
+                 item.reference_notes())
+            )
 
     def __len__(self) -> int:
         return len(self._items)

@@ -28,7 +28,7 @@ from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues, scor
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
-from stemify.training.cache import cached_f0, example_path
+from stemify.cache import Cache
 from stemify.training.examples import prepare_examples
 from stemify.training.labels import onset_targets
 from stemify.transforms import AudioTransform, Identity
@@ -138,46 +138,51 @@ class OnsetValidator:
         self,
         dataset: Dataset,
         transform: AudioTransform | None = None,
-        contour_cache: Path | None = None,
-        feature_cache: Path | None = None,
+        cache: Cache | None = None,
     ) -> None:
         transform = transform or Identity()
         estimator = PyinPitch()
 
-        # The CQT is the same the training pipeline already caches. With
-        # ``feature_cache`` set, populate it once (``prepare_examples``, disk-cached
-        # per (track, transform)) and read features back rather than recomputing in
-        # memory every launch -- and reuse the stem cache the BCE loader already
-        # built instead of recomputing it a second time. Prepare the voicing target
-        # too (cheap backfill), so the per-frame voiced label for the AUROC path is
-        # in every condition's cache, not just the stem one the BCE loader built.
-        if feature_cache is not None:
-            prepare_examples(dataset, ["onset", "voicing"], feature_cache, transform)
+        # One ``cache`` replaces the old separate ``contour_cache``/``feature_cache``
+        # paths, and unifies what their two ``None``s meant: with a cache, both the
+        # CQT and the contour are disk-backed; without one, features are held in
+        # memory and pyin reruns per launch (the test/small-set path).
+        #
+        # The CQT is the same artifact the training loader caches. Since features are
+        # keyed on the resolved audio path, *every* condition now reuses whatever the
+        # loader already built -- not just the stem tag, which was previously a
+        # special case worth a comment. Prepare the voicing target too (a cheap
+        # backfill, no CQT recompute), so the per-frame voiced label the AUROC path
+        # needs is present for every condition.
+        if cache is not None:
+            prepare_examples(dataset, ["onset", "voicing"], cache, transform)
 
         self.examples: list[ValExample] = []
         for item in dataset:
             path = transform.apply(item.audio())
-            if feature_cache is not None:
+            if cache is not None:
                 # Keep only the path + small frame_times/label resident; the feature
                 # tensor is loaded transiently per score (load_features), so the whole
                 # val set's CQT never sits in memory at once.
-                fpath = example_path(feature_cache, item.name, transform.name)
+                fpath = cache.feature_path(path)
                 cached = np.load(fpath)
                 frame_times = cached["frame_times"]
                 voicing_target = (
                     cached["target_voicing"] if "target_voicing" in cached.files else None
                 )
                 features = None
+                contour = cache.contour(estimator, path)
             else:
                 feats = extract_features(path)
                 frame_times = feats.frame_times
                 features = feats.values
                 voicing_target = None
                 fpath = None
+                contour = estimator.estimate(path)
             self.examples.append(
                 ValExample(
                     frame_times=frame_times,
-                    contour=cached_f0(estimator, path, contour_cache),
+                    contour=contour,
                     notes=item.reference_notes(),
                     features=features,
                     feature_path=fpath,

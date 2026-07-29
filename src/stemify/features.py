@@ -34,6 +34,17 @@ BINS_PER_SEMITONE = 3
 BINS_PER_OCTAVE = 12 * BINS_PER_SEMITONE
 N_BINS = 6 * BINS_PER_OCTAVE
 HOP_LENGTH = 256  # ~11.6 ms per frame at 22.05 kHz
+TOP_DB = 80.0     # dB floor for the log-magnitude conversion
+
+# Identity of the CQT *as configured here* -- the producer half of a cached feature's
+# key (see ``stemify.cache``). It names every constant above that changes the output,
+# so editing one invalidates the cache instead of silently serving features computed
+# under the old settings to a model trained on the new ones. That failure is the quiet
+# kind: a stale CQT is still a valid-looking array of the right shape.
+SIGNATURE = (
+    f"cqt-sr{SAMPLE_RATE}-fmin{FMIN:.4f}-nbins{N_BINS}"
+    f"-bpo{BINS_PER_OCTAVE}-hop{HOP_LENGTH}-topdb{TOP_DB:g}"
+)
 
 
 def load_audio(path: str | Path, sr: int = SAMPLE_RATE) -> np.ndarray:

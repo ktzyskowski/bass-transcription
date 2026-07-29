@@ -73,3 +73,30 @@ def test_failed_run_cleans_up_and_writes_no_cache(tmp_path):
 def test_identity_returns_source_untouched(tmp_path):
     src = _source(tmp_path)
     assert Identity().apply(src) == src
+
+
+def test_identity_cache_path_is_the_source(tmp_path):
+    # cache_path doubles as the resolved-audio key every derived artifact is keyed on
+    # (stemify.cache), so Identity must report the *source*. The inherited digest path
+    # would name a .flac that is never written, and every cached feature for an
+    # untransformed track would then address a nonexistent file.
+    src = _source(tmp_path)
+    identity = Identity(cache_dir=tmp_path / "cache")
+    assert identity.cache_path(src) == src
+    assert identity.cache_path(src) == identity.apply(src)
+
+
+def test_cache_path_does_no_work(tmp_path):
+    # The property Cache.ensure_features relies on to avoid separating a track just to
+    # discover its CQT is already cached: resolving the path must never call _run.
+    class _Exploding(AudioTransform):
+        @property
+        def name(self):
+            return "exploding"
+
+        def _run(self, source, dest):
+            raise AssertionError("cache_path must not run the transform")
+
+    src = _source(tmp_path)
+    resolved = _Exploding(cache_dir=tmp_path / "cache").cache_path(src)
+    assert resolved.suffix == ".flac" and not resolved.exists()

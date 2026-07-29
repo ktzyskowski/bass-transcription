@@ -7,7 +7,7 @@ testable and the expensive one (the CQT) is cached once:
   - ``build_example`` turns one track's features + references into a full-track
     (features, targets) ``TrackExample``. Pure given the arrays, so a synthetic
     contour and a few notes exercise the target alignment without touching disk.
-  - ``prepare_examples`` caches each track's CQT (via ``cache_features``) and layers
+  - ``prepare_examples`` caches each track's CQT (via ``Cache.ensure_features``) and layers
     the requested heads' targets on top. Self-healing: a cached example missing a
     newly-requested head's target gains it from the reference alone, no CQT recompute.
 
@@ -21,12 +21,13 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+from stemify.atomic import atomic_write
+from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.data.base import EvalItem
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
-from stemify.training.cache import cache_features
+from stemify.serde import TrackExample, write_npz
 from stemify.training.labels import onset_targets, pitch_targets, voicing_targets
 from stemify.transforms import AudioTransform
 
@@ -66,22 +67,38 @@ def build_example(
 def prepare_examples(
     dataset: SlakhLikeDataset,
     heads: Iterable[str],
-    cache_dir: Path,
+    cache: Cache,
     transform: AudioTransform | None = None,
     onset_tolerance_frames: int = 1,
 ) -> list[Path]:
     """Cache each track's CQT and layer the requested heads' targets on top; return
     the cache paths.
 
-    The CQT is cached once by ``cache_features`` (audio touched only on a miss); this
-    then backfills each requested head's target from the reference alone. Self-healing:
-    a track already cached with fewer heads gains only the missing targets, no CQT
-    recompute -- so widening the head set (adding voicing to an onset-only cache) reuses
-    every CQT and pays only a MIDI parse per track.
+    The CQT is cached once by ``Cache.ensure_features`` (audio touched only on a miss);
+    this then backfills each requested head's target from the reference alone.
+    Self-healing: a track already cached with fewer heads gains only the missing
+    targets, no CQT recompute -- so widening the head set (adding voicing to an
+    onset-only cache) reuses every CQT and pays only a MIDI parse per track.
     """
     heads = list(heads)
-    paths = cache_features(dataset, cache_dir, transform)
+    paths = cache.ensure_features(dataset, transform)
+    # Features are content-addressed on the resolved audio, so two items sharing one
+    # audio file share one cache entry. That is right for the CQT (identical audio,
+    # identical features) but wrong for *targets*: each item has its own reference
+    # notes, and only the first would ever be written -- the second's `_ensure_targets`
+    # finds the head already present and skips, silently mislabelling the example.
+    #
+    # It cannot happen today (mix-based sources are filtered to single-bass tracks, so
+    # every item has a distinct audio file), which is exactly why it needs a guard
+    # rather than a comment: relaxing that filter would corrupt labels with no error.
+    owner: dict[Path, str] = {}
     for item, path in zip(dataset, paths, strict=True):
+        if owner.setdefault(path, item.name) != item.name:
+            raise ValueError(
+                f"{item.name!r} and {owner[path]!r} share cached features at {path} "
+                "but carry different targets; their audio must differ, or the targets "
+                "must be keyed separately from the features."
+            )
         _ensure_targets(path, item, heads, onset_tolerance_frames)
     return paths
 
@@ -114,5 +131,8 @@ def _ensure_targets(
     ).targets
     for head, target in added.items():
         arrays[f"target_{head}"] = target
-    np.savez_compressed(path, **arrays)
+    # Atomic like every other cache write: this rewrites an npz a later run keys on,
+    # so an interrupted backfill must not leave a truncated file that then reads as a
+    # cache hit with some targets silently missing.
+    atomic_write(path, lambda p: write_npz(p, compressed=True, **arrays))
     return True
