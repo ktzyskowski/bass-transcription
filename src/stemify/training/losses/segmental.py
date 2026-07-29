@@ -30,6 +30,16 @@ class SemiCRFLoss(Loss):
         # The decoder's potentials train with the encoder under one optimiser.
         return self.decoder.parameters()
 
+    def state_dict(self):
+        # The ~15 potentials ARE the decoder. Without them a checkpoint restores an
+        # encoder paired with an untrained CRF -- w_on=1, dur=zeros, i.e. no duration
+        # preference at all, which is precisely the mechanism this objective exists
+        # to learn.
+        return {k: v.detach().cpu().clone() for k, v in self.decoder.state_dict().items()}
+
+    def load_state_dict(self, state):
+        self.decoder.load_state_dict(state)
+
     def to(self, device: torch.device) -> "SemiCRFLoss":
         self.decoder.to(device)
         return self

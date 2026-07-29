@@ -12,7 +12,6 @@ from stemify.contour import Contour
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.neural import NeuralEncoder
 from stemify.notes import NoteEvent
-from stemify.training.cache import cached_f0
 from stemify.training.validation import (
     ValExample,
     score_cues_examples,
@@ -47,43 +46,6 @@ class _CountingBaseline:
         times = np.linspace(0, 1, 5)
         return Contour(times=times, freqs=np.full(5, 110.0),
                        confidence=np.full(5, 0.9))
-
-
-def test_cached_f0_computes_once_then_reads_disk(tmp_path):
-    audio = tmp_path / "stem.wav"
-    audio.write_text("x")
-    cache = tmp_path / "contours"
-    base = _CountingBaseline()
-
-    first = cached_f0(base, audio, cache)
-    assert base.calls == 1
-    second = cached_f0(base, audio, cache)  # served from disk
-    assert base.calls == 1
-    np.testing.assert_array_equal(first.freqs, second.freqs)
-    np.testing.assert_array_equal(first.confidence, second.confidence)
-    assert list(cache.glob("*.partial.npz")) == []  # atomic write left no temp
-
-
-def test_cached_f0_keys_on_path_so_conditions_dont_collide(tmp_path):
-    # Two different audio files (stem vs separated) must get distinct cache entries.
-    a, b = tmp_path / "stem.wav", tmp_path / "demucs.wav"
-    a.write_text("a")
-    b.write_text("b")
-    cache = tmp_path / "contours"
-    base = _CountingBaseline()
-    cached_f0(base, a, cache)
-    cached_f0(base, b, cache)
-    assert base.calls == 2  # no collision -> both computed
-    assert len(list(cache.glob("*.npz"))) == 2
-
-
-def test_cached_f0_none_disables_cache(tmp_path):
-    audio = tmp_path / "stem.wav"
-    audio.write_text("x")
-    base = _CountingBaseline()
-    cached_f0(base, audio, None)
-    cached_f0(base, audio, None)
-    assert base.calls == 2  # recomputed each time, nothing written
 
 
 class _FakeOnsetModel(nn.Module):

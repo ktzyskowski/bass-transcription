@@ -126,10 +126,33 @@ class Trainer:
                 break
 
         if best_state is not None:
-            self.model.load_state_dict(best_state)
+            # Both halves, from the *same* epoch. Restoring only the model would leave
+            # the objective's parameters at their final-epoch values -- an encoder and
+            # a decoder taken from different points in optimisation.
+            self.load_state(best_state)
         for callback in callbacks:
             callback.on_train_end(history.best_epoch)
         return history
 
-    def state_cpu(self) -> dict[str, torch.Tensor]:
-        return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+    def state_cpu(self) -> dict[str, dict[str, torch.Tensor]]:
+        """A CPU copy of everything the optimiser is allowed to move: the model's
+        weights **and** the objective's own parameters, under ``"model"``/``"loss"``.
+
+        Both, because ``__init__`` hands the optimiser
+        ``chain(model.parameters(), loss.parameters())`` -- so a snapshot of only the
+        model captures part of the trained state and silently discards the rest. For
+        a structured objective the discarded half is the decoder itself: restoring it
+        would pair a trained encoder with freshly initialised potentials, which still
+        decodes to notes and so goes unnoticed. Empty for a parameterless objective,
+        which is why the frame path never noticed."""
+        return {
+            "model": {
+                k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()
+            },
+            "loss": self.loss.state_dict(),
+        }
+
+    def load_state(self, state: dict[str, dict[str, torch.Tensor]]) -> None:
+        """Restore a ``state_cpu`` snapshot into both the model and the objective."""
+        self.model.load_state_dict(state["model"])
+        self.loss.load_state_dict(state["loss"])

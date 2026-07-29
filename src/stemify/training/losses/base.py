@@ -40,6 +40,24 @@ class Loss(ABC):
         default; a structured decoder overrides to return its own)."""
         return ()
 
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """The objective's own learned state, for snapshotting and persistence.
+
+        The companion to ``parameters``: anything the optimiser is allowed to move
+        must also be capturable, or it is trained and then lost. A structured
+        decoder's potentials are the model in every sense that matters at decode
+        time -- an encoder saved without them pairs with a *freshly initialised*
+        decoder, which still emits notes and so fails silently rather than loudly."""
+        return {}
+
+    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+        """Restore what ``state_dict`` captured. No-op for a parameterless objective."""
+        if state:
+            raise ValueError(
+                f"{type(self).__name__} holds no parameters but was given state "
+                f"{sorted(state)}"
+            )
+
     def to(self, device: torch.device) -> "Loss":
         """Move any owned modules onto ``device`` (no-op unless the objective holds
         parameters). Returns self for chaining, like ``nn.Module.to``."""

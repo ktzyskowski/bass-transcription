@@ -34,6 +34,7 @@ from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
 from stemify.data.slakh import SlakhDataset
+from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.heads import onset_head, voicing_head
 from stemify.encoders.networks import TCN
@@ -120,6 +121,7 @@ def _eval_fn(
     validators: dict[str, OnsetValidator],
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,
+    build_decoder: Callable[[dict], Decoder] | None = None,
 ):
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
     score it through each cached validator (off the training device). Every metric is
@@ -131,16 +133,30 @@ def _eval_fn(
     onset/voicing head quality, via ``metrics.cues.score_cues`` -- the same core the
     offline ``CuesEvaluation`` uses). If ``report_dir``/``log_artifact`` are given, the
     full breakdown is also written as a per-epoch JSON and attached to the run, so a
-    checkpoint's scores survive as a diffable artifact, not only as metric points."""
+    checkpoint's scores survive as a diffable artifact, not only as metric points.
 
-    def eval_fn(state_dict, epoch):
+    ``build_decoder(state) -> Decoder`` is the seam the objective varies: the frame
+    heads are grouped by the ``HeuristicDecoder``, while a semi-CRF run must be scored
+    through the potentials in its own snapshot. Defaulting it to the heuristic keeps
+    the frame path unchanged, but hardcoding it would mean a semi-CRF run silently
+    reported the *heuristic's* note F1 over its learned cues -- plausible numbers for
+    a model nobody trained."""
+    if build_decoder is None:
+        def build_decoder(_state: dict) -> Decoder:
+            return HeuristicDecoder()
+
+    def eval_fn(state, epoch):
         model = build_model()
-        model.load_state_dict(state_dict)
+        # `state` is a Trainer.state_cpu snapshot: the model's weights under "model"
+        # and the objective's own parameters under "loss". The decoder is built from
+        # the same snapshot, so a structured objective is scored through the
+        # potentials that snapshot actually trained -- not a fresh set.
+        model.load_state_dict(state["model"])
         # Wrap the checkpoint once (CPU, off the training device) as the encoder/decoder
         # pair deployment composes into a Segmenter. The decoder scores notes over the
         # encoder's cues; the encoder alone scores its own cues -- one forward, both.
         encoder = NeuralEncoder(model, device="cpu")
-        decoder = HeuristicDecoder()
+        decoder = build_decoder(state)
 
         def segment(contour, features):
             return decoder.decode(encoder.encode_features(contour, features))
@@ -269,7 +285,16 @@ def train(
     # rebuild the architecture before loading weights.
     out.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
-        {"state_dict": trainer.model.state_dict(), "heads": HEADS, "encoder": "tcn"},
+        {
+            "state_dict": trainer.model.state_dict(),
+            # The objective's own learned parameters: empty for frame BCE, the ~15
+            # potentials for a semi-CRF. Persisted because the optimiser trained both
+            # -- saving only the model would discard half the trained system and leave
+            # a decode-time decoder freshly initialised, which fails silently.
+            "loss_state": trainer.loss.state_dict(),
+            "heads": HEADS,
+            "encoder": "tcn",
+        },
         out,
     )
     logger.info("saved onset model -> %s", out)
