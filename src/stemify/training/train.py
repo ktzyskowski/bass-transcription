@@ -94,10 +94,16 @@ def build_validators(
     Every condition shares the one ``cache``: contours and CQTs are keyed on each
     condition's *resolved* audio path, so they cannot collide and no per-tag
     subdirectory is needed. pyin then runs once per file ever rather than at every
-    launch -- what makes a large val set affordable -- and since pyin already
-    parallelises its own FFTs across cores, the per-track loop is left serial rather
-    than stacked under a process pool that only oversubscribes. The demucs condition
-    separates its val audio through the (cached) DemucsSeparator at construction."""
+    launch -- what makes a large val set affordable. The demucs condition separates
+    its val audio through the (cached) DemucsSeparator at construction.
+
+    The per-track loop is serial, and whether that costs anything **depends on the
+    numeric backend**. On macOS/Accelerate pyin's FFTs already spread across cores and
+    a process pool only oversubscribes; on Linux/OpenBLAS (scipy's pocketfft is
+    single-threaded unless handed ``workers``) it pins one core and a pool measures
+    ~4.9x. Serial is the right default because the cache means this is paid once per
+    file ever -- but see ``docs/refactor-plan.md`` before concluding a pool is
+    pointless on a given machine."""
     return {
         tag: OnsetValidator(
             SlakhDataset(

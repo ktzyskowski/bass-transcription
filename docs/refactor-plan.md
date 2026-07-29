@@ -158,11 +158,29 @@ deleted; coverage migrated to `tests/decoders/test_group_contour.py`. Dropped th
 would be dead code; add when one does). Frame harness + `baselines/` left as the
 pitch-tracker research tool.
 
-### parallel.py reuse  ✅ DO (opportunistic)
-Natural `parallel_map` candidates: the `cache_features` and `cached_f0` prep loops
-(embarrassingly parallel per track). Caveat: pyin already parallelizes its FFTs
-internally (see `validation.py`), so measure before stacking a process pool on top.
-Minor.
+### parallel.py reuse  ✅ DO — but the answer is **machine-dependent**
+Natural `parallel_map` candidates: the `Cache.ensure_features` and `Cache.contour`
+prep loops (embarrassingly parallel per track).
+
+The original caveat — "pyin already parallelizes its FFTs internally, so a pool only
+oversubscribes" — is **true on the M3 Max and false on the Linux box**, because it is
+a property of the numeric backend, not of pyin:
+
+| box | backend | pyin cores | pool speedup |
+|---|---|---|---|
+| M3 Max (macOS) | Accelerate (multithreaded) | ~all | ~none (oversubscribes) |
+| 5090 (WSL2, 2026-07-29) | OpenBLAS + scipy pocketfft | **1.1 of 16** | **4.6–4.9x** |
+
+Measured on the Linux box: 7 tracks serial 83.5 s vs 18.0 s with `workers=8`
+(4.64x); in the live cache build, 7.4 contours/min serial vs 36.0/min with
+`workers=12` (4.9x), and 465 contours in 7.7 min (8.1x) once the serial loop was
+mostly hitting cache. scipy's FFT is single-threaded unless passed `workers`, and
+nothing sets it — so on any non-Accelerate backend pyin is effectively serial.
+
+So keep the loops serial *by default* (correct on macOS) but do not treat the
+caveat as settled: **measure on the box you are on**. The win is available without
+touching library code — a script calling `Cache.contour` under `parallel_map` fills
+the same content-addressed keys, and `atomic_write` makes concurrent writers safe.
 
 ### segmenter.py docs  ✅ DO (trivial)
 Add the module/class docstring; it's the one composition point without prose.
