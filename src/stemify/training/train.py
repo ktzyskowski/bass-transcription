@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch import nn
 
 from stemify.cache import Cache
 from stemify.data.slakh import SlakhDataset
@@ -46,30 +46,18 @@ from stemify.training.callbacks import (
     MLflowCallback,
 )
 from stemify.training.config import TrainConfig
-from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import prepare_examples
-from stemify.training.losses import FrameBCELoss
+from stemify.training.recipes import HEADS, RECIPES, SOURCES, Recipe
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
-from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
-
-HEADS = ["onset", "voicing"]
 
 # score_examples' metric keys -> the short leaf name under note/<condition>/, so
 # MLflow groups them: note/stem/f1, note/demucs/recall, ... one section per metric.
 _NOTE_KEY = {
     "note_f1": "f1", "note_precision": "precision",
     "note_recall": "recall", "fragmentation": "fragmentation",
-}
-
-# tag -> (Slakh source, input transform). Target is always the clean stem MIDI,
-# regardless of which source the *features* come from.
-SOURCES: dict[str, tuple[str, AudioTransform]] = {
-    "stem": ("stem", Identity()),
-    "mix": ("mix", Identity()),
-    "demucs": ("mix", DemucsSeparator()),
 }
 
 
@@ -122,6 +110,7 @@ def _eval_fn(
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,
     build_decoder: Callable[[dict], Decoder] | None = None,
+    build_model: Callable[[], nn.Module] = build_model,
 ):
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
     score it through each cached validator (off the training device). Every metric is
@@ -146,7 +135,7 @@ def _eval_fn(
             return HeuristicDecoder()
 
     def eval_fn(state, epoch):
-        model = build_model()
+        model = build_model()  # the recipe's encoder
         # `state` is a Trainer.state_cpu snapshot: the model's weights under "model"
         # and the objective's own parameters under "loss". The decoder is built from
         # the same snapshot, so a structured objective is scored through the
@@ -185,10 +174,6 @@ def _eval_fn(
     return eval_fn
 
 
-def _windows(paths, config: TrainConfig) -> FrameWindowDataset:
-    return FrameWindowDataset(paths, HEADS, config.window_frames, config.hop_frames)
-
-
 def train(
     root: str,
     cache_dir: Path,
@@ -203,7 +188,9 @@ def train(
     batch_log_every: int = 100,
     limit: int | None = None,
     out: Path | None = None,
+    recipe: Recipe | None = None,
 ) -> None:
+    recipe = recipe or RECIPES["frame"]()
     sources = sources or ["stem", "mix"]
     # Validate on every deployment condition (not just clean stems), so the note
     # F1 gap between stem and demucs is visible during training rather than only
@@ -216,29 +203,12 @@ def train(
     # the resolved audio path, so a stem, a mix and a separated mix of the same track
     # land on distinct keys without any tag/split subdirectory to keep them apart --
     # and the val conditions transparently reuse whatever this loop already built.
-    train_paths = []
-    for tag in sources:
-        source, transform = SOURCES[tag]
-        ds = SlakhDataset(root, split="train", source=source, limit=limit)
-        train_paths += prepare_examples(ds, HEADS, cache, transform)
+    # The recipe owns the batch shape: fixed windows for frame BCE, whole tracks for
+    # the semi-CRF, whose objective scans a whole segmentation.
+    train_loader = recipe.train_loader(root, sources, cache, config, limit)
+    val_loader = recipe.val_loader(root, cache, config, val_limit)
 
-    val_ds = SlakhDataset(root, split="validation", source="stem", limit=val_limit)
-    val_paths = prepare_examples(val_ds, HEADS, cache)
-
-    # persistent_workers keeps the worker pool alive between epochs -- without it
-    # the fork cost is paid every epoch and cancels the benefit on short epochs.
-    # It is only valid when there are workers, so gate it.
-    loader_kw: dict = {
-        "batch_size": config.batch_size,
-        "collate_fn": collate,
-        "num_workers": config.num_workers,
-    }
-    if config.num_workers > 0:
-        loader_kw["persistent_workers"] = True
-    train_loader = DataLoader(_windows(train_paths, config), shuffle=True, **loader_kw)
-    val_loader = DataLoader(_windows(val_paths, config), **loader_kw)
-
-    trainer = Trainer(build_model(), FrameBCELoss(HEADS, config.pos_weight), config)
+    trainer = Trainer(recipe.build_model(), recipe.build_loss(config), config)
 
     callbacks: list = [ConsoleCallback()]
     mlflow = None
@@ -254,7 +224,8 @@ def train(
             params={"encoder": "tcn", "sources": ",".join(sources),
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate, "window": config.window_frames,
-                    "train_tracks": len(train_paths)},
+                    "objective": recipe.name,
+                    "train_batches": len(train_loader)},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
         # once; async scores are then just model forwards. Slowest at construction
@@ -271,6 +242,10 @@ def train(
             validators,
             report_dir=cache_dir / "val_reports",
             log_artifact=lambda p, _e: mlflow.log_artifact(p, artifact_path="validation"),
+            # Without these a semi-CRF run would be scored as a freshly-initialised
+            # HeuristicDecoder over its learned cues: plausible numbers, wrong model.
+            build_decoder=recipe.decoder_from,
+            build_model=recipe.build_model,
         )
         callbacks += [
             mlflow,
@@ -326,6 +301,10 @@ def main() -> None:
     ap.add_argument("--val-every", type=int, default=1)
     ap.add_argument("--batch-log-every", type=int, default=100,
                     help="log a smoothed train loss to MLflow every N steps (0 = off)")
+    ap.add_argument("--objective", default="frame", choices=sorted(RECIPES),
+                    help="training objective: 'frame' is per-frame BCE over fixed "
+                         "windows grouped by the heuristic; 'semicrf' trains the "
+                         "segmental decoder jointly with the encoder over whole tracks")
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
@@ -339,7 +318,8 @@ def main() -> None:
         num_workers=args.num_workers,
     )
     train(
-        args.root, args.cache_dir, config, sources=args.sources.split(","),
+        args.root, args.cache_dir, config, recipe=RECIPES[args.objective](),
+        sources=args.sources.split(","),
         val_conditions=args.val_sources.split(","),
         val_limit=args.val_limit, val_every=args.val_every,
         experiment=args.experiment, run_name=args.run_name,
