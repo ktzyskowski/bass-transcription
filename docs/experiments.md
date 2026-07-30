@@ -120,7 +120,7 @@ gold segmentation via the differentiable segmental forward algorithm; batched DP
 on recall (stem 0.55 vs 0.88), so it does not ship. group() remains the shipping
 baseline. The demucs gap is an emission-quality problem → the fix is **end-to-end**.
 
-### Stage 1 POC — end-to-end CRF, first run (2026-07-29, IN FLIGHT)
+### Stage 1 POC — end-to-end CRF, first run (2026-07-29) — ENCOURAGING
 
 The semi-CRF had never been trained end to end: everything existed
 (`SemiCRFRecipe`, `SemiCRFLoss`, `SequenceDataset`, `nll_batch`) but `train.py`
@@ -128,27 +128,65 @@ hardcoded the frame objective. `--objective {frame,semicrf}` wired in 4e5639b.
 
 Deliberately small, to answer "does it learn at all" before any scale work:
 40 stem tracks, **from scratch** (no tcn-v2 checkpoint exists on the 5090 box — it
-stayed on the M3), whole tracks at B=2, 10 epochs, val 20 stem tracks.
-**Not comparable to the 0.729 rows above**, which used the full corpus and three
-sources. The comparison that counts is a `--objective frame` run on the same 40.
+stayed on the M3), whole tracks at B=2, 10 epochs, val 20 stem tracks, ~3.5 min/epoch.
 
-First three epochs, ~3.5 min each:
+| epoch | train NLL | val NLL | note F1 | P | R | frag | onset AP |
+|---|---|---|---|---|---|---|---|
+| 0 | 5025.7 | 2528.3 | 0.171 | 0.450 | 0.106 | 4 | 0.380 |
+| 1 | 3310.5 | 2520.5 | 0.146 | 0.412 | 0.088 | 10 | 0.439 |
+| 2 | 3383.9 | 2334.9 | 0.211 | 0.512 | 0.133 | 11 | 0.399 |
+| 3 | 2909.9 | 1714.6 | 0.853 | 0.895 | 0.815 | 206 | 0.409 |
+| 4 | 2353.6 | 1658.9 | 0.704 | 0.849 | 0.601 | 52 | 0.383 |
+| 5 | 2028.1 | 1528.3 | 0.398 | 0.690 | 0.280 | 5 | 0.440 |
+| 6 | 2023.0 | 1318.2 | 0.860 | 0.871 | 0.849 | 381 | 0.456 |
+| 7 | 2302.3 | 1514.0 | 0.858 | 0.838 | 0.878 | 604 | 0.403 |
+| 8 | 1915.3 | 1293.3 | **0.862** | 0.877 | 0.848 | 345 | 0.474 |
+| 9 | 2054.6 | 1349.0 | — | — | — | — | — |
 
-| epoch | train NLL | val NLL | note F1 | P | R | onset AP |
-|---|---|---|---|---|---|---|
-| 0 | 5025.7 | 2528.3 | 0.171 | 0.450 | 0.106 | 0.380 |
-| 1 | 3310.5 | 2520.5 | 0.146 | 0.412 | 0.088 | 0.439 |
-| 2 | 3383.9 | 2334.9 | — | — | — | — |
+**Stem F1 0.862 from 40 tracks and 40 minutes**, against tcn-v2's 0.878 from 1260
+tracks x 3 sources. Recall 0.848 — no collapse.
 
-**Early read (3 of 10 epochs — do not treat as a verdict).** The objective trains:
-NLL falls and `onset_ap` *rises* (0.380 → 0.439), so the encoder's cues are getting
-better. But note F1 **falls** (0.171 → 0.146), driven by recall (0.106 → 0.088).
+**Correction to an earlier read in this file.** At 3 epochs this was recorded as
+showing "the same recall-collapse signature Config A showed" (recall 0.09 vs
+`group()`'s 0.90). That was wrong: the collapse is a *transient early-training phase*
+and it broke out at epoch 3, recall 0.13 -> 0.82 in one epoch. Do not read the first
+three epochs of a from-scratch CRF as the failure mode.
 
-Cues improving while notes get worse points at the decoder, not the emissions — and
-recall ~0.09 against `group()`'s 0.90 on stems is the **same recall-collapse signature
-Config A showed** (0.55 there). The end-to-end thesis was that joint training would
-fix that by sharpening emissions; three epochs of a from-scratch encoder is far too
-early to conclude it has not, but it is not yet showing signs of doing so.
+The striking part is that F1 0.862 is reached on **weak cues** — `onset_ap` only 0.474,
+`onset_best_f1` 0.569. If that holds up it is the argument *for* the CRF: it is
+extracting good notes from emissions the heuristic would struggle with. It also
+partly answers the Config A diagnosis, since joint training did lift the decoder past
+what frozen emissions allowed.
+
+**Not yet established, and this is not a verdict:**
+
+- **No baseline.** A `--objective frame` run on the same 40 tracks / same 20 val
+  tracks was never run (launched, then cancelled). Without it 0.862 is uninterpretable
+  — a 20-track val subset may simply be easier than the 252-track one behind 0.878.
+- **Unstable.** F1 swings 0.85 -> 0.70 -> 0.40 -> 0.86 across consecutive epochs, and
+  val NLL was still falling at epoch 8. Ten epochs from scratch is not converged.
+- **Confounded step count.** Frame BCE at B=16 over 256-frame windows gets ~412
+  gradient steps/epoch; the semi-CRF at B=2 over whole tracks gets 20. Same "epochs"
+  is not the same amount of learning, and any comparison has to say which it controls.
+- **Small val.** 20 tracks vs the 252 behind every other row in this file.
+
+#### On the `fragmentation` column
+
+It is a **raw count of false-positive notes**, not a ratio: estimates whose onset
+falls inside a reference note's span *and* carries that note's pitch — a real note the
+segmenter shredded (`metrics/note/fragmentation.py`). So it scales with how many notes
+are emitted at all, which is why the early epochs read low (4, 10, 11): the model was
+barely emitting notes, not behaving well. Reading it as "over-segmentation got 30x
+worse by epoch 6" would be backwards.
+
+**Two caveats before using it as a diagnostic.** First, without the false-positive
+total it cannot be turned into a share, so it is not comparable across runs with
+different recall. Second — and worth fixing — `Fragmentation` splits false positives
+into *three* buckets (`fragmentation` / `rest` / `interior_offpitch`), and that split
+is precisely the "which head is worth building" diagnostic this file's error
+decomposition was built on. `training/validation.py` surfaces only the first and
+discards the other two. Logging all three (plus `fp`) is a small change and would make
+every future run self-diagnosing.
 
 ## Future experiments
 
