@@ -242,8 +242,83 @@ different recall. Second — and worth fixing — `Fragmentation` splits false p
 into *three* buckets (`fragmentation` / `rest` / `interior_offpitch`), and that split
 is precisely the "which head is worth building" diagnostic this file's error
 decomposition was built on. `training/validation.py` surfaces only the first and
-discards the other two. Logging all three (plus `fp`) is a small change and would make
-every future run self-diagnosing.
+discards the other two.
+
+**Done 2026-07-30** (commit `7eb78ff`): all four are logged now — `fragmentation`,
+`fp_rest`, `fp_interior_offpitch` and the `fp` total. It paid for itself immediately;
+the bichannel result below is invisible without it.
+
+### Bichannel (bass, mix) input — 2026-07-30
+
+Feed the encoder two stacked CQTs: the bass to transcribe in channel 0, the mixture it
+came from in channel 1. 37 train tracks / 19 val tracks, 10 epochs, frame BCE +
+`HeuristicDecoder`, best-F1 epoch reported. Each pair is on an **identical track set**
+(see "the control that was nearly missed" below).
+
+| condition | ch | F1 | P | R | FP | frag | rest | offpitch | onset AP |
+|---|---|---|---|---|---|---|---|---|---|
+| `stem-solo` | 1 | 0.9375 | 0.9134 | 0.9628 | 565 | 196 | 268 | 101 | 0.9609 |
+| `stem-mix` | 2 | **0.9419** | 0.9242 | 0.9602 | 487 | 206 | **179** | 102 | 0.9395 |
+| `demucs` | 1 | 0.7103 | 0.6590 | 0.7704 | 2467 | 644 | 714 | 1109 | 0.7376 |
+| `demucs-mix` | 2 | 0.7111 | 0.6608 | 0.7696 | 2444 | 538 | 744 | 1162 | **0.8503** |
+
+`stem-solo` replicated across two independent runs to **0.0003** F1 (0.9372 / 0.9375),
+so ~1-point differences are above seed noise even at this scale.
+
+**On clean stems the mix channel does exactly what the hypothesis predicted.** F1
++0.44. More to the point, the only bucket that moved is `rest` — notes invented where
+no bass sounds — down 33% (268 → 179), with `frag` and `offpitch` flat. That is the
+drum-bleed prediction: the mixture tells the model whether a transient in the bass
+belongs to the bass. Aggregate precision alone would have read as "+0.4, probably
+noise".
+
+**On separated audio it is a null on F1 (+0.0007) and a large win on cue quality
+(onset AP 0.7376 → 0.8503, +11.3).** That dissociation is the finding. The mix channel
+makes the encoder substantially better at saying *where the notes are* on damaged
+audio, and none of it reaches note F1, because the residual is not an onset problem:
+`interior_offpitch` is 1109 of 2467 FPs on `demucs` and does not move. Those are notes
+at the right time and the **wrong pitch**, and pitch comes from pyin over the
+separated audio — `HeuristicDecoder` reads it off the contour no matter what the
+encoder saw. The mixture channel has no route to it.
+
+**The model is genuinely reading channel 1**, so the null is not "it ignored the mix".
+Zeroing channel 1 at inference (scratchpad ablation, best-val checkpoints):
+
+| model | F1 as trained | F1 mix muted | delta | `fp_rest` muted |
+|---|---|---|---|---|
+| `stem-mix` | 0.9418 | 0.9281 | −0.014 | 103 (from 207) |
+| `demucs-mix` | 0.7040 | **0.5358** | **−0.168** | 1622 (from 764) |
+
+On separated audio the model *depends* on the mixture: without it, F1 collapses 17
+points and invented notes more than double. Caveat: a zeroed channel is
+out-of-distribution rather than "absent", so the magnitude overstates the dependence —
+but the direction and the fact of it are not in doubt.
+
+**What this changes.** Bichannel is worth keeping — it is nearly free (one extra
+cached CQT, no re-rendering) and it strictly improves the encoder. But it does **not**
+close the stem→demucs gap, and the reason is now measured rather than guessed: that
+gap is pitch-dominated. The `interior_offpitch` bucket alone is 11x larger on `demucs`
+than on `stem` (101 → 1109), while `rest` is only 2.7x. This is direct evidence for
+the learned pitch head (#2) over anything further on the onset side, and it partly
+supersedes the priority table below, which assumed bichannel reached "demucs emission
+quality" — it reaches emission quality precisely, and emission quality turns out not
+to be the binding constraint.
+
+**Caveats.** One seed per arm. 19 val tracks, so absolute numbers are not comparable
+to the 252-track rows elsewhere in this file. `stem-mix` improved notes while its
+onset AP *fell* (0.9609 → 0.9395), which is unexplained. And the checkpoints the
+ablation used are best-*val-loss*, not best-F1, so its baseline differs slightly from
+the table above.
+
+#### The control that was nearly missed
+
+`stem` keeps two-bass tracks — a stem is unambiguous whatever else sounds — while any
+condition that feeds the mixture must filter them out, since one reference contour
+cannot describe a mixture with two basses. At `--limit 40` that is **33 tracks against
+37, sharing 26**. Comparing `stem` to `stem-mix` would have varied the input channels
+*and* the corpus, and the F1 differences here are small enough that it would have
+swamped the result. `stem-solo` exists as the matched single-channel control;
+`demucs` needs no twin because it already filters the same way.
 
 ## Future experiments
 
@@ -257,9 +332,16 @@ reach changes the ordering, so the revised priority is:
 | # | lever | reaches | cost | status |
 |---|---|---|---|---|
 | 0 | pitch-error sizing analysis | — (measurement) | hours, no training | not started |
-| 1 | bichannel (bass, mix) input | demucs emission quality | small | not started |
+| 1 | bichannel (bass, mix) input | demucs emission quality | small | **done — see above** |
 | 2 | learned pitch head | pyin pitch/octave errors | large | gated on #0 |
 | 3 | semi-CRF end-to-end | onset over-segmentation | built | POC running |
+
+> **Superseded in part by the bichannel result (2026-07-30).** #1 is done and its
+> reasoning below was right about the *mechanism* and wrong about the *payoff*: it does
+> reach demucs emission quality (onset AP +11.3), and emission quality turns out not to
+> be what caps note F1 on separated audio — pitch is. The ordering that follows from
+> the measurement is #0 then #2. Keep bichannel on regardless; it is nearly free and
+> strictly improves the encoder.
 
 **Why the reorder.** The three levers are *orthogonal* — they change the encoder's
 input, where pitch comes from, and how cues become notes respectively — so they
@@ -276,8 +358,8 @@ differs is the error mass each can reach:
 - **Bichannel is cheaper than the CRF was and aims at a bigger gap.** The stem→demucs
   drop is ~15 F1 at every stage, the largest single identified loss.
   `_ConvFrontend` already takes a channel count, so `(B,1,F,T) -> (B,2,F,T)` is nearly
-  a one-liner; **both channels' CQTs are already cached** (`SOURCES` builds stem, mix
-  and demucs-separated bass, all content-addressed); and it runs on the proven frame
+  a one-liner; **both channels' CQTs are already cached** (the conditions table builds
+  stem, mix and demucs-separated bass, all content-addressed); and it runs on the proven frame
   BCE + heuristic path, needing none of the semi-CRF training machinery. It is a
   dataset change plus a channel dimension.
 - **Size the pitch lever before building it.** #0 is nearly free and needs no training:
