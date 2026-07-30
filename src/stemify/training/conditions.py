@@ -172,6 +172,22 @@ CONDITIONS: dict[str, Condition] = {
     ),
 }
 
+# The clean-bass condition at each input width. A frame run validates on clean
+# stems whatever it trains on, but it cannot feed a 2-channel model 1-channel
+# windows -- so "the clean condition" depends on the width. Named here, next to the
+# table, because a tag spelled inline in recipes.py is one a rename silently misses:
+# that is exactly how ``val_loader`` came to reference a "stem+mix" that no longer
+# existed, which no test caught because none builds a val loader without the corpus.
+CLEAN_BY_WIDTH: dict[int, str] = {1: "stem", 2: "stem-mix"}
+
+_bad_clean = {
+    w: t for w, t in CLEAN_BY_WIDTH.items()
+    if t not in CONDITIONS or CONDITIONS[t].in_channels != w
+}
+if _bad_clean:
+    raise ValueError(f"CLEAN_BY_WIDTH entries do not match CONDITIONS: {_bad_clean}")
+del _bad_clean
+
 _unsafe = sorted(t for t in CONDITIONS if not _METRIC_SAFE.match(t))
 if _unsafe:
     raise ValueError(

@@ -35,7 +35,7 @@ from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.encoders.heads import onset_head, voicing_head
 from stemify.encoders.networks import TCN
 from stemify.encoders.tagger import FrameTagger
-from stemify.training.conditions import CONDITIONS, resolve
+from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS, resolve
 from stemify.training.config import TrainConfig
 from stemify.training.datasets import frame as frame_ds
 from stemify.training.datasets import sequence as sequence_ds
@@ -159,9 +159,8 @@ class FrameRecipe(Recipe):
 
     def val_loader(self, root, cache, config, val_limit) -> DataLoader:
         # Clean stems, but through the *same channel layout* the model was built
-        # for -- a 2-channel model cannot be fed 1-channel val windows. "stem" and
-        # "stem+mix" are the respective clean-bass conditions.
-        condition = CONDITIONS["stem+mix" if self.in_channels == 2 else "stem"]
+        # for -- a 2-channel model cannot be fed 1-channel val windows.
+        condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
         tracks = self._tracks(root, "validation", cache, condition, val_limit)
         return DataLoader(
             self._windows(tracks, config),

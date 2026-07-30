@@ -193,3 +193,26 @@ def test_every_condition_tag_can_appear_in_a_metric_name():
 
     safe = re.compile(r"^[A-Za-z0-9_.:-]+$")
     assert [t for t in CONDITIONS if not safe.match(t)] == []
+
+
+def test_every_recipe_width_has_a_clean_condition_of_that_width():
+    # This is the assertion that was missing. val_loader picked its clean condition
+    # by an inline tag, a rename left it pointing at a "stem+mix" that no longer
+    # existed, and nothing caught it -- building a val loader needs the corpus, so
+    # no test reached that line. Checking the *table* needs no corpus at all.
+    from stemify.training.conditions import CLEAN_BY_WIDTH
+
+    for width, tag in CLEAN_BY_WIDTH.items():
+        assert tag in CONDITIONS, f"clean condition {tag!r} for width {width} is gone"
+        assert CONDITIONS[tag].in_channels == width
+
+
+def test_a_clean_condition_exists_for_every_width_a_condition_can_have():
+    # A condition whose width has no clean twin cannot be validated, and that only
+    # surfaces after the training loader is already built.
+    from stemify.training.conditions import CLEAN_BY_WIDTH
+
+    widths = {c.in_channels for c in CONDITIONS.values()}
+    assert widths <= set(CLEAN_BY_WIDTH), (
+        f"no clean val condition for width(s) {sorted(widths - set(CLEAN_BY_WIDTH))}"
+    )
