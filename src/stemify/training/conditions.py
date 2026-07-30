@@ -24,6 +24,7 @@ question -- "what does the model look at" against "what is it trained to optimis
 apply at all.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,14 +86,14 @@ class Condition:
         mixture, so the model would be shown two basses and scored against one.
 
         For the three single-channel conditions this reproduces the previous
-        ``SlakhDataset`` default exactly; what it adds is that ``stem+mix`` is
+        ``SlakhDataset`` default exactly; what it adds is that ``stem-mix`` is
         filtered too, which the old ``source``-only rule would have missed -- its
         source is ``stem``, so nothing about it looked mix-flavoured.
 
         ``solo_only`` overrides the derivation. That exists for *controls*: a plain
         ``stem`` run keeps two-bass tracks (a stem is unambiguous whatever else the
         track contains, so they are free extra data), which means it and
-        ``stem+mix`` train on different track sets -- at ``--limit 40``, 33 tracks
+        ``stem-mix`` train on different track sets -- at ``--limit 40``, 33 tracks
         against 37, sharing 26. Comparing them would vary the input channels and
         the corpus at once.
         """
@@ -132,6 +133,14 @@ def _mono(name: str, source: str, transform: AudioTransform) -> Condition:
     return Condition(name, source, (Channel("bass", transform),))
 
 
+# A condition's tag becomes a path segment in every metric it produces
+# (``note/<tag>/f1``), and MLflow accepts only these characters in a metric name.
+# Checked at import because the alternative is what happened with a "+" separator:
+# training ran to completion, exited 0, and every validation metric was rejected
+# one epoch at a time inside an async callback that swallowed the error.
+_METRIC_SAFE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+
+
 # The conditions a run can name. Single-channel entries reproduce the old
 # ``SOURCES`` table exactly, so every existing result stays reproducible by tag.
 #
@@ -143,31 +152,39 @@ CONDITIONS: dict[str, Condition] = {
     "mix": _mono("mix", "mix", Identity()),
     "demucs": _mono("demucs", "mix", DemucsSeparator()),
     # Bichannel: the bass to transcribe, plus the mixture it was drawn from.
-    # "demucs+mix" is the deployment-shaped one -- a separator's output is what a
-    # user's upload actually becomes -- while "stem+mix" is its clean-bass control,
+    # "demucs-mix" is the deployment-shaped one -- a separator's output is what a
+    # user's upload actually becomes -- while "stem-mix" is its clean-bass control,
     # isolating what the mixture channel adds from what separation damage costs.
-    "stem+mix": Condition(
-        "stem+mix", "stem",
+    "stem-mix": Condition(
+        "stem-mix", "stem",
         (Channel("bass", Identity()), Channel("mix", Identity())),
     ),
-    "demucs+mix": Condition(
-        "demucs+mix", "mix",
+    "demucs-mix": Condition(
+        "demucs-mix", "mix",
         (Channel("bass", DemucsSeparator()), Channel("mix", Identity())),
     ),
-    # The matched control for "stem+mix": one channel, but the same single-bass
+    # The matched control for "stem-mix": one channel, but the same single-bass
     # track set, so an A/B against it varies the input channels and nothing else.
     # "demucs" needs no such twin -- it already filters to single-bass tracks, so
-    # "demucs" vs "demucs+mix" is controlled as it stands.
+    # "demucs" vs "demucs-mix" is controlled as it stands.
     "stem-solo": Condition(
         "stem-solo", "stem", (Channel("bass", Identity()),), solo_only=True
     ),
 }
 
+_unsafe = sorted(t for t in CONDITIONS if not _METRIC_SAFE.match(t))
+if _unsafe:
+    raise ValueError(
+        f"condition tag(s) {_unsafe} cannot appear in a metric name; use only "
+        "letters, digits, and _ . : -"
+    )
+del _unsafe
+
 
 def resolve(names: list[str]) -> list[Condition]:
     """Condition tags -> conditions, rejecting a set the model cannot have one shape for.
 
-    Mixing widths is the failure worth catching here: ``--sources stem,demucs+mix``
+    Mixing widths is the failure worth catching here: ``--sources stem,demucs-mix``
     names one 1-channel and one 2-channel condition, and concatenating them yields
     batches whose channel count depends on which track was drawn. That surfaces
     deep inside the first conv as a shape error, or -- worse, if the loader happens

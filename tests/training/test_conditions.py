@@ -60,7 +60,7 @@ def test_single_channel_conditions_stay_single_channel():
 def test_bichannel_conditions_put_the_bass_first():
     # Channel 0 is what the contour and every target describe. Reversed, the model
     # would be trained to transcribe the mixture with the bass as context.
-    for tag in ("stem+mix", "demucs+mix"):
+    for tag in ("stem-mix", "demucs-mix"):
         condition = CONDITIONS[tag]
         assert condition.in_channels == 2
         assert condition.primary is condition.channels[0]
@@ -71,11 +71,11 @@ def test_bichannel_conditions_put_the_bass_first():
 @pytest.mark.parametrize(
     "tag, expected",
     [("stem", False), ("mix", True), ("demucs", True),
-     ("stem+mix", True), ("demucs+mix", True)],
+     ("stem-mix", True), ("demucs-mix", True)],
 )
 def test_mix_bearing_conditions_keep_only_single_bass_tracks(tag, expected):
     # With two basses sounding, one reference contour cannot describe the mixture.
-    # "stem+mix" is the case the old source-only rule would have missed: its Slakh
+    # "stem-mix" is the case the old source-only rule would have missed: its Slakh
     # source is "stem", so nothing about the tag looks mix-flavoured.
     assert CONDITIONS[tag].unambiguous_only is expected
 
@@ -87,12 +87,12 @@ def test_resolve_rejects_mixed_channel_widths():
     # One model has one input shape. Concatenated, these would yield batches whose
     # channel count depends on which track was drawn.
     with pytest.raises(ValueError, match="agree on input channel count"):
-        resolve(["stem", "demucs+mix"])
+        resolve(["stem", "demucs-mix"])
 
 
 def test_resolve_accepts_a_uniform_width_set():
-    assert [c.name for c in resolve(["stem+mix", "demucs+mix"])] == [
-        "stem+mix", "demucs+mix"
+    assert [c.name for c in resolve(["stem-mix", "demucs-mix"])] == [
+        "stem-mix", "demucs-mix"
     ]
 
 
@@ -105,7 +105,7 @@ def test_resolve_rejects_an_unknown_tag():
 # channel resolution                                                           #
 # --------------------------------------------------------------------------- #
 def test_channels_reading_one_file_through_different_transforms_stay_distinct(tmp_path):
-    # "demucs+mix" is exactly this: both channels read the track's mix.flac and
+    # "demucs-mix" is exactly this: both channels read the track's mix.flac and
     # differ only in the transform. If they collided, the model would be handed the
     # same array twice and the second channel would carry no information at all.
     mix = tmp_path / "mix.wav"
@@ -148,7 +148,7 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
         items.append(_Item(f"trk{i}", bass, mix))
 
     condition = Condition(
-        "stem+mix", "stem", (Channel("bass", Identity()), Channel("mix", Identity()))
+        "stem-mix", "stem", (Channel("bass", Identity()), Channel("mix", Identity()))
     )
     per_track = condition.channel_paths(items, Cache(tmp_path / "cache"))
 
@@ -163,22 +163,33 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
 
 def test_the_stem_control_matches_its_bichannel_twins_track_filter():
     # "stem" keeps two-bass tracks (a stem is unambiguous whatever else sounds), so
-    # it and "stem+mix" train on different corpora -- 33 tracks against 37 at
+    # it and "stem-mix" train on different corpora -- 33 tracks against 37 at
     # --limit 40. Comparing them would vary the input channels and the data at once.
     assert CONDITIONS["stem"].unambiguous_only is False
     assert CONDITIONS["stem-solo"].unambiguous_only is True
     assert CONDITIONS["stem-solo"].in_channels == 1
     assert (
         CONDITIONS["stem-solo"].unambiguous_only
-        == CONDITIONS["stem+mix"].unambiguous_only
+        == CONDITIONS["stem-mix"].unambiguous_only
     )
 
 
 def test_demucs_needs_no_control_twin():
-    # It already filters to single-bass tracks, so demucs vs demucs+mix is
+    # It already filters to single-bass tracks, so demucs vs demucs-mix is
     # controlled as it stands -- the deployment-shaped comparison needs no extra tag.
     assert (
         CONDITIONS["demucs"].unambiguous_only
-        == CONDITIONS["demucs+mix"].unambiguous_only
+        == CONDITIONS["demucs-mix"].unambiguous_only
     )
-    assert CONDITIONS["demucs"].source == CONDITIONS["demucs+mix"].source
+    assert CONDITIONS["demucs"].source == CONDITIONS["demucs-mix"].source
+
+
+def test_every_condition_tag_can_appear_in_a_metric_name():
+    # A tag becomes a path segment in every metric it produces (note/<tag>/f1), and
+    # MLflow rejects anything outside this set. A "+" separator got through review
+    # once: training ran to completion and exited 0 while every validation metric
+    # was refused, one epoch at a time, inside a callback that swallowed the error.
+    import re
+
+    safe = re.compile(r"^[A-Za-z0-9_.:-]+$")
+    assert [t for t in CONDITIONS if not safe.match(t)] == []

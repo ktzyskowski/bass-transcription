@@ -45,8 +45,8 @@ def test_a_single_channel_checkpoint_round_trips(tmp_path):
 
 def test_a_bichannel_checkpoint_round_trips(tmp_path):
     # Without reading in_channels back this raises on the first conv's weights.
-    recipe = FrameRecipe(["demucs+mix"])
-    model = load_tagger(_save(tmp_path, recipe, in_channels=2, conditions=["demucs+mix"]))
+    recipe = FrameRecipe(["demucs-mix"])
+    model = load_tagger(_save(tmp_path, recipe, in_channels=2, conditions=["demucs-mix"]))
     assert model.in_channels == 2
     assert _encode(model, 2).onset.shape == (24,)
 

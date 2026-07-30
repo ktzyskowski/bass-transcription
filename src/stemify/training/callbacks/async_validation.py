@@ -34,16 +34,44 @@ class AsyncValidationCallback(Callback):
         self.every = every
         self._executor = executor or ThreadPoolExecutor(max_workers=1)
         self._pending: list[Future] = []
+        self._delivery_failure: BaseException | None = None
+
+    def _deliver(self, future: Future, epoch: int) -> None:
+        """Hand a finished score to the sink, keeping any failure for the main thread.
+
+        ``concurrent.futures`` *logs* an exception raised inside a done-callback and
+        then discards it, so a sink that rejects what it is handed -- MLflow refusing
+        a metric name, a full disk -- would leave training running happily to
+        completion, exiting 0, with no validation metrics recorded anywhere and only
+        a log line to say so. That is the failure that gets written up as a result.
+        """
+        try:
+            self.sink(future.result(), epoch)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the main thread
+            if self._delivery_failure is None:
+                self._delivery_failure = exc
+
+    def _check_delivery(self) -> None:
+        """Re-raise a swallowed sink failure, on the main thread where it stops the run."""
+        if self._delivery_failure is not None:
+            raise RuntimeError(
+                "async validation ran but its results were never recorded; the run "
+                "would have finished with no validation metrics"
+            ) from self._delivery_failure
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
+        # Checked here, not only at the end, so a sink that rejects everything costs
+        # one epoch rather than a whole run.
+        self._check_delivery()
         if (logs.epoch + 1) % self.every != 0:
             return
         state = logs.snapshot()  # freeze the checkpoint on the main thread
         future = self._executor.submit(self.eval_fn, state, logs.epoch)
-        future.add_done_callback(lambda f, e=logs.epoch: self.sink(f.result(), e))
+        future.add_done_callback(lambda f, e=logs.epoch: self._deliver(f, e))
         self._pending.append(future)
 
     def on_train_end(self, best_epoch: int) -> None:
         for future in self._pending:
             future.result()  # surface any worker exception, and let sinks fire
         self._executor.shutdown(wait=True)
+        self._check_delivery()

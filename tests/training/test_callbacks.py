@@ -100,6 +100,39 @@ def test_async_validation_delivers_to_sink():
     assert delivered == {0: 0.5, 1: 1.5, 2: 2.5}
 
 
+def test_a_sink_that_rejects_its_metrics_fails_the_run():
+    # The real failure this reproduces: MLflow refused a metric name containing "+",
+    # once per epoch, inside a done-callback. concurrent.futures logs such an
+    # exception and discards it, so training ran to completion and exited 0 with no
+    # validation metrics recorded at all -- a result that reads as "no difference".
+    def bad_sink(metrics, step):
+        raise ValueError("Invalid value 'note/a+b/f1' for parameter 'name'")
+
+    cb = AsyncValidationCallback(
+        lambda s, e: {"note_f1": 0.5}, bad_sink, every=1,
+        executor=ThreadPoolExecutor(max_workers=1),
+    )
+    with pytest.raises(RuntimeError, match="never recorded"):
+        _trainer(max_epochs=3).fit(_loader(), callbacks=[cb])
+
+
+def test_a_failing_sink_stops_the_run_early_not_at_the_end():
+    # Checked at each epoch boundary, so a sink that rejects everything costs one
+    # epoch rather than a whole run.
+    scored = []
+
+    def bad_sink(metrics, step):
+        raise ValueError("nope")
+
+    cb = AsyncValidationCallback(
+        lambda s, e: scored.append(e) or {"note_f1": 0.5}, bad_sink, every=1,
+        executor=ThreadPoolExecutor(max_workers=1),
+    )
+    with pytest.raises(RuntimeError, match="never recorded"):
+        _trainer(max_epochs=10).fit(_loader(), callbacks=[cb])
+    assert len(scored) < 10  # stopped well before the run would have ended
+
+
 def test_async_validation_respects_every():
     calls = []
     cb = AsyncValidationCallback(
