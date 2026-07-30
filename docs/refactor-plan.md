@@ -33,6 +33,10 @@ independently testable units:
 - `potentials.py` — the `SemiCRF` `nn.Module` (the ~15 params + `trans_to`).
 - `emissions.py` — `Cues|TensorCues → _Emissions` (+ `TensorCues`, pitch-jump cumsum).
 - `dp.py` — the two recurrences: `log_partition` (forward) and `viterbi`, batched.
+  *(Split further on 2026-07-29 once it had grown a third job: `window.py` for the
+  rolling alpha buffer, `forward.py` for the logsumexp semiring, `viterbi.py` for the
+  max semiring, and `score.py` for scoring one given segmentation — see
+  [gpu-throughput-plan.md](gpu-throughput-plan.md).)*
 - `gold.py` — `gold_segments` (the audible-gap logic — test-dense, bug-prone).
 - `decoder.py` — `SemiCRFDecoder` façade wiring them + `segs_to_notes`.
 
@@ -220,3 +224,18 @@ it's `frames.py` (relocate it, Tier 2). `alignment.py` stays eval-specific.
 5. **#9** `callbacks/` package
 6. **#1** cache unification (design, then rerun on 5090)
 7. **eval-harness redesign** → `LearnedBaseline`, then delete `segmentation/`
+
+---
+
+## Separate track — semi-CRF throughput → **[gpu-throughput-plan.md](gpu-throughput-plan.md)**
+
+A measured plan (2026-07-29) to take the semi-CRF epoch from ~3.5 h to ~3 min. Not a
+code-quality refactor, so it lives in its own doc, but it touches the same files as #7
+and reorders some of the work above: excerpt training, hoisting the segment potentials
+out of the DP's inner loop, whole-loop CUDA-graph capture, and a batched Viterbi for
+validation.
+
+Two findings there correct things believed elsewhere in the repo's history: the
+segmental DP is **launch-bound, not CPU-bound** (an earlier sweep stopped one notch below
+the CPU/CUDA crossover), and **`gold_score` — not the DP — is the largest single cost**
+at 7-70x the graphed DP step, because it loops in Python over gold segments.
