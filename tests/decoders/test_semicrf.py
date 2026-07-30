@@ -16,7 +16,12 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.constants import NOTE, REST, START
-from stemify.decoders.semicrf.forward import batched_log_partition, chunk_log_partition
+from stemify.decoders.semicrf.forward import (
+    batched_log_partition,
+    chunk_log_partition,
+    log_partition,
+)
+from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
 from stemify.decoders.semicrf.emissions import Emissions, build_emissions, pad_emissions
 from stemify.decoders.semicrf.gold import gold_segments
@@ -218,6 +223,92 @@ def _long_emissions(dec, seconds=25.0, seed=0):
         onset=onset, frame_times=times, voicing=voicing,
     )
     return build_emissions(cues, dec.stride)
+
+
+def _all_segmentations(T, dmax):
+    """Every way to tile ``[0, T)`` into labelled spans of length 1..dmax.
+
+    Ground truth by construction -- no recurrence, no dynamic programming, just
+    enumeration. This is what the DP is *supposed* to sum (forward) and maximise
+    (Viterbi) over."""
+    def rec(pos):
+        if pos == T:
+            yield []
+            return
+        for d in range(1, min(dmax, T - pos) + 1):
+            for lab in (NOTE, REST):
+                for tail in rec(pos + d):
+                    yield [(lab, pos, pos + d), *tail]
+    yield from rec(0)
+
+
+def _random_emissions(T, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    ft = np.arange(T) * DT
+    contour = Contour(times=ft, freqs=np.full(T, 110.0, dtype=np.float32))
+    cs = lambda: torch.cumsum(torch.randn(T + 1, generator=g), 0)
+    return Emissions(torch.randn(T, generator=g), cs(), cs(), cs(), ft, contour)
+
+
+def test_log_partition_equals_brute_force_enumeration():
+    # THE correctness test for the forward recurrence. Every other DP test in this
+    # file compares one of our implementations against another -- batched vs single,
+    # chunked vs whole, cpu vs cuda -- which two copies of the *same* wrong recurrence
+    # would pass. This one enumerates all segmentations explicitly and sums them.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T)
+    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+
+    segs = list(_all_segmentations(T, dmax))
+    assert len(segs) > 100, f"only {len(segs)} segmentations -- not a real test"
+    brute = torch.logsumexp(
+        torch.stack([_score_by_loop(dec.pot, e, s, dur_bucket) for s in segs]), dim=0
+    )
+    got = log_partition(dec.pot, e, dmax, dur_bucket)
+    assert torch.allclose(got, brute, atol=1e-4), (
+        f"log Z {got.item()} != brute-force {brute.item()} over {len(segs)} segmentations"
+    )
+
+
+def test_viterbi_equals_brute_force_argmax():
+    # Same ground truth, max semiring: the returned segmentation must be the single
+    # highest-scoring one out of every possible tiling.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T, seed=1)
+    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+
+    scored = [
+        (_score_by_loop(dec.pot, e, s, dur_bucket).item(), s)
+        for s in _all_segmentations(T, dmax)
+    ]
+    best_score, best = max(scored, key=lambda kv: kv[0])
+    got = viterbi(dec.pot, e, dmax, dur_bucket)
+    got_score = _score_by_loop(dec.pot, e, got, dur_bucket).item()
+    assert abs(got_score - best_score) < 1e-4, (
+        f"viterbi scored {got_score}, best possible {best_score}"
+    )
+    assert got == best, f"viterbi returned {got}, brute force says {best}"
+
+
+def test_batched_log_partition_equals_brute_force():
+    # The batched scan is what training actually runs; check it against ground truth
+    # too, not only against the single-track version.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    T, dmax = 7, 3
+    es = [_random_emissions(T, seed=s) for s in (2, 3)]
+    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+
+    segs = list(_all_segmentations(T, dmax))
+    brute = torch.stack([
+        torch.logsumexp(
+            torch.stack([_score_by_loop(dec.pot, e, s, dur_bucket) for s in segs]), dim=0
+        )
+        for e in es
+    ])
+    got = batched_log_partition(dec.pot, pad_emissions(es), dmax, dur_bucket)
+    assert torch.allclose(got, brute, atol=1e-4), f"{got.tolist()} != {brute.tolist()}"
 
 
 def _chunks(e, size, dmax):

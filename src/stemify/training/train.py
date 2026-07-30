@@ -189,6 +189,7 @@ def train(
     limit: int | None = None,
     out: Path | None = None,
     recipe: Recipe | None = None,
+    init_from: Path | None = None,
 ) -> None:
     recipe = recipe or RECIPES["frame"]()
     sources = sources or ["stem", "mix"]
@@ -208,7 +209,25 @@ def train(
     train_loader = recipe.train_loader(root, sources, cache, config, limit)
     val_loader = recipe.val_loader(root, cache, config, val_limit)
 
-    trainer = Trainer(recipe.build_model(), recipe.build_loss(config), config)
+    model = recipe.build_model()
+    if init_from is not None:
+        # Encoder weights only. Every recipe builds the same backbone + heads
+        # (SemiCRFRecipe.build_model defers to FrameRecipe's), so a checkpoint from
+        # one objective initialises another -- which is how a semi-CRF run gets to
+        # start from *good* cues instead of learning the encoder and the potentials
+        # simultaneously from scratch. Strict: a shape mismatch should fail loudly,
+        # not silently leave half the encoder random.
+        ckpt = torch.load(init_from, map_location="cpu", weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
+        if ckpt.get("loss_state"):
+            logger.warning(
+                "%s carries objective parameters (%s); --init-from restores the "
+                "encoder only, so these are dropped",
+                init_from, sorted(ckpt["loss_state"]),
+            )
+        logger.info("initialised encoder from %s", init_from)
+
+    trainer = Trainer(model, recipe.build_loss(config), config)
 
     callbacks: list = [ConsoleCallback()]
     mlflow = None
@@ -305,6 +324,9 @@ def main() -> None:
                     help="training objective: 'frame' is per-frame BCE over fixed "
                          "windows grouped by the heuristic; 'semicrf' trains the "
                          "segmental decoder jointly with the encoder over whole tracks")
+    ap.add_argument("--init-from", type=Path,
+                    help="warm-start the encoder from a checkpoint's state_dict "
+                         "(objective parameters are not restored)")
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
@@ -319,7 +341,7 @@ def main() -> None:
     )
     train(
         args.root, args.cache_dir, config, recipe=RECIPES[args.objective](),
-        sources=args.sources.split(","),
+        init_from=args.init_from, sources=args.sources.split(","),
         val_conditions=args.val_sources.split(","),
         val_limit=args.val_limit, val_every=args.val_every,
         experiment=args.experiment, run_name=args.run_name,

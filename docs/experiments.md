@@ -170,6 +170,63 @@ what frozen emissions allowed.
   is not the same amount of learning, and any comparison has to say which it controls.
 - **Small val.** 20 tracks vs the 252 behind every other row in this file.
 
+#### Frame baseline on the same 40 tracks (2026-07-30) — the semi-CRF loses
+
+| run | best F1 | P | R | frag | onset AP |
+|---|---|---|---|---|---|
+| **frame** (ep 1) | **0.9449** | 0.9279 | 0.9625 | 163 | 0.9302 |
+| frame, independent rerun (ep 1) | 0.9388 | 0.9184 | 0.9601 | 173 | 0.9419 |
+| **semicrf, cold** (ep 8) | 0.8623 | 0.8767 | 0.8483 | 345 | 0.4737 |
+| **semicrf, warm-started** (ep 0) | 0.8317 | 0.8704 | 0.7964 | 277 | 0.5561 |
+
+Frame BCE + `group()` wins by **8.3 F1**. Two frame runs agree to 0.6 points (the
+second is the run cancelled mid-session, which had already finished 9 of 10 epochs at
+~15 s each), so this is not a seed fluke.
+
+Three findings, in order of how much they matter:
+
+1. **The structured objective degrades the encoder.** `--init-from` (added 2026-07-30)
+   warm-starts the encoder from a frame checkpoint. Loaded at `onset_ap` **0.9634**;
+   after *one* epoch of semi-CRF training it read **0.5561**. This reframes the cold
+   run: 0.47 is roughly where this objective drives the encoder regardless of where it
+   starts, so the cold run was not failing to learn good cues -- it was converging to
+   the cue quality the segmental NLL actually prefers. Mechanically that tracks: the
+   NLL only cares about *relative* scores between segmentations, and nothing in it
+   rewards a calibrated per-frame onset probability. **Caveat:** `learning_rate` is
+   1e-3 applied uniformly, and one epoch at full LR is a known way to wreck a
+   pretrained encoder. A low-encoder-LR warm start is the one cheap test not yet run.
+2. **Fragmentation is worse, which is the pointed one** -- killing over-segmentation is
+   the CRF's entire purpose. Frame: 163 fragmentation FPs at R=0.96. semi-CRF: 345 at
+   R=0.85. It finds *fewer* notes and produces *more* shredded-note false positives.
+3. **Three regimes, three losses.** Config A (frozen good emissions) lost to `group()`;
+   cold end-to-end loses; warm-started collapses the cues it was handed.
+
+**The confound, stated plainly:** frame gets ~410 gradient steps/epoch against the
+semi-CRF's 20 -- roughly **20x more updates** at equal "epochs". The semi-CRF's val NLL
+was still falling at epoch 8 while the frame run had plateaued by epoch 2. This is not
+a converged comparison, and it is not a clean architectural verdict.
+
+Also note this val subset is *easier* than the real one -- frame scores 0.945 here
+against tcn-v2's 0.878 on 252 tracks. Same subset for both, so the comparison holds;
+the absolute numbers do not transfer to the table at the top of this file.
+
+#### Is the semi-CRF implementation actually correct?
+
+Worth asking before trusting a negative result. As of 2026-07-30 the DP is **verified
+against ground truth**, not just against itself:
+
+- `test_log_partition_equals_brute_force_enumeration` -- enumerates every tiling of a
+  short sequence explicitly and logsumexps them; matches the forward recurrence.
+- `test_viterbi_equals_brute_force_argmax` -- returns the exact argmax segmentation.
+- `test_batched_log_partition_equals_brute_force` -- same for the batched scan training
+  actually runs.
+
+This matters because every *other* DP test compares one of our implementations against
+another (batched vs single, chunked vs whole, cpu vs cuda) -- checks that two copies of
+the same wrong recurrence would pass. What remains unverified by ground truth is
+`gold_segments`' audible-gap rule, but that is a labelling *policy* rather than a
+recurrence: there is no ground truth for it beyond whether the rule is the right one.
+
 #### On the `fragmentation` column
 
 It is a **raw count of false-positive notes**, not a ratio: estimates whose onset
