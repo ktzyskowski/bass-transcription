@@ -265,6 +265,44 @@ Also note this val subset is *easier* than the real one -- frame scores 0.945 he
 against tcn-v2's 0.878 on 252 tracks. Same subset for both, so the comparison holds;
 the absolute numbers do not transfer to the table at the top of this file.
 
+#### Step-matched result (2026-07-30) — it was not undertraining
+
+The fair test the earlier comparison could not afford. Same 37 `stem-solo` tracks, same
+19 val tracks, TBPTT at 198 steps/epoch; early-stopped at epoch 31 (patience 20, best
+val NLL at epoch 11). **~6,300 gradient steps against the frame baseline's 3,330 —
+nearly 2x, not 1/20th.**
+
+| epoch | train NLL | val NLL | note F1 | P | R | onset AP |
+|---|---|---|---|---|---|---|
+| 4 | 13.47 | 11.55 | 0.8193 | 0.8884 | 0.7602 | 0.474 |
+| 9 | 13.93 | 15.45 | 0.7980 | 0.8423 | 0.7581 | 0.452 |
+| 14 | 8.61 | 14.63 | 0.7900 | 0.8316 | 0.7524 | 0.466 |
+| 19 | 6.59 | 9.49 | **0.8733** | 0.8648 | 0.8819 | 0.462 |
+| 24 | 2.70 | 8.86 | 0.7913 | 0.8110 | 0.7725 | 0.506 |
+| 29 | 1.54 | 12.05 | 0.8403 | 0.8323 | 0.8484 | 0.528 |
+
+**Best semi-CRF 0.8733 vs frame BCE 0.9375 on identical tracks — a 6.4 F1 gap that more
+steps did not close.**
+
+**The failure mode flipped, which is what makes this conclusive.** Train NLL fell 43.96
+→ 1.54 while val NLL oscillated between 7 and 35: the model memorised 37 tracks. The
+previous run stopped while still underfit; this one runs until it is thoroughly overfit,
+and the best note F1 along the way (0.8733) is barely above the old undertrained
+0.8623. There is no longer a "train it longer" story.
+
+**What this does *not* establish.** 37 tracks is tiny, and the two objectives do not see
+it the same way: the frame model draws ~90 overlapping 256-frame windows per track, so
+each of its steps sees a different excerpt, while the semi-CRF walks each track as one
+ordered sequence. The frame path has far more effective diversity per step, which is
+exactly the asymmetry that would make a small-data comparison flatter the frame model.
+So this rules out *undertraining*, not *data starvation*. **The open question is now
+scale, not steps** — and it is a different experiment (more tracks), not a longer one.
+
+`onset_ap` stayed ~0.47–0.53 throughout, against frame's 0.961. Worth noting the CRF
+reads the onset logit as an unnormalised feature with a learned weight, so it is under
+no pressure to produce calibrated per-frame onsets and a low AP is not by itself a
+defect — but here the *note* F1 is worse too, so the decoder is not compensating.
+
 #### Is the semi-CRF implementation actually correct?
 
 Worth asking before trusting a negative result. As of 2026-07-30 the DP is **verified
