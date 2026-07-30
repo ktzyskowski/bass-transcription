@@ -275,11 +275,7 @@ noise".
 **On separated audio it is a null on F1 (+0.0007) and a large win on cue quality
 (onset AP 0.7376 → 0.8503, +11.3).** That dissociation is the finding. The mix channel
 makes the encoder substantially better at saying *where the notes are* on damaged
-audio, and none of it reaches note F1, because the residual is not an onset problem:
-`interior_offpitch` is 1109 of 2467 FPs on `demucs` and does not move. Those are notes
-at the right time and the **wrong pitch**, and pitch comes from pyin over the
-separated audio — `HeuristicDecoder` reads it off the contour no matter what the
-encoder saw. The mixture channel has no route to it.
+audio, and almost none of it reaches note F1. The next section measures why.
 
 **The model is genuinely reading channel 1**, so the null is not "it ignored the mix".
 Zeroing channel 1 at inference (scratchpad ablation, best-val checkpoints):
@@ -294,15 +290,46 @@ points and invented notes more than double. Caveat: a zeroed channel is
 out-of-distribution rather than "absent", so the magnitude overstates the dependence —
 but the direction and the fact of it are not in doubt.
 
-**What this changes.** Bichannel is worth keeping — it is nearly free (one extra
-cached CQT, no re-rendering) and it strictly improves the encoder. But it does **not**
-close the stem→demucs gap, and the reason is now measured rather than guessed: that
-gap is pitch-dominated. The `interior_offpitch` bucket alone is 11x larger on `demucs`
-than on `stem` (101 → 1109), while `rest` is only 2.7x. This is direct evidence for
-the learned pitch head (#2) over anything further on the onset side, and it partly
-supersedes the priority table below, which assumed bichannel reached "demucs emission
-quality" — it reaches emission quality precisely, and emission quality turns out not
-to be the binding constraint.
+#### What actually caps note F1 — pitch or the decoder?
+
+The FP buckets suggested pitch: `interior_offpitch` is 1109 of 2467 FPs on `demucs`
+and grows 11x from `stem` while `rest` grows only 2.7x. **That reading was wrong**,
+and it is worth recording why, because the bucket counts invite it. FP counts are not
+F1 impact — they say nothing about recall — and `interior_offpitch` conflates a true
+pitch error with an over-segmentation fragment whose short span gives pyin a bad pitch
+estimate. An onset failure can present as an offpitch FP.
+
+The direct measurement is to score the *same* estimated notes twice, once with the
+50-cent pitch tolerance and once with pitch ignored (onset-only matching). The gap is
+exactly what a perfect pitch head could buy; what remains below 1.0 is
+onset/voicing/grouping error.
+
+| condition | F1 | F1 pitch-blind | perfect pitch buys | still missing |
+|---|---|---|---|---|
+| `stem-solo` | 0.9342 | 0.9523 | +0.0181 | 0.0477 |
+| `stem-mix` | 0.9418 | 0.9588 | +0.0169 | 0.0412 |
+| `demucs` | 0.7103 | 0.8027 | +0.0924 | **0.1973** |
+| `demucs-mix` | 0.7040 | 0.8046 | +0.1006 | **0.1954** |
+
+**Onset/voicing/grouping is ~2x the pitch lever, on clean stems and separated audio
+alike.** On `demucs`, 0.197 F1 is still missing with pitch already perfect, against
+0.092 recoverable by fixing pitch entirely. Pitch-blind precision is **0.746** against
+recall 0.873 — a quarter of emitted notes are spurious when pitch cannot be blamed —
+so the residual is dominated by *spurious notes*, not missed ones and not pitch.
+
+**And the decoder, not the emissions, is what wastes the bichannel gain.** Onset AP
+rose 11.3 points; pitch-blind note F1 rose **0.24** points. Sweeping
+`HeuristicDecoder.onset_threshold` across 0.1–0.7 moves demucs pitch-blind F1 by less
+than 0.005, with the 0.5 default already at optimum — so this is not a miscalibrated
+threshold. Peak-pick + voicing-threshold + min-gap grouping simply cannot convert a
+better-ordered onset curve into better notes.
+
+**What this changes.** Bichannel is worth keeping — nearly free, and it strictly
+improves the encoder. But the lever with the error mass behind it is the **cue→note
+step**, not the pitch head: a note verifier over frozen cues has a ceiling of ~+0.13
+pitch-blind F1 (perfect precision at unchanged recall 0.873 → 0.931), against +0.09
+for perfect pitch. That supersedes the priority table below, which put the pitch head
+at #2 and assumed bichannel would close the demucs gap.
 
 **Caveats.** One seed per arm. 19 val tracks, so absolute numbers are not comparable
 to the 252-track rows elsewhere in this file. `stem-mix` improved notes while its
@@ -336,12 +363,19 @@ reach changes the ordering, so the revised priority is:
 | 2 | learned pitch head | pyin pitch/octave errors | large | gated on #0 |
 | 3 | semi-CRF end-to-end | onset over-segmentation | built | POC running |
 
-> **Superseded in part by the bichannel result (2026-07-30).** #1 is done and its
-> reasoning below was right about the *mechanism* and wrong about the *payoff*: it does
-> reach demucs emission quality (onset AP +11.3), and emission quality turns out not to
-> be what caps note F1 on separated audio — pitch is. The ordering that follows from
-> the measurement is #0 then #2. Keep bichannel on regardless; it is nearly free and
-> strictly improves the encoder.
+> **Superseded by the bichannel result (2026-07-30).** #1 is done, and its reasoning
+> below was right about the *mechanism* and wrong about the *payoff*: it reaches demucs
+> emission quality (onset AP +11.3) and emission quality is not what caps note F1.
+> The pitch-blind scoring above says the cue→note step is worth ~2x the pitch head
+> (0.197 vs 0.092 F1 on `demucs`), so the revised order is:
+>
+> | # | lever | reaches | evidence |
+> |---|---|---|---|
+> | 1 | note verifier head over frozen cues | spurious notes (pitch-blind P 0.746) | ceiling ~+0.13 F1 |
+> | 2 | pitch-error sizing, then a pitch head | pyin pitch/octave | ceiling +0.09 F1 |
+> | 3 | semi-CRF | same cue→note step as #1 | lost twice; see below |
+>
+> Keep bichannel on regardless; it is nearly free and strictly improves the encoder.
 
 **Why the reorder.** The three levers are *orthogonal* — they change the encoder's
 input, where pitch comes from, and how cues become notes respectively — so they
