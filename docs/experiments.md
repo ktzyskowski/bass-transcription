@@ -206,6 +206,38 @@ second is the run cancelled mid-session, which had already finished 9 of 10 epoc
 > step *and* ~7x more steps per epoch) or CUDA-graph capture of the DP (measured 22x).
 > Both are built and parked.
 
+#### Truncated BPTT, so the step-matched run is affordable (2026-07-30)
+
+Chunked training is now wired (`--objective semicrf-tbptt`). Measured on the 37-track
+`stem-solo` set:
+
+| | whole-track | chunked (TBPTT) |
+|---|---|---|
+| gradient steps / epoch | 19 | **198** |
+| seconds / epoch | 219 | **60** |
+| **steps / second** | 0.087 | **3.3 (38x)** |
+| batch size | 2 | 8 |
+| padding waste | pads to the longest track (~40%) | none, static shapes |
+
+So a step-matched run went from ~12 hours to ~80 minutes. The CUDA-graph capture of the
+DP (measured 22x earlier) is **still parked and now lower priority** — chunking bought
+the throughput more cheaply, and the two multiply if it is ever needed.
+
+**Why this is the same objective, not an approximation.** The per-chunk losses
+telescope: with `A_0 = 0` and the carry detached between chunks,
+`Σ_k [(A_k − A_{k−1}) − S_k(gold)] == log Z − score(gold)` exactly, while each term's
+gradient reaches only its own chunk's activations. `tests/training/test_tbptt.py`
+asserts the summed per-chunk losses equal the whole-track NLL.
+
+**A silent bug this uncovered.** `ChunkedSequenceDataset` had a `right_context` — frames
+past a chunk's end so the TCN's 65-frame receptive field does not read zero-padding at
+the edge — but `chunk_log_partition` scanned to the *full* window width, so any non-zero
+margin left the carry `right` frames past where the next chunk resumed and those frames
+were scanned twice. Every shape still matches, nothing raises, and the loss still falls;
+only the log Z equality catches it. The default of 0 is why the existing carry tests were
+green — they never exercised the parameter the dataset already had. There is now a
+negative control pinning that scanning the margin *does* corrupt the result.
+
 Three findings, in order of how much they matter:
 
 1. **The structured objective degrades the encoder.** `--init-from` (added 2026-07-30)
