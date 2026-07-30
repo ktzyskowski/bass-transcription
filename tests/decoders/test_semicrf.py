@@ -15,8 +15,10 @@ import torch
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
-from stemify.decoders.semicrf.constants import NOTE, REST
-from stemify.decoders.semicrf.emissions import Emissions, build_emissions
+from stemify.decoders.semicrf.constants import NOTE, REST, START
+from stemify.decoders.semicrf.forward import batched_log_partition, chunk_log_partition
+from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
+from stemify.decoders.semicrf.emissions import Emissions, build_emissions, pad_emissions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
 
@@ -81,6 +83,299 @@ def test_gold_closes_a_note_off_artifact_gap():
     note_idx = [k for k, (lab, _, _) in enumerate(gold) if lab == NOTE]
     between = gold[note_idx[0] : note_idx[-1] + 1]
     assert all(lab == NOTE for lab, _, _ in between)
+
+
+def _score_by_loop(pot, e, gold, dur_bucket):
+    """The pre-vectorisation reference: one segment at a time, straight from the
+    definition. Kept in the test rather than the library so the fast path is pinned
+    against an independent implementation, not against itself."""
+    score = e.onset_logit.new_zeros(())
+    prev = START
+    for label, i, j in gold:
+        idx = torch.tensor([i], device=e.device)
+        if label == NOTE:
+            unary = pot.note_potentials(e, idx, j, dur_bucket)[0]
+        else:
+            unary = pot.rest_potentials(e, idx, j)[0]
+        trans = pot.init[label] if prev == START else pot.trans[prev, label]
+        score = score + unary + trans
+        prev = label
+    return score
+
+
+def _fitted_potentials(dec):
+    """Move the potentials off their symmetric init, so a bug that happens to cancel
+    at w=1/bias=0 cannot pass."""
+    with torch.no_grad():
+        dec.pot.w_on.fill_(0.7)
+        dec.pot.w_v.fill_(1.3)
+        dec.pot.w_u.fill_(0.4)
+        dec.pot.w_pitch.fill_(-0.9)
+        dec.pot.b_note.fill_(0.25)
+        dec.pot.b_rest.fill_(-0.4)
+        dec.pot.dur.copy_(torch.linspace(-1.0, 1.0, dec.pot.dur.numel()))
+        dec.pot.trans.copy_(torch.tensor([[0.3, -0.2], [-0.5, 0.1]]))
+        dec.pot.init.copy_(torch.tensor([0.6, -0.3]))
+    return dec
+
+
+def test_gold_score_matches_the_per_segment_loop():
+    # The vectorised gold_score evaluates both label branches and selects with
+    # `where`; the loop it replaced branched. They must agree exactly.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    e = build_emissions(cues, dec.stride)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    assert len(gold) > 2  # the test is vacuous if gold is trivial
+
+    fast = segmentation_score(dec.pot, e, gold, dur_bucket)
+    ref = _score_by_loop(dec.pot, e, gold, dur_bucket)
+    assert torch.allclose(fast, ref, atol=1e-5), f"{fast.item()} != {ref.item()}"
+
+
+def test_gold_score_gradient_matches_the_per_segment_loop():
+    # gold_score is half the NLL, so its gradient is what trains the potentials.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    e = build_emissions(cues, dec.stride)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+
+    g_fast = torch.autograd.grad(
+        segmentation_score(dec.pot, e, gold, dur_bucket), list(dec.pot.parameters()),
+        retain_graph=True, allow_unused=True,
+    )
+    g_ref = torch.autograd.grad(
+        _score_by_loop(dec.pot, e, gold, dur_bucket), list(dec.pot.parameters()),
+        allow_unused=True,
+    )
+    for a, b in zip(g_fast, g_ref, strict=True):
+        if a is None or b is None:
+            assert a is None and b is None
+        else:
+            assert torch.allclose(a, b, atol=1e-5)
+
+
+def test_gold_scores_batched_equals_per_track():
+    # The batched form flattens every track's segments into one indexed set and folds
+    # them back with index_add; a mis-grouped `first` mask would mis-assign the START
+    # transition, which only shows up with more than one track.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
+    short = Cues(
+        contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
+        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
+    )
+    ns = _notes([(0.2, 0.9)], [45])
+
+    es = [build_emissions(c, dec.stride) for c in (a, short)]
+    dmax, dur_bucket = dec.pot.grid(es[0].frame_times)
+    golds = [gold_segments(e.frame_times, n, dmax) for e, n in zip(es, [na, ns])]
+
+    batched = segmentation_scores(dec.pot, pad_emissions(es), golds, dur_bucket)
+    single = torch.stack([
+        segmentation_score(dec.pot, e, g, dur_bucket) for e, g in zip(es, golds)
+    ])
+    assert torch.allclose(batched, single, atol=1e-4)
+
+
+def test_gold_scores_handles_a_track_with_no_segments():
+    # An empty note list yields empty gold; index_add must leave that row at zero
+    # rather than dropping the row and shifting every later track's score.
+    dec = SemiCRFDecoder()
+    cues = _two_note_cues([(0.2, 0.9)], [110.0])
+    e = build_emissions(cues, dec.stride)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9)], [45]), dmax)
+
+    scores = segmentation_scores(dec.pot, pad_emissions([e, e]), [[], gold], dur_bucket)
+    assert scores[0].item() == 0.0
+    assert torch.allclose(scores[1], segmentation_score(dec.pot, e, gold, dur_bucket), atol=1e-4)
+
+
+def _truncate(e, n):
+    """The first ``n`` DP frames of an Emissions, so chunks tile it exactly."""
+    return Emissions(
+        e.onset_logit[:n], e.Vc[: n + 1], e.Uc[: n + 1], e.Jc[: n + 1],
+        e.frame_times[:n], e.contour,
+    )
+
+
+def _long_emissions(dec, seconds=25.0, seed=0):
+    """A synthetic track long enough that ``dmax`` (115 DP frames, 4 s) fits several
+    times over -- the module-level fixture is only 80 DP frames, shorter than one
+    ``dmax``, so it cannot exercise a carry at all."""
+    n = round(seconds / DT)
+    times = np.arange(n) * DT
+    rng = np.random.default_rng(seed)
+    onset = rng.uniform(0.01, 0.99, n).astype(np.float32)
+    voicing = rng.uniform(0.01, 0.99, n).astype(np.float32)
+    freqs = np.where(voicing > 0.5, 110.0, 0.0).astype(np.float32)
+    cues = Cues(
+        contour=Contour(times=times, freqs=freqs),
+        onset=onset, frame_times=times, voicing=voicing,
+    )
+    return build_emissions(cues, dec.stride)
+
+
+def _chunks(e, size, dmax):
+    """Split one track's Emissions into fixed-size chunks, each prefixed with up to
+    ``dmax`` frames of left context.
+
+    The context is not optional: the alpha carry covers a boundary-crossing span's
+    *history*, but the span still reads cue values (``onset[i]``, ``Vc[j]-Vc[i]``) from
+    before the chunk. Cumsums are re-based at each chunk's own frame 0, so only
+    differences survive and the absolute offset never matters.
+
+    Yields ``(chunk, context)`` -- ``context`` is short only for chunks whose overlap
+    already reaches global frame 0."""
+    out = []
+    for s in range(0, e.T - size + 1, size):
+        lo = max(0, s - dmax)
+        out.append((
+            Emissions(
+                e.onset_logit[lo : s + size],
+                e.Vc[lo : s + size + 1] - e.Vc[lo],
+                e.Uc[lo : s + size + 1] - e.Uc[lo],
+                e.Jc[lo : s + size + 1] - e.Jc[lo],
+                e.frame_times[lo : s + size],
+                e.contour,
+            ),
+            s - lo,
+        ))
+    return out
+
+
+def _run_chunked(dec, e, size, dmax, dur_bucket):
+    """Scan a track chunk by chunk, carrying alpha. Returns the cumulative log-mass."""
+    carry, A = None, None
+    for chunk, ctx in _chunks(e, size, dmax):
+        A, carry = chunk_log_partition(
+            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx
+        )
+    return A
+
+
+@pytest.mark.parametrize("n_chunks", [2, 5])
+def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
+    # The property the whole truncated-BPTT design rests on: carrying the alpha window
+    # across chunk boundaries reproduces the whole-track log Z exactly. If this drifts,
+    # chunked training optimises a different objective than it reports.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+
+    size = e.T // n_chunks
+    trimmed = _truncate(e, size * n_chunks)  # chunks must tile it exactly
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    got = _run_chunked(dec, trimmed, size, dmax, dur_bucket)
+    assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
+
+
+def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
+    # dmax spans several chunks here, so a span's candidate starts reach back through
+    # more than one boundary -- where an off-by-one in the window or a short context
+    # shows up and a single-boundary test would not.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+
+    size = max(1, dmax // 3)
+    n = e.T // size
+    assert n > 3 and size < dmax, "the point is several chunks inside one dmax"
+    trimmed = _truncate(e, size * n)
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    got = _run_chunked(dec, trimmed, size, dmax, dur_bucket)
+    assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
+
+
+def test_dropping_the_left_context_changes_the_answer():
+    # Guards the invariant the docstring states: the carry alone is not enough. Without
+    # the overlap the scan clamps boundary-crossing starts to the chunk's own frame 0
+    # and scores them against the wrong cues -- silently, so it needs an explicit test.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    size = e.T // 4
+    trimmed = _truncate(e, size * 4)
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+
+    carry, A = None, None
+    for chunk, _ in _chunks(trimmed, size, 0):  # dmax=0 -> no overlap at all
+        A, carry = chunk_log_partition(
+            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, 0
+        )
+    assert not torch.allclose(A, whole, atol=1e-3), (
+        "dropping the left context still matched, so the parity tests above prove "
+        "nothing about the context"
+    )
+
+
+def test_detaching_the_carry_still_reaches_every_chunk():
+    # Truncated BPTT: with the carry detached, a single end-of-track loss would only
+    # reach the last chunk. The telescoping per-chunk loss must put gradient on every
+    # chunk's own cues.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    size = e.T // 4
+    trimmed = _truncate(e, size * 4)
+
+    grads, carry, prev_A = [], None, 0.0
+    for chunk, ctx in _chunks(trimmed, size, dmax):
+        onset = chunk.onset_logit.detach().clone().requires_grad_(True)
+        live = Emissions(
+            onset, chunk.Vc, chunk.Uc, chunk.Jc, chunk.frame_times, chunk.contour
+        )
+        A, carry = chunk_log_partition(
+            dec.pot, pad_emissions([live]), dmax, dur_bucket, carry, ctx
+        )
+        (A - prev_A).sum().backward()
+        carry, prev_A = carry.detach(), A.detach()
+        grads.append(onset.grad)
+
+    assert len(grads) == 4
+    for k, g in enumerate(grads):
+        assert g is not None, f"chunk {k} got no gradient"
+        assert g.abs().sum() > 0, f"chunk {k} gradient is all zero"
+
+
+def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
+    # The training loss is sum_k (A_k - A_{k-1}); with A_0 = 0 that must telescope to
+    # the whole-track log Z, or the reported NLL is not the NLL being optimised.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    size = e.T // 4
+    trimmed = _truncate(e, size * 4)
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+
+    total, carry, prev_A = 0.0, None, 0.0
+    for chunk, ctx in _chunks(trimmed, size, dmax):
+        A, carry = chunk_log_partition(
+            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx
+        )
+        total = total + (A - prev_A)
+        carry, prev_A = carry.detach(), A.detach()
+    assert torch.allclose(total, whole, atol=1e-3), f"{total.item()} != {whole.item()}"
+
+
+def test_chunk_log_partition_rejects_ragged_lengths():
+    # A chunk reads its answer off the end of the window, so a short track would be
+    # read at the wrong position rather than failing loudly.
+    dec = SemiCRFDecoder()
+    a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    ea = build_emissions(a, dec.stride)
+    short = Cues(
+        contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
+        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
+    )
+    dmax, dur_bucket = dec.pot.grid(ea.frame_times)
+    batch = pad_emissions([ea, build_emissions(short, dec.stride)])
+    with pytest.raises(ValueError, match="uniform lengths"):
+        chunk_log_partition(dec.pot, batch, dmax, dur_bucket)
 
 
 def test_nll_is_differentiable_and_trains_down():

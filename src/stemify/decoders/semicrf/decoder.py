@@ -8,7 +8,7 @@ duration potential makes fragmentation globally costly, so the over-segmentation
 heuristic repairs after the fact is instead priced into the objective and never
 produced.
 
-Two faces, one recurrence (``dp``):
+Two faces over the same recurrence:
 
   - ``decode(cues) -> notes`` runs segmental **Viterbi** for the single best
     segmentation, then reads a pitch off ``cues.contour`` per ``note`` span. The
@@ -20,8 +20,9 @@ Two faces, one recurrence (``dp``):
     gives an inference-only score.
 
 Pitch is never invented: it is read from ``cues.contour`` after decoding, exactly as
-the heuristic does. See ``docs/semi-crf.md`` and the sibling modules (``potentials``,
-``emissions``, ``gold``, ``dp``) for the pieces this composes.
+the heuristic does. See ``docs/semi-crf.md`` and the sibling modules for the pieces
+this composes: ``potentials``, ``emissions``, ``window``, ``forward``, ``viterbi``,
+``gold`` (which segmentation is gold) and ``score`` (what a segmentation is worth).
 """
 
 import librosa
@@ -32,20 +33,17 @@ from torch import nn
 from stemify.cues import Cues
 from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf.constants import DMAX_S, DUR_EDGES_S, NOTE, STRIDE
-from stemify.decoders.semicrf.dp import (
-    batched_log_partition,
-    gold_score,
-    log_partition,
-    viterbi,
-)
 from stemify.decoders.semicrf.emissions import (
     Emissions,
     TensorCues,
     build_emissions,
     pad_emissions,
 )
+from stemify.decoders.semicrf.forward import batched_log_partition, log_partition
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.potentials import SemiCRFPotentials
+from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
+from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.notes import NoteEvent
 
 
@@ -86,7 +84,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         e = build_emissions(cues, self.stride, self.device)
         dmax, dur_bucket = self.pot.grid(e.frame_times)
         gold = gold_segments(e.frame_times, notes, dmax)
-        return log_partition(self.pot, e, dmax, dur_bucket) - gold_score(
+        return log_partition(self.pot, e, dmax, dur_bucket) - segmentation_score(
             self.pot, e, gold, dur_bucket
         )
 
@@ -96,18 +94,21 @@ class SemiCRFDecoder(Decoder, nn.Module):
         notes_list: list[list[NoteEvent]],
     ) -> torch.Tensor:
         """Per-track NLL ``(B,)`` for a minibatch: one batched ``log Z`` scan over the
-        padded emissions, minus each track's gold score (gold is cheap and per-track).
-        ``SemiCRFLoss`` means these; grad reaches the encoder through each
-        ``TensorCues``. All tracks share one feature hop, so ``dmax``/``dur_bucket``
-        are computed once."""
+        padded emissions, minus each track's gold score. ``SemiCRFLoss`` means these;
+        grad reaches the encoder through each ``TensorCues``. All tracks share one
+        feature hop, so ``dmax``/``dur_bucket`` are computed once.
+
+        Both halves read the *same* padded batch: gold indices never reach past a
+        track's true length, so the flat padding beyond it is never gathered."""
         emissions = [build_emissions(c, self.stride, self.device) for c in cues_list]
         dmax, dur_bucket = self.pot.grid(emissions[0].frame_times)
-        logZ = batched_log_partition(self.pot, pad_emissions(emissions), dmax, dur_bucket)
-        gold = torch.stack([
-            gold_score(self.pot, e, gold_segments(e.frame_times, n, dmax), dur_bucket)
-            for e, n in zip(emissions, notes_list)
-        ])
-        return logZ - gold
+        batch = pad_emissions(emissions)
+        logZ = batched_log_partition(self.pot, batch, dmax, dur_bucket)
+        golds = [
+            gold_segments(e.frame_times, n, dmax)
+            for e, n in zip(emissions, notes_list, strict=True)
+        ]
+        return logZ - segmentation_scores(self.pot, batch, golds, dur_bucket)
 
     def decode(self, cues: Cues) -> list[NoteEvent]:
         """The notes implied by ``cues`` under the learned potentials (Viterbi)."""
