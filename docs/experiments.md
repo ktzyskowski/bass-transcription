@@ -183,6 +183,29 @@ Frame BCE + `group()` wins by **8.3 F1**. Two frame runs agree to 0.6 points (th
 second is the run cancelled mid-session, which had already finished 9 of 10 epochs at
 ~15 s each), so this is not a seed fluke.
 
+> **Revisited later the same day — this comparison does not settle anything, and the
+> "degrades the encoder" reading below is overstated.** "10 epochs" is not equal work:
+> frame ran 333 batches/epoch (**3330** gradient steps), the semi-CRF 17 (**170**), a
+> 20x gap. The semi-CRF was plainly still moving when it stopped:
+>
+> | epoch | 0 | 2 | 4 | 6 | 8 | 9 |
+> |---|---|---|---|---|---|---|
+> | val NLL | 2528 | 2335 | 1659 | 1318 | **1293** | 1349 |
+> | note F1 | 0.171 | 0.211 | 0.704 | 0.860 | 0.862 | 0.753 |
+> | onset AP | 0.380 | 0.399 | 0.383 | 0.456 | 0.474 | **0.518** |
+>
+> Val NLL roughly halved and was still falling; F1 still swung ±0.45 between
+> consecutive epochs. And note the `onset AP` row: on the **cold** run it *rises*
+> monotonically. The objective does not degrade cues from scratch — finding 1 below
+> generalises from the warm-start run alone, where a pretrained encoder met a uniform
+> `lr=1e-3` for 17 steps, which is at least as consistent with "the optimiser wrecked
+> a good init" as with "the objective prefers bad cues".
+>
+> A fair test is **step-matched**. At ~120–220 s/epoch a 200-epoch whole-track run is
+> ~12 h; the affordable routes are `ChunkedSequenceDataset` (excerpts: ~7x cheaper per
+> step *and* ~7x more steps per epoch) or CUDA-graph capture of the DP (measured 22x).
+> Both are built and parked.
+
 Three findings, in order of how much they matter:
 
 1. **The structured objective degrades the encoder.** `--init-from` (added 2026-07-30)
