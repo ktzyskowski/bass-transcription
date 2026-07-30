@@ -120,7 +120,79 @@ gold segmentation via the differentiable segmental forward algorithm; batched DP
 on recall (stem 0.55 vs 0.88), so it does not ship. group() remains the shipping
 baseline. The demucs gap is an emission-quality problem → the fix is **end-to-end**.
 
+### Stage 1 POC — end-to-end CRF, first run (2026-07-29, IN FLIGHT)
+
+The semi-CRF had never been trained end to end: everything existed
+(`SemiCRFRecipe`, `SemiCRFLoss`, `SequenceDataset`, `nll_batch`) but `train.py`
+hardcoded the frame objective. `--objective {frame,semicrf}` wired in 4e5639b.
+
+Deliberately small, to answer "does it learn at all" before any scale work:
+40 stem tracks, **from scratch** (no tcn-v2 checkpoint exists on the 5090 box — it
+stayed on the M3), whole tracks at B=2, 10 epochs, val 20 stem tracks.
+**Not comparable to the 0.729 rows above**, which used the full corpus and three
+sources. The comparison that counts is a `--objective frame` run on the same 40.
+
+First three epochs, ~3.5 min each:
+
+| epoch | train NLL | val NLL | note F1 | P | R | onset AP |
+|---|---|---|---|---|---|---|
+| 0 | 5025.7 | 2528.3 | 0.171 | 0.450 | 0.106 | 0.380 |
+| 1 | 3310.5 | 2520.5 | 0.146 | 0.412 | 0.088 | 0.439 |
+| 2 | 3383.9 | 2334.9 | — | — | — | — |
+
+**Early read (3 of 10 epochs — do not treat as a verdict).** The objective trains:
+NLL falls and `onset_ap` *rises* (0.380 → 0.439), so the encoder's cues are getting
+better. But note F1 **falls** (0.171 → 0.146), driven by recall (0.106 → 0.088).
+
+Cues improving while notes get worse points at the decoder, not the emissions — and
+recall ~0.09 against `group()`'s 0.90 on stems is the **same recall-collapse signature
+Config A showed** (0.55 there). The end-to-end thesis was that joint training would
+fix that by sharpening emissions; three epochs of a from-scratch encoder is far too
+early to conclude it has not, but it is not yet showing signs of doing so.
+
 ## Future experiments
+
+### Priority order — revised 2026-07-29
+
+The staging below was written CRF-first, on the reasoning that Config A had validated
+the architecture and that three simultaneous changes would be undebuggable. Both still
+hold. But re-reading the error decomposition against what each lever can actually
+reach changes the ordering, so the revised priority is:
+
+| # | lever | reaches | cost | status |
+|---|---|---|---|---|
+| 0 | pitch-error sizing analysis | — (measurement) | hours, no training | not started |
+| 1 | bichannel (bass, mix) input | demucs emission quality | small | not started |
+| 2 | learned pitch head | pyin pitch/octave errors | large | gated on #0 |
+| 3 | semi-CRF end-to-end | onset over-segmentation | built | POC running |
+
+**Why the reorder.** The three levers are *orthogonal* — they change the encoder's
+input, where pitch comes from, and how cues become notes respectively — so they
+compose rather than compete, and any of them can be run on top of the others. What
+differs is the error mass each can reach:
+
+- **The semi-CRF changes only how cues become notes.** Pitch is read off the pyin
+  contour by `HeuristicDecoder` and `SemiCRFDecoder` alike; the CRF never invents it.
+  So its reachable mass is the over-segmentation bucket alone — and per the error
+  decomposition above, the residual after tcn-v2 is *over-segmentation **plus** pyin
+  pitch/octave errors*. It is powerless on the second half. Config A's measured upside
+  was precision 0.841 vs `group()`'s 0.826, i.e. **~1.5 points**, conditional on
+  clawing back a 33-point recall deficit.
+- **Bichannel is cheaper than the CRF was and aims at a bigger gap.** The stem→demucs
+  drop is ~15 F1 at every stage, the largest single identified loss.
+  `_ConvFrontend` already takes a channel count, so `(B,1,F,T) -> (B,2,F,T)` is nearly
+  a one-liner; **both channels' CQTs are already cached** (`SOURCES` builds stem, mix
+  and demucs-separated bass, all content-addressed); and it runs on the proven frame
+  BCE + heuristic path, needing none of the semi-CRF training machinery. It is a
+  dataset change plus a channel dimension.
+- **Size the pitch lever before building it.** #0 is nearly free and needs no training:
+  cached pyin contours plus reference notes are enough to measure offline what fraction
+  of note errors are *pitch-only* -- correct onset, wrong pitch. That replaces the
+  missing `scratchpad/octave_analysis.py` and decides whether #2 is worth the build.
+
+**The caveat that keeps #1 honest:** the drum-bleed hypothesis is unverified. We do not
+know how much of the demucs gap is bleed the mix channel can explain away versus
+transients demucs simply destroys. The bichannel run *is* the measurement.
 
 ### Semi-CRF end-to-end + mix-conditioned input — committed next (needs 5090)
 
