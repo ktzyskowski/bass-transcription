@@ -353,6 +353,10 @@ def main() -> None:
                     help="warm-start the encoder from a checkpoint's state_dict "
                          "(objective parameters are not restored)")
     ap.add_argument("--epochs", type=int, default=4)
+    ap.add_argument("--patience", type=int, default=8,
+                    help="early-stop after this many epochs with no val gain. Worth "
+                         "raising for a structured objective, whose val curve is "
+                         "noisier than frame BCE's")
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader worker subprocesses (0 = main thread)")
@@ -362,7 +366,7 @@ def main() -> None:
 
     config = TrainConfig(
         heads=tuple(HEADS), max_epochs=args.epochs, batch_size=args.batch_size,
-        num_workers=args.num_workers,
+        num_workers=args.num_workers, patience=args.patience,
     )
     train(
         args.root, args.cache_dir, config,
