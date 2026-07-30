@@ -349,6 +349,31 @@ def _run_chunked(dec, e, size, dmax, dur_bucket):
     return A
 
 
+def _chunks_with_right(e, size, dmax, right):
+    """``_chunks``, but each window also carries ``right`` trailing frames.
+
+    That margin exists for the *encoder* -- the TCN's receptive field would otherwise
+    see zero-padding at the chunk's right edge -- and the DP must not scan it. Yields
+    ``(chunk, context, right)``; the last chunk's margin is clipped to the track."""
+    out = []
+    for s in range(0, e.T - size + 1, size):
+        lo = max(0, s - dmax)
+        hi = min(e.T, s + size + right)
+        out.append((
+            Emissions(
+                e.onset_logit[lo:hi],
+                e.Vc[lo : hi + 1] - e.Vc[lo],
+                e.Uc[lo : hi + 1] - e.Uc[lo],
+                e.Jc[lo : hi + 1] - e.Jc[lo],
+                e.frame_times[lo:hi],
+                e.contour,
+            ),
+            s - lo,
+            hi - (s + size),
+        ))
+    return out
+
+
 @pytest.mark.parametrize("n_chunks", [2, 5])
 def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
     # The property the whole truncated-BPTT design rests on: carrying the alpha window
@@ -380,6 +405,47 @@ def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
     whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
     got = _run_chunked(dec, trimmed, size, dmax, dur_bucket)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
+
+
+@pytest.mark.parametrize("right", [1, 11, 40])
+def test_a_right_margin_is_not_scanned(right):
+    # The encoder needs frames past the chunk's end (its receptive field is ~22 DP
+    # frames wide) but the DP must stop at the chunk boundary, or the carry lands
+    # `right` frames ahead of where the next chunk resumes and those frames are
+    # scanned twice. Every shape still matches when that happens and the loss still
+    # falls, so nothing but this equality catches it.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    size = e.T // 4
+    trimmed = _truncate(e, size * 4)
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+
+    carry, got = None, None
+    for chunk, ctx, rgt in _chunks_with_right(trimmed, size, dmax, right):
+        got, carry = chunk_log_partition(
+            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx, rgt
+        )
+    assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
+
+
+def test_scanning_the_right_margin_corrupts_the_carry():
+    # The negative control for the above: passing right=0 while the window *has* a
+    # right margin double-counts those frames. Pinned so nobody "simplifies" the
+    # parameter away on the grounds that the tests pass without it.
+    dec = _fitted_potentials(SemiCRFDecoder())
+    e = _long_emissions(dec)
+    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    size = e.T // 4
+    trimmed = _truncate(e, size * 4)
+    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+
+    carry, got = None, None
+    for chunk, ctx, _rgt in _chunks_with_right(trimmed, size, dmax, 11):
+        got, carry = chunk_log_partition(
+            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx  # right=0
+        )
+    assert not torch.allclose(got, whole, atol=1e-3)
 
 
 def test_dropping_the_left_context_changes_the_answer():

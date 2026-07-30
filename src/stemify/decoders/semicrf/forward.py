@@ -71,6 +71,7 @@ def _scan(
     ends: dict[int, list[int]] | None = None,
     captured: list[torch.Tensor | None] | None = None,
     start: int = 0,
+    stop: int | None = None,
 ) -> torch.Tensor:
     """The segmental forward recurrence over a padded minibatch, from ``window``.
     Returns the final alpha window.
@@ -93,14 +94,20 @@ def _scan(
 
     ``start`` skips that many leading frames: they are *left context*, present only so
     spans reaching back past the chunk boundary can read their cue values, and already
-    accounted for by the incoming ``window``."""
+    accounted for by the incoming ``window``.
+
+    ``stop`` ends the scan early, defaulting to the full width. Its mirror image:
+    trailing frames that exist only so the *encoder's* receptive field does not see
+    zero-padding at the chunk's right edge, and which the DP must not consume -- the
+    returned window has to land on the chunk boundary the next chunk resumes from."""
     onset, Vc, Uc, Jc = batch.onset_logit, batch.Vc, batch.Uc, batch.Jc
     B, Tmax = onset.shape
+    stop = Tmax if stop is None else stop
     trans_to = pot.trans_to()                        # (3, 2)
     neg_col = onset.new_full((B, 1), NEG)
     offsets = torch.arange(-dmax, 0, device=onset.device)
 
-    for j in range(start + 1, Tmax + 1):
+    for j in range(start + 1, stop + 1):
         idx = (offsets + j).clamp(min=0)             # (dmax,) candidate starts
         d = j - idx
         vsum = Vc[:, j : j + 1] - Vc[:, idx]         # (B, dmax)
@@ -153,6 +160,7 @@ def chunk_log_partition(
     dur_bucket: torch.Tensor,
     carry: torch.Tensor | None = None,
     context: int = 0,
+    right: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """One uniform-length chunk of the forward recurrence, resuming from ``carry``.
 
@@ -170,6 +178,14 @@ def chunk_log_partition(
     cues, which is wrong rather than merely approximate. A chunk whose overlap reaches
     back to global frame 0 may pass a shorter ``context``: there the clamp is correct,
     and the carry holds ``NEG`` in the unreachable slots.
+
+    **``right`` is the mirror of ``context``: trailing frames the DP must not scan.**
+    They exist so the *encoder's* receptive field does not see zero-padding at the
+    chunk's right edge, but they belong to the next chunk. Scanning them would return a
+    carry ``right`` frames past where the next chunk resumes, and those frames would
+    then be scanned twice -- silently, since every shape still matches and the loss
+    still falls. Leaving it 0 (the default) is only correct when the window has no
+    right margin.
 
     This is the truncated-BPTT entry point, and the reason ``A`` is cumulative rather
     than per-chunk is that it makes the training loss telescope. With ``A_0 = 0`` and
@@ -193,8 +209,15 @@ def chunk_log_partition(
         )
     if not 0 <= context < Tmax:
         raise ValueError(f"context must be in [0, Tmax={Tmax}), got {context}")
+    if not 0 <= right < Tmax - context:
+        raise ValueError(
+            f"right must be in [0, Tmax-context={Tmax - context}), got {right}; "
+            "the chunk needs at least one frame of its own to scan"
+        )
     window = initial_window(batch.onset_logit, B, dmax) if carry is None else carry
-    window = _scan(pot, batch, dmax, dur_bucket, window, start=context)
+    window = _scan(
+        pot, batch, dmax, dur_bucket, window, start=context, stop=Tmax - right
+    )
     return torch.logsumexp(window[:, -1, :2], dim=1), window
 
 
