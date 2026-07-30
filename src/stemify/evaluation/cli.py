@@ -41,7 +41,12 @@ DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
 
 
 def load_tagger(checkpoint: Path):
-    """Rebuild a ``FrameTagger`` from a saved checkpoint (state_dict + head list)."""
+    """Rebuild a ``FrameTagger`` from a saved checkpoint (state_dict + head list).
+
+    ``in_channels`` is architecture, not a hyperparameter -- a mix-conditioned model
+    has a wider first conv -- so it comes from the checkpoint. Defaulted to 1 for
+    checkpoints written before the field existed, which were all single-channel.
+    """
     import torch
 
     from stemify.encoders.heads import onset_head, voicing_head
@@ -49,7 +54,7 @@ def load_tagger(checkpoint: Path):
     from stemify.encoders.tagger import FrameTagger
 
     ckpt = torch.load(checkpoint, map_location="cpu")
-    backbone = TCN()
+    backbone = TCN(in_channels=ckpt.get("in_channels", 1))
     builders = {"onset": onset_head, "voicing": voicing_head}
     heads = {h: builders[h](backbone.hidden) for h in ckpt["heads"]}
     model = FrameTagger(backbone, heads)
