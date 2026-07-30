@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 _NOTE_KEY = {
     "note_f1": "f1", "note_precision": "precision",
     "note_recall": "recall", "fragmentation": "fragmentation",
+    # The remaining false-positive buckets pass through under their own names
+    # (fp, fp_rest, fp_interior_offpitch) -- see ``score_examples``.
 }
 
 

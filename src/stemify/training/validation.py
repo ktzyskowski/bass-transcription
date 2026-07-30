@@ -104,7 +104,21 @@ def score_examples(
         "note_f1": prf["f1"],
         "note_precision": prf["precision"],
         "note_recall": prf["recall"],
+        # All four false-positive counts, not just fragmentation. They are computed
+        # together anyway, and precision alone cannot say *which* error a change
+        # fixed: a "rest" FP is a note invented where nothing sounds, a
+        # "fragmentation" FP is one real note reported as several, and an
+        # "interior_offpitch" FP lands inside a real note at the wrong pitch. Those
+        # have different causes and different fixes, so collapsing them into one
+        # precision number throws the diagnosis away.
+        #
+        # "fragmentation" keeps its bare name: it is the key every earlier run in
+        # docs/experiments.md is recorded under, and renaming it would silently end
+        # those series rather than extend them.
         "fragmentation": float(frag["fragmentation"]),
+        "fp": float(frag["fp"]),
+        "fp_rest": float(frag["rest"]),
+        "fp_interior_offpitch": float(frag["interior_offpitch"]),
     }
 
 

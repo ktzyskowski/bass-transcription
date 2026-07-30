@@ -81,7 +81,18 @@ def test_score_examples_returns_note_metrics():
     # so onsets split the held contour into the right notes.
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0, 30, 60])
     scores = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
-    assert set(scores) == {"note_f1", "note_precision", "note_recall", "fragmentation"}
+    assert set(scores) == {
+        "note_f1", "note_precision", "note_recall",
+        # Every false-positive bucket, not just fragmentation: precision alone
+        # cannot say which error a change fixed, and they cost nothing extra --
+        # the metric computes all four in one pass.
+        "fragmentation", "fp", "fp_rest", "fp_interior_offpitch",
+    }
+    # The buckets partition the false positives, so they must add up. If they ever
+    # stop doing so, some FP is being counted twice or dropped on the floor.
+    assert scores["fp"] == (
+        scores["fragmentation"] + scores["fp_rest"] + scores["fp_interior_offpitch"]
+    )
     assert scores["note_recall"] > 0.5  # found the re-articulated notes
     assert 0.0 <= scores["note_f1"] <= 1.0
 
