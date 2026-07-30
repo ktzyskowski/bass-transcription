@@ -62,6 +62,22 @@ _NOTE_KEY = {
 }
 
 
+def _epoch_batches(loader) -> int | str:
+    """Batches per epoch, or ``"streaming"`` when that is not knowable in advance.
+
+    The chunked semi-CRF loader wraps an ``IterableDataset``: it walks ``batch_size``
+    parallel streams and stops when the first one runs out, so its epoch length is a
+    property of how the tracks divided up rather than something ``len`` can answer.
+    Logged as a param either way -- it is the number that makes "10 epochs" comparable
+    between objectives, and assuming every loader is sized is what crashed a run at
+    the first MLflow write while every smoke test (which ran without a tracking URI)
+    passed."""
+    try:
+        return len(loader)
+    except TypeError:
+        return "streaming"
+
+
 def build_model(in_channels: int = 1) -> FrameTagger:
     backbone = TCN(in_channels=in_channels)
     return FrameTagger(
@@ -257,7 +273,7 @@ def train(
                     "lr": config.learning_rate, "window": config.window_frames,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
-                    "train_batches": len(train_loader)},
+                    "train_batches": _epoch_batches(train_loader)},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
         # once; async scores are then just model forwards. Slowest at construction

@@ -190,3 +190,23 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
     assert batches[1].resets == [False], "the fixture must have a continuing chunk"
     with pytest.raises(KeyError, match="no carry"):
         loss.compute(model, batches[1], torch.device("cpu"))
+
+
+def test_epoch_batches_survives_a_streaming_loader(track):
+    # The chunked loader has no len(); MLflow logs train_batches as a param, and
+    # assuming every loader is sized crashed a run at the first write while every
+    # smoke test passed (they ran without a tracking URI, so never logged params).
+    from torch.utils.data import DataLoader
+
+    from stemify.training.train import _epoch_batches
+
+    items, cache, _ = track
+    streaming = DataLoader(
+        ChunkedSequenceDataset(
+            items, cache, CONDITIONS["stem"], chunk_frames=CHUNK, dmax=DMAX,
+            stride=STRIDE, batch_size=1,
+        ),
+        batch_size=None,
+    )
+    assert _epoch_batches(streaming) == "streaming"
+    assert _epoch_batches(DataLoader([1, 2, 3], batch_size=1)) == 3
