@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from stemify.cache import Cache
+from stemify.training.conditions import CONDITIONS
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder
@@ -21,6 +22,7 @@ from stemify.decoders.semicrf.emissions import build_emissions, pad_emissions
 from stemify.decoders.semicrf.forward import batched_log_partition, chunk_log_partition
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
+from stemify.sources import Sources
 from stemify.training.datasets.chunked import ChunkedSequenceDataset, collate
 
 N_BINS, HOP_S = 12, 0.0116
@@ -35,6 +37,12 @@ class _Item:
 
     def audio(self) -> str:
         return str(self.root / f"{self.name}.wav")
+
+    def sources(self) -> Sources:
+        # Mirrors EvalItem's default. These fakes have only the one rendering, so
+        # every channel of a condition resolves to the same file -- enough to
+        # exercise the geometry, which is what this module tests.
+        return Sources(bass=self.audio(), mix=self.audio())
 
     def reference_notes(self) -> list[NoteEvent]:
         # back-to-back ~0.4 s notes, roughly bass-line density
@@ -65,8 +73,8 @@ class _NoOpCache(Cache):
     """`ensure_features` is a no-op: the fixtures write their CQTs directly, and
     `contour` returns a synthetic pyin track rather than running pyin on empty audio."""
 
-    def ensure_features(self, dataset, transform=None):
-        return [self.feature_path(i.audio()) for i in dataset]
+    def ensure_features(self, dataset, transform=None, role="bass"):
+        return [self.feature_path(i.sources().role(role)) for i in dataset]
 
     def contour(self, estimator, audio):
         n = 400
@@ -81,7 +89,7 @@ def cache(tmp_path):
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
     ds = _FakeDataset(tmp_path, cache, lengths)
     return ChunkedSequenceDataset(
-        ds, cache, chunk_frames=chunk, dmax=dmax, stride=STRIDE,
+        ds, cache, CONDITIONS["stem"], chunk_frames=chunk, dmax=dmax, stride=STRIDE,
         batch_size=batch_size, right_context=right,
     )
 
@@ -162,13 +170,30 @@ def test_collate_rejects_mixed_widths(tmp_path, cache):
     from stemify.training.datasets.chunked import Chunk
 
     wide = Chunk(
-        np.zeros((N_BINS, 7)), np.arange(7) * HOP_S, a.contours[0], [], 30, 0, False
+        np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, a.contours[0], [], 30, 0,
+        0, False
     )
     narrow = Chunk(
-        a.features[0, 0].numpy(), a.frame_times[0], a.contours[0], [], 30, 1, False
+        a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0, 1, False
     )
-    with pytest.raises(ValueError, match="share a width"):
+    with pytest.raises(ValueError, match="share a shape"):
         collate([wide, narrow])
+
+
+def test_collate_rejects_mixed_margins(tmp_path, cache):
+    # The scan runs one shared (context, right) range over every row, so a row with a
+    # different margin would have its own frames read as context, or its context
+    # scanned as chunk -- silently, since the widths still match.
+    ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
+    a = next(iter(ds))
+    from stemify.training.datasets.chunked import Chunk
+
+    lhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0,
+                0, False)
+    rhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 5,
+                1, False)
+    with pytest.raises(ValueError, match=r"share \(context, right\)"):
+        collate([lhs, rhs])
 
 
 def _cues(frame_times, contour):

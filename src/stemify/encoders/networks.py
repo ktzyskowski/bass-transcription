@@ -57,6 +57,21 @@ class _ConvFrontend(nn.Module):
         return z.reshape(b, c * f, t)          # (B, C*F, T)
 
 
+def tcn_receptive_field(levels: int = 4, kernel: int = 3) -> int:
+    """How many input frames each output frame sees along time, for a ``TCN``.
+
+    A free function as well as a property because callers need it *before* building a
+    model: chunked training has to know how much audio to carry past a chunk's edge so
+    the frames the DP will score are not computed against zero-padding, and it would
+    rather not allocate a network to ask. Defaults match ``TCN``'s.
+
+    Two 3x3 convs in the front-end span 5 frames; each residual block adds
+    ``2 * (kernel - 1) * dilation`` with dilation doubling per level. At the defaults
+    that is 5 + 4*(1+2+4+8) = 65 frames, ~0.75 s at the CQT hop.
+    """
+    return 5 + sum(2 * (kernel - 1) * 2**i for i in range(levels))
+
+
 class _TCNBlock(nn.Module):
     """Residual block of two dilated, non-causal (centred) 1-D convolutions."""
 
@@ -97,11 +112,16 @@ class TCN(nn.Module):
         super().__init__()
         self.hidden = hidden
         self.in_channels = in_channels
+        self.levels, self.kernel = levels, kernel
         self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels)
         self.project = nn.Conv1d(self.frontend.out_channels, hidden, kernel_size=1)
         self.tcn = nn.Sequential(
             *[_TCNBlock(hidden, dilation=2**i, kernel=kernel) for i in range(levels)]
         )
+
+    @property
+    def receptive_field(self) -> int:
+        return tcn_receptive_field(self.levels, self.kernel)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.frontend(x)          # (B, C*F, T)

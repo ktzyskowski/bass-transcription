@@ -47,7 +47,8 @@ def _example(spans, pitches_hz):
         feats[1, (TIMES >= a) & (TIMES < b)] = 1.0          # voiced marker
         freqs[(TIMES >= a) & (TIMES < b)] = hz
     notes = [NoteEvent(onset=a, offset=b, midi_pitch=45.0) for a, b in spans]
-    return SequenceExample(feats, TIMES, Contour(times=TIMES, freqs=freqs), notes)
+    # (1, n_bins, T): the channel axis is always present, single-channel or not.
+    return SequenceExample(feats[None], TIMES, Contour(times=TIMES, freqs=freqs), notes)
 
 
 def _batch():

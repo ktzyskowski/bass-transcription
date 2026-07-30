@@ -39,7 +39,11 @@ from stemify.decoders.semicrf.emissions import (
     build_emissions,
     pad_emissions,
 )
-from stemify.decoders.semicrf.forward import batched_log_partition, log_partition
+from stemify.decoders.semicrf.forward import (
+    batched_log_partition,
+    chunk_log_partition,
+    log_partition,
+)
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.potentials import SemiCRFPotentials
 from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
@@ -109,6 +113,40 @@ class SemiCRFDecoder(Decoder, nn.Module):
             for e, n in zip(emissions, notes_list, strict=True)
         ]
         return logZ - segmentation_scores(self.pot, batch, golds, dur_bucket)
+
+    def nll_chunk(
+        self,
+        cues_list: list[Cues | TensorCues],
+        golds: list[list[tuple[int, int, int]]],
+        carry: torch.Tensor | None,
+        context: int,
+        right: int = 0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One truncated-BPTT step: ``(A, gold_score, window)`` for a batch of chunks.
+
+        The chunked analogue of ``nll_batch``, and deliberately *not* an NLL: ``A`` is
+        the cumulative log-mass over everything scanned so far, so the caller forms the
+        per-chunk loss by telescoping, ``(A_k - A_{k-1}) - gold_score_k``. Summed over
+        a track's chunks that is exactly ``log Z - score(gold)``, while each term's
+        gradient reaches only its own chunk's activations.
+
+        ``golds`` are *window-local* segmentations supplied by the dataset rather than
+        derived from notes here: gold is built once over the whole track and split by
+        chunk, which is what makes the pieces tile it exactly and the losses telescope.
+        Deriving it per chunk would re-run the audible-gap rule on a truncated view and
+        silently disagree at the seams.
+
+        ``carry`` is the previous chunk's window (``None`` at a track's start), and
+        ``context``/``right`` mark the frames present only as margin -- see
+        ``forward.chunk_log_partition``.
+        """
+        emissions = [build_emissions(c, self.stride, self.device) for c in cues_list]
+        dmax, dur_bucket = self.pot.grid(emissions[0].frame_times)
+        batch = pad_emissions(emissions)
+        A, window = chunk_log_partition(
+            self.pot, batch, dmax, dur_bucket, carry, context, right
+        )
+        return A, segmentation_scores(self.pot, batch, golds, dur_bucket), window
 
     def decode(self, cues: Cues) -> list[NoteEvent]:
         """The notes implied by ``cues`` under the learned potentials (Viterbi)."""

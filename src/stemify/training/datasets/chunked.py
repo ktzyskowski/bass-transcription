@@ -20,7 +20,6 @@ keys its carries by ``stream``; see ``losses/segmental.py``.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -30,10 +29,8 @@ from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.decoders.semicrf.gold import gold_segments
-from stemify.notes import NoteEvent
-from stemify.pitch import PyinPitch
-from stemify.serde import TrackExample
-from stemify.transforms import AudioTransform, Identity
+from stemify.training.conditions import Condition
+from stemify.training.datasets.tracks import TrackInputs, channel_window, track_inputs
 
 # Segmentation of one chunk in *window-local* DP indices: (label, start, end).
 Segmentation = list[tuple[int, int, int]]
@@ -47,11 +44,12 @@ class Chunk:
     only the chunk's own frames (``forward.chunk_log_partition(..., context=context)``)
     and reads the rest purely as context."""
 
-    features: np.ndarray       # (n_bins, window CQT frames)
+    features: np.ndarray       # (C, n_bins, window CQT frames)
     frame_times: np.ndarray    # (window CQT frames,) absolute seconds
     contour: Contour           # the whole track's pyin contour (searchsorted per use)
     gold: Segmentation         # window-local DP indices, ends inside this chunk
     context: int               # DP frames of left context before the chunk
+    right: int                 # DP frames of right margin the DP must not scan
     stream: int                # which stream row this continues
     reset: bool                # first chunk of a track: the carry starts fresh
 
@@ -60,11 +58,12 @@ class Chunk:
 class ChunkBatch:
     """One chunk from each of ``batch_size`` streams, stacked."""
 
-    features: torch.Tensor        # (B, 1, n_bins, window)
+    features: torch.Tensor        # (B, C, n_bins, window)
     frame_times: list[np.ndarray]
     contours: list[Contour]
     golds: list[Segmentation]
     context: int                  # uniform across the batch
+    right: int                    # uniform across the batch
     streams: list[int]
     resets: list[bool]
 
@@ -74,25 +73,31 @@ class ChunkBatch:
 
 def collate(chunks: list[Chunk]) -> ChunkBatch:
     """Stack chunks into a batch. No padding: every chunk is the same width, which is
-    also what lets the scan be captured as a CUDA graph."""
-    widths = {c.features.shape[1] for c in chunks}
+    also what lets the scan be captured as a CUDA graph.
+
+    ``context`` and ``right`` must agree across the batch as well as the width: the
+    scan runs one shared range over every row, so a row with a different margin would
+    have its own frames silently read as context (or its context scanned as chunk)."""
+    widths = {c.features.shape for c in chunks}
     if len(widths) != 1:
-        raise ValueError(f"chunks must share a width, got {sorted(widths)}")
-    contexts = {c.context for c in chunks}
-    if len(contexts) != 1:
+        raise ValueError(f"chunks must share a shape, got {sorted(widths)}")
+    margins = {(c.context, c.right) for c in chunks}
+    if len(margins) != 1:
         raise ValueError(
-            f"chunks in a batch must share a context, got {sorted(contexts)}; "
+            f"chunks in a batch must share (context, right), got {sorted(margins)}; "
             "streams have desynchronised"
         )
     features = torch.from_numpy(
         np.ascontiguousarray(np.stack([c.features for c in chunks]))
-    ).unsqueeze(1)
+    )
+    context, right = margins.pop()
     return ChunkBatch(
         features=features,
         frame_times=[c.frame_times for c in chunks],
         contours=[c.contour for c in chunks],
         golds=[c.gold for c in chunks],
-        context=contexts.pop(),
+        context=context,
+        right=right,
         streams=[c.stream for c in chunks],
         resets=[c.reset for c in chunks],
     )
@@ -116,13 +121,12 @@ class _Track:
     ``exp(NEG - max) == 0``."""
 
     def __init__(
-        self, path: Path, contour: Contour, notes: list[NoteEvent],
-        chunk: int, dmax: int, stride: int, right: int,
+        self, track: TrackInputs, chunk: int, dmax: int, stride: int, right: int,
     ) -> None:
-        self._ex = TrackExample.load(path, mmap=True)
-        self.contour = contour
+        self._examples = track.open(mmap=True)
+        self.contour = track.contour
         self._chunk, self._dmax, self._stride = chunk, dmax, stride
-        ft = self._ex.frame_times
+        ft = self._examples[0].frame_times
         self._n_cqt = ft.size
         self._n_dp = self._n_cqt // stride
         # librosa's grid is exactly n * hop_length / sr, so the window's times -- including
@@ -131,7 +135,7 @@ class _Track:
         self._w_dp = dmax + chunk + right
         # Gold is built once over the whole track, then split by chunk, so the pieces
         # tile it exactly -- which is what makes the per-chunk losses telescope.
-        self._gold = gold_segments(ft[::stride], notes, dmax)
+        self._gold = gold_segments(ft[::stride], track.notes, dmax)
         self.n_chunks = self._n_dp // chunk  # a ragged tail would break static shapes
 
     def __getitem__(self, c: int) -> tuple[np.ndarray, np.ndarray, Segmentation]:
@@ -139,10 +143,9 @@ class _Track:
         a_dp = lo - self._dmax                      # negative on a track's first chunk
         a, w = a_dp * self._stride, self._w_dp * self._stride
 
-        window = np.zeros((self._ex.features.shape[0], w), dtype=np.float32)
-        src_lo, src_hi = max(0, a), min(self._n_cqt, a + w)
-        if src_lo < src_hi:
-            window[:, src_lo - a : src_hi - a] = self._ex.features[:, src_lo:src_hi]
+        # (C, n_bins, w) -- every input channel, zero-padded where the window runs off
+        # either end of the track.
+        window = channel_window(self._examples, a, w)
         times = (np.arange(a, a + w) * self._hop).astype(np.float64)
 
         # A gold segment is assigned to the chunk holding its END. Its start is then at
@@ -169,24 +172,15 @@ class ChunkedSequenceDataset(IterableDataset):
         self,
         dataset: SlakhLikeDataset,
         cache: Cache,
+        condition: Condition,
         *,
         chunk_frames: int,
         dmax: int,
         stride: int,
         batch_size: int,
         right_context: int = 0,
-        transform: AudioTransform | None = None,
     ) -> None:
-        transform = transform or Identity()
-        estimator = PyinPitch()
-        cache.ensure_features(dataset, transform)
-        self._items: list[tuple[Path, Contour, list[NoteEvent]]] = []
-        for item in dataset:
-            audio = transform.apply(item.audio())
-            self._items.append(
-                (cache.feature_path(audio), cache.contour(estimator, audio),
-                 item.reference_notes())
-            )
+        self._items = track_inputs(dataset, condition, cache)
         self.chunk_frames = chunk_frames
         self.dmax = dmax
         self.stride = stride
@@ -221,9 +215,8 @@ class ChunkedSequenceDataset(IterableDataset):
                         cursors[b] += 1
                     if cursors[b] >= len(streams[b]):
                         return  # this stream is done; stop the whole worker
-                    path, contour, notes = streams[b][cursors[b]]
                     opened[b] = _Track(
-                        path, contour, notes, self.chunk_frames, self.dmax,
+                        streams[b][cursors[b]], self.chunk_frames, self.dmax,
                         self.stride, self.right_context,
                     )
                     chunk_no[b], reset = 0, True
@@ -231,6 +224,7 @@ class ChunkedSequenceDataset(IterableDataset):
                 chunk_no[b] += 1
                 row.append(
                     Chunk(feats, ft, contour=opened[b].contour, gold=gold,
-                          context=self.dmax, stream=base + b, reset=reset)
+                          context=self.dmax, right=self.right_context,
+                          stream=base + b, reset=reset)
                 )
             yield collate(row)

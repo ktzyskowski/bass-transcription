@@ -16,19 +16,17 @@ between training paradigms; everything else is the shared ``Trainer``.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
-from stemify.pitch import PyinPitch
-from stemify.serde import TrackExample
-from stemify.cache import Cache
-from stemify.transforms import AudioTransform, Identity
+from stemify.training.conditions import Condition
+from stemify.training.datasets.tracks import channel_window, track_inputs
 
 
 @dataclass
@@ -38,7 +36,7 @@ class SequenceExample:
     A named bundle rather than a tuple because two fields are objects (a ``Contour``,
     a note list), not stackable arrays."""
 
-    features: np.ndarray      # (n_bins, T) CQT
+    features: np.ndarray      # (C, n_bins, T) CQT, one plane per input channel
     frame_times: np.ndarray   # (T,)
     contour: Contour          # pyin pitch track (its own grid)
     notes: list[NoteEvent]    # reference notes -> gold segmentation
@@ -51,7 +49,7 @@ class SequenceBatch:
     a note set is variable-length, so neither pads. ``lengths`` rides along so the
     model output and the DP are read at each track's true end."""
 
-    features: torch.Tensor           # (B, 1, n_bins, Tmax), zero-padded on the right
+    features: torch.Tensor           # (B, C, n_bins, Tmax), zero-padded on the right
     lengths: list[int]               # true frame count per track
     frame_times: list[np.ndarray]
     contours: list[Contour]
@@ -63,11 +61,20 @@ class SequenceBatch:
 
 def collate(batch: Sequence[SequenceExample]) -> SequenceBatch:
     """Pad a minibatch of whole tracks to a common length along time (zeros right)."""
-    lengths = [ex.features.shape[1] for ex in batch]
-    n_bins, tmax = batch[0].features.shape[0], max(lengths)
-    features = torch.zeros(len(batch), 1, n_bins, tmax)
+    ndims = {ex.features.ndim for ex in batch}
+    if ndims != {3}:
+        raise ValueError(
+            f"features must be (C, n_bins, T), got {sorted(ndims)}-D. A single-channel "
+            "track is (1, n_bins, T) -- the channel axis is always present, so the "
+            "model's input width is a property of the data rather than of the caller."
+        )
+    lengths = [ex.features.shape[-1] for ex in batch]
+    channels, n_bins = batch[0].features.shape[:2]
+    features = torch.zeros(len(batch), channels, n_bins, max(lengths))
     for b, ex in enumerate(batch):
-        features[b, 0, :, : lengths[b]] = torch.from_numpy(np.ascontiguousarray(ex.features))
+        features[b, :, :, : lengths[b]] = torch.from_numpy(
+            np.ascontiguousarray(ex.features)
+        )
     return SequenceBatch(
         features=features,
         lengths=lengths,
@@ -91,28 +98,21 @@ class SequenceDataset(Dataset):
         self,
         dataset: SlakhLikeDataset,
         cache: Cache,
-        transform: AudioTransform | None = None,
+        condition: Condition,
     ) -> None:
-        transform = transform or Identity()
-        estimator = PyinPitch()
-        cache.ensure_features(dataset, transform)
-        self._items: list[tuple[Path, Contour, list[NoteEvent]]] = []
-        for item in dataset:
-            audio = transform.apply(item.audio())
-            self._items.append(
-                (cache.feature_path(audio), cache.contour(estimator, audio),
-                 item.reference_notes())
-            )
+        self._items = track_inputs(dataset, condition, cache)
 
     def __len__(self) -> int:
         return len(self._items)
 
     def __getitem__(self, i: int) -> SequenceExample:
-        fpath, contour, notes = self._items[i]
-        track = TrackExample.load(fpath, mmap=True)
+        track = self._items[i]
+        examples = track.open(mmap=True)
+        n_frames = examples[0].features.shape[-1]
         return SequenceExample(
-            features=np.asarray(track.features),  # materialise this track's CQT
-            frame_times=track.frame_times,
-            contour=contour,
-            notes=notes,
+            # Materialise this track's CQT, every channel, as (C, n_bins, T).
+            features=channel_window(examples, 0, n_frames),
+            frame_times=examples[0].frame_times,
+            contour=track.contour,
+            notes=track.notes,
         )
