@@ -15,6 +15,7 @@ from stemify.cache import Cache, content_key
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
+from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
 
 
@@ -74,6 +75,11 @@ class _CountingItem:
     def audio(self):
         self.audio_calls += 1
         return self._path
+
+    def sources(self):
+        # Counted like audio(): ensure_features resolves through the role, so a
+        # cache hit must not reach the file this way either.
+        return Sources(bass=self.audio())
 
     def reference(self):
         raise AssertionError("ensure_features must not build references")

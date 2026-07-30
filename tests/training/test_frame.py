@@ -7,11 +7,14 @@ path is covered too.
 
 
 import numpy as np
+import pytest
+import torch
 
 from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
+from stemify.sources import Sources
 from stemify.training.datasets.frame import FrameWindowDataset, collate
 from stemify.training.examples import build_example
 
@@ -46,7 +49,7 @@ def _save_example(tmp_path, name, features, target):
 
 def test_windowing_enumerates_strided_windows(tmp_path):
     path = _save_example(tmp_path, "t", np.random.rand(5, 10), np.arange(10))
-    ds = FrameWindowDataset([path], heads=["onset"], window_frames=4, hop_frames=2)
+    ds = FrameWindowDataset([(path,)], heads=["onset"], window_frames=4, hop_frames=2)
     assert len(ds) == 4  # starts 0, 2, 4, 6
     x, y = ds[0]
     assert x.shape == (1, 5, 4)
@@ -55,7 +58,7 @@ def test_windowing_enumerates_strided_windows(tmp_path):
 
 def test_collate_stacks_batch(tmp_path):
     path = _save_example(tmp_path, "t", np.random.rand(5, 10), np.arange(10))
-    ds = FrameWindowDataset([path], heads=["onset"], window_frames=4, hop_frames=2)
+    ds = FrameWindowDataset([(path,)], heads=["onset"], window_frames=4, hop_frames=2)
     xb, yb = collate([ds[0], ds[1]])
     assert xb.shape == (2, 1, 5, 4)
     assert yb["onset"].shape == (2, 4)
@@ -63,12 +66,49 @@ def test_collate_stacks_batch(tmp_path):
 
 def test_short_track_is_padded_not_dropped(tmp_path):
     path = _save_example(tmp_path, "s", np.ones((5, 3)), np.ones(3))
-    ds = FrameWindowDataset([path], heads=["onset"], window_frames=4, hop_frames=2)
+    ds = FrameWindowDataset([(path,)], heads=["onset"], window_frames=4, hop_frames=2)
     assert len(ds) == 1
     x, y = ds[0]
     assert x.shape == (1, 5, 4)
     assert x[0, :, 3].sum() == 0.0        # feature pad is zero
     assert y["onset"][3] == 0.0           # target pad is zero
+
+
+def test_bichannel_window_stacks_channels_in_order(tmp_path):
+    # Constant-valued channels so a swap or a duplicated channel is visible. Only
+    # channel 0 carries targets, which is what the training loader guarantees.
+    bass = _save_example(tmp_path, "bass", np.full((5, 10), 1.0), np.arange(10))
+    mix = _save_example(tmp_path, "mix", np.full((5, 10), 2.0), np.zeros(10))
+    ds = FrameWindowDataset(
+        [(bass, mix)], heads=["onset"], window_frames=4, hop_frames=2
+    )
+    x, y = ds[0]
+    assert x.shape == (2, 5, 4)
+    assert (x[0] == 1.0).all()          # channel 0 is the bass
+    assert (x[1] == 2.0).all()          # channel 1 is the mixture
+    # Targets come from channel 0 alone -- the mixture's npz is read for features
+    # only, so its (here all-zero) targets must not reach the batch.
+    assert (y["onset"] == torch.arange(4, dtype=torch.float32)).all()
+
+
+def test_bichannel_collate_keeps_the_channel_axis(tmp_path):
+    bass = _save_example(tmp_path, "bass", np.full((5, 10), 1.0), np.arange(10))
+    mix = _save_example(tmp_path, "mix", np.full((5, 10), 2.0), np.arange(10))
+    ds = FrameWindowDataset(
+        [(bass, mix)], heads=["onset"], window_frames=4, hop_frames=2
+    )
+    xb, _ = collate([ds[0], ds[1]])
+    assert xb.shape == (2, 2, 5, 4)     # (B, C, n_bins, W)
+
+
+def test_channels_of_different_lengths_are_rejected(tmp_path):
+    # Renderings of one track share a CQT hop, so their frame counts match exactly.
+    # A mismatch means the channels were paired wrongly -- and that failure is
+    # otherwise invisible: labels still fit channel 0 and the loss still falls.
+    bass = _save_example(tmp_path, "bass", np.ones((5, 10)), np.arange(10))
+    other = _save_example(tmp_path, "other", np.ones((5, 7)), np.arange(7))
+    with pytest.raises(ValueError, match="disagree on length"):
+        FrameWindowDataset([(bass, other)], heads=["onset"], window_frames=4)
 
 
 def test_prepare_backfills_missing_target_without_recomputing_features(
@@ -106,6 +146,8 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
         name = "trk"
         def audio(self):
             return audio
+        def sources(self):
+            return Sources(bass=audio)
         def reference(self):
             return ref
         def reference_notes(self):
@@ -149,6 +191,8 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
             self.name = name
         def audio(self):
             return audio            # both items resolve to the SAME file
+        def sources(self):
+            return Sources(bass=audio)
         def reference(self):
             return Contour(ft, np.full(8, 110.0))
         def reference_notes(self):

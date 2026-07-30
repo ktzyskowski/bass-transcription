@@ -58,3 +58,33 @@ def test_multi_head_shares_one_backbone():
     n_heads = sum(p.numel() for h in heads.values() for p in h.parameters())
     n_total = sum(p.numel() for p in model.parameters())
     assert n_total == n_backbone + n_heads
+
+
+# --------------------------------------------------------------------------- #
+# input width: a mix-conditioned model reads several stacked renderings        #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("backbone_cls", [TCN, GRU])
+def test_backbone_accepts_the_channel_count_it_was_built_for(backbone_cls):
+    net = backbone_cls(in_channels=2).eval()
+    out = net(torch.randn(B, 2, N_BINS, T))
+    # Only the first conv widens: the temporal stack and every head are unchanged,
+    # so the output contract a training loop relies on does not move.
+    assert out.shape == (B, T, net.hidden)
+
+
+def test_default_stays_single_channel():
+    assert TCN().in_channels == 1
+    assert FrameTagger(TCN(), {}).in_channels == 1
+
+
+def test_tagger_reports_its_backbones_width():
+    # Read off the backbone rather than stored, so it cannot drift from the conv
+    # that actually has to accept the tensor.
+    net = TCN(in_channels=2)
+    assert FrameTagger(net, {"onset": onset_head(net.hidden)}).in_channels == 2
+
+
+def test_a_wider_model_rejects_a_single_channel_batch():
+    net = TCN(in_channels=2).eval()
+    with pytest.raises(RuntimeError):
+        net(_cqt_batch())

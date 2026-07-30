@@ -24,7 +24,7 @@ original mixture, so the caller already has each role on hand. Extend with furth
 roles (``drums``, ``other``, ...) as experiments need them.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 
@@ -34,3 +34,20 @@ class Sources:
 
     bass: str | Path                     # the (separated) bass stem -- transcribed
     mix: str | Path | None = None        # original mixture, when the input was a mix
+
+    def role(self, name: str) -> Path:
+        """The audio for one role, by name.
+
+        Raises rather than returning ``None`` for an absent role. A caller naming a
+        role is assembling a model input channel that *needs* it, and the failure a
+        silent ``None`` produces is the bad kind: the channel becomes zeros and the
+        encoder reads a missing mixture as a silent one, which is a coherent input
+        it will happily train on. Fail where the channel is assembled instead.
+        """
+        known = {f.name for f in fields(self)}
+        if name not in known:
+            raise ValueError(f"unknown source role {name!r}; have {sorted(known)}")
+        audio = getattr(self, name)
+        if audio is None:
+            raise ValueError(f"this track has no {name!r} audio")
+        return Path(audio)

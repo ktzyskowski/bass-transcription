@@ -118,7 +118,10 @@ class Cache:
         return self.features_dir / f"{audio.stem}-{content_key(CQT_SIGNATURE, audio.resolve())}.npz"
 
     def ensure_features(
-        self, dataset: SlakhLikeDataset, transform: AudioTransform | None = None
+        self,
+        dataset: SlakhLikeDataset,
+        transform: AudioTransform | None = None,
+        role: str = "bass",
     ) -> list[Path]:
         """Compute and cache each track's CQT as a target-less ``TrackExample``;
         return the cache paths in dataset order.
@@ -128,6 +131,13 @@ class Cache:
         and pairs them with notes. The CQT is the cost, so an existing cache is left
         untouched -- audio is loaded only on a miss.
 
+        ``role`` picks *which* of the track's audio files to featurise (see
+        ``Sources``). It defaults to the one the item is about, so single-input
+        training is unaffected; a second call with ``role="mix"`` builds the extra
+        channel a mix-conditioned encoder reads. Nothing here needs to know the two
+        belong together -- each is keyed on its own resolved path, so they cannot
+        collide and either can already be a hit from another condition's run.
+
         The key comes from ``transform.cache_path``, which resolves where the audio
         *would* be without producing it. Using ``apply`` here would separate every
         track through Demucs just to discover its CQT was already cached."""
@@ -136,7 +146,7 @@ class Cache:
         total, computed = len(dataset), 0
         paths: list[Path] = []
         for i, item in enumerate(dataset, start=1):
-            source = item.audio()
+            source = item.sources().role(role)
             path = self.feature_path(transform.cache_path(source))
             if not path.exists():
                 feats = extract_features(transform.apply(source))
@@ -144,12 +154,14 @@ class Cache:
                 computed += 1
             paths.append(path)
             # Otherwise silent for hours; a heartbeat so a long separation+CQT pass is
-            # visibly progressing. Tagged by transform (the condition being built) and
-            # split computed/cached so a resumed run visibly races through hits.
+            # visibly progressing. Tagged by role and transform (the channel being
+            # built) and split computed/cached so a resumed run visibly races through
+            # hits -- which is what a second channel over an already-warm cache looks
+            # like, and worth being able to see rather than infer.
             if i % 25 == 0 or i == total:
                 logger.info(
-                    "features[%s] %d/%d (%d computed, %d cached)",
-                    transform.name, i, total, computed, i - computed,
+                    "features[%s/%s] %d/%d (%d computed, %d cached)",
+                    role, transform.name, i, total, computed, i - computed,
                 )
         return paths
 

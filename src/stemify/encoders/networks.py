@@ -23,17 +23,27 @@ from stemify.features import N_BINS
 
 
 class _ConvFrontend(nn.Module):
-    """CQT (B, 1, n_bins, T) -> per-frame channels (B, conv_channels * n_bins, T).
+    """CQT (B, in_channels, n_bins, T) -> per-frame channels (B, conv_channels * n_bins, T).
 
     Two conv blocks over (freq, time); padding keeps T, and frequency is kept
     (not pooled) so the temporal stack downstream sees the full harmonic layout.
+
+    ``in_channels`` is how many renderings of the same music are stacked -- 1 for
+    the bass alone, 2 to add the mixture it came from. Only the first conv's input
+    width changes: the two CQTs share a frame grid and a frequency axis, so the
+    first layer sees both registers of the same instant at the same bin and can
+    learn "this transient is present in the mix too" as a plain filter, with
+    everything downstream unchanged.
     """
 
-    def __init__(self, n_bins: int = N_BINS, conv_channels: int = 32):
+    def __init__(
+        self, n_bins: int = N_BINS, conv_channels: int = 32, in_channels: int = 1
+    ):
         super().__init__()
+        self.in_channels = in_channels
         self.out_channels = conv_channels * n_bins
         self.conv = nn.Sequential(
-            nn.Conv2d(1, conv_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, conv_channels, kernel_size=3, padding=1),
             nn.BatchNorm2d(conv_channels),
             nn.ReLU(),
             nn.Conv2d(conv_channels, conv_channels, kernel_size=3, padding=1),
@@ -82,10 +92,12 @@ class TCN(nn.Module):
         hidden: int = 128,
         levels: int = 4,
         kernel: int = 3,
+        in_channels: int = 1,
     ):
         super().__init__()
         self.hidden = hidden
-        self.frontend = _ConvFrontend(n_bins, conv_channels)
+        self.in_channels = in_channels
+        self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels)
         self.project = nn.Conv1d(self.frontend.out_channels, hidden, kernel_size=1)
         self.tcn = nn.Sequential(
             *[_TCNBlock(hidden, dilation=2**i, kernel=kernel) for i in range(levels)]
@@ -101,10 +113,17 @@ class TCN(nn.Module):
 class GRU(nn.Module):
     """CQT -> per-frame features via a BiGRU. Ablation baseline only (slow on MPS)."""
 
-    def __init__(self, n_bins: int = N_BINS, conv_channels: int = 32, hidden: int = 128):
+    def __init__(
+        self,
+        n_bins: int = N_BINS,
+        conv_channels: int = 32,
+        hidden: int = 128,
+        in_channels: int = 1,
+    ):
         super().__init__()
         self.hidden = hidden
-        self.frontend = _ConvFrontend(n_bins, conv_channels)
+        self.in_channels = in_channels
+        self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels)
         self.rnn = nn.GRU(
             input_size=self.frontend.out_channels,
             hidden_size=hidden // 2,

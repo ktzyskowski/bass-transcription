@@ -23,15 +23,15 @@ import numpy as np
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset
-from stemify.features import FrameFeatures, extract_features
+from stemify.features import FrameFeatures, extract_features, stack_channels
 from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues, score_notes
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
 from stemify.cache import Cache
+from stemify.training.conditions import CONDITIONS, Condition
 from stemify.training.examples import prepare_examples
 from stemify.training.labels import onset_targets
-from stemify.transforms import AudioTransform, Identity
 
 # A segmentation step: cached features + their contour -> notes. The validator
 # depends on this shape, not on any concrete encoder/decoder -- the caller wraps a
@@ -48,27 +48,33 @@ class ValExample:
     """One val track, everything fixed across checkpoints precomputed.
 
     FrameFeatures are held either in memory (``features``, e.g. tests or the no-cache
-    path) or lazily on disk (``feature_path``, the cached path). Holding all val
-    features in memory for a full-scale val set is ~21 GB across three conditions,
-    so when they are cached to disk we keep only the path and load the tensor
-    transiently per score -- see ``load_features``. Only ``frame_times`` (small) is
-    kept resident, since scoring needs it for onset timing."""
+    path) or lazily on disk (``feature_paths``, the cached paths -- one per model
+    input channel). Holding all val features in memory for a full-scale val set is
+    ~21 GB across three conditions, so when they are cached to disk we keep only the
+    paths and load the tensor transiently per score -- see ``load_features``. Only
+    ``frame_times`` (small) is kept resident, since scoring needs it for onset
+    timing."""
 
     frame_times: np.ndarray       # (T,)
     contour: Contour              # pyin pitch, fixed
     notes: list[NoteEvent]        # reference notes
-    features: np.ndarray | None = None      # (n_bins, T) CQT, if resident
-    feature_path: Path | None = None        # else load from disk on demand
+    features: np.ndarray | None = None      # (n_bins, T) or (C, n_bins, T), if resident
+    feature_paths: tuple[Path, ...] = ()    # else load from disk on demand, per channel
     voicing_target: np.ndarray | None = None  # (T,) gt voiced mask, for voicing AUROC
 
     def load_features(self) -> FrameFeatures:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
         read is transient -- freed after each score -- so memory stays flat over the
-        run. ``feature_path`` is the TrackExample npz; the CQT is its .npy sidecar."""
-        values = self.features
-        if values is None:
-            values = np.load(features_npy(self.feature_path))
-        return FrameFeatures(values, self.frame_times)
+        run. Each ``feature_paths`` entry is a TrackExample npz; the CQT is its .npy
+        sidecar. Several are stacked into the model's channel axis, matching how the
+        training loader assembles a window."""
+        if self.features is not None:
+            return FrameFeatures(self.features, self.frame_times)
+        channels = [
+            FrameFeatures(np.load(features_npy(p)), self.frame_times)
+            for p in self.feature_paths
+        ]
+        return stack_channels(channels)
 
 
 def score_examples(
@@ -137,10 +143,12 @@ class OnsetValidator:
     def __init__(
         self,
         dataset: Dataset,
-        transform: AudioTransform | None = None,
+        condition: Condition | None = None,
         cache: Cache | None = None,
     ) -> None:
-        transform = transform or Identity()
+        # A bare stem condition is the neutral default -- one channel, no transform
+        # -- so a caller scoring clean audio need not name one.
+        condition = condition or CONDITIONS["stem"]
         estimator = PyinPitch()
 
         # One ``cache`` replaces the old separate ``contour_cache``/``feature_cache``
@@ -155,37 +163,47 @@ class OnsetValidator:
         # backfill, no CQT recompute), so the per-frame voiced label the AUROC path
         # needs is present for every condition.
         if cache is not None:
-            prepare_examples(dataset, ["onset", "voicing"], cache, transform)
+            prepare_examples(dataset, ["onset", "voicing"], cache, condition.primary.transform)
+            # Every channel's CQT, keyed on its own resolved audio -- so a second
+            # channel is typically a pure cache hit from whichever run already built
+            # that condition. Ordered per track, channel 0 first.
+            per_track = condition.channel_paths(dataset, cache)
 
         self.examples: list[ValExample] = []
-        for item in dataset:
-            path = transform.apply(item.audio())
+        for i, item in enumerate(dataset):
+            # The contour describes channel 0: it is the audio being transcribed,
+            # and the context channels are never pitch-tracked.
+            primary = condition.primary.audio(item)
             if cache is not None:
-                # Keep only the path + small frame_times/label resident; the feature
-                # tensor is loaded transiently per score (load_features), so the whole
-                # val set's CQT never sits in memory at once.
-                fpath = cache.feature_path(path)
-                cached = np.load(fpath)
+                # Keep only the paths + small frame_times/label resident; the feature
+                # tensors are loaded transiently per score (load_features), so the
+                # whole val set's CQT never sits in memory at once.
+                fpaths = per_track[i]
+                cached = np.load(fpaths[0])
                 frame_times = cached["frame_times"]
                 voicing_target = (
                     cached["target_voicing"] if "target_voicing" in cached.files else None
                 )
                 features = None
-                contour = cache.contour(estimator, path)
+                contour = cache.contour(estimator, primary)
             else:
-                feats = extract_features(path)
+                # No cache: featurise each channel now and hold them resident. Only
+                # the small-set/test path takes this branch.
+                feats = stack_channels(
+                    [extract_features(c.audio(item)) for c in condition.channels]
+                )
                 frame_times = feats.frame_times
                 features = feats.values
                 voicing_target = None
-                fpath = None
-                contour = estimator.estimate(path)
+                fpaths = ()
+                contour = estimator.estimate(primary)
             self.examples.append(
                 ValExample(
                     frame_times=frame_times,
                     contour=contour,
                     notes=item.reference_notes(),
                     features=features,
-                    feature_path=fpath,
+                    feature_paths=fpaths,
                     voicing_target=voicing_target,
                 )
             )

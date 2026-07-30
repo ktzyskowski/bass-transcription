@@ -22,38 +22,28 @@ model nobody trained.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from pathlib import Path
 
 from torch import nn
 from torch.utils.data import ConcatDataset, DataLoader
 
 from stemify.cache import Cache
-from stemify.data.slakh import SlakhDataset
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.encoders.heads import onset_head, voicing_head
 from stemify.encoders.networks import TCN
 from stemify.encoders.tagger import FrameTagger
+from stemify.training.conditions import CONDITIONS, resolve
 from stemify.training.config import TrainConfig
 from stemify.training.datasets import frame as frame_ds
 from stemify.training.datasets import sequence as sequence_ds
 from stemify.training.examples import prepare_examples
 from stemify.training.losses import FrameBCELoss, Loss
 from stemify.training.losses.segmental import SemiCRFLoss
-from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 HEADS = ["onset", "voicing"]
-
-# tag -> (Slakh source, input transform). The target is always the clean stem MIDI,
-# regardless of which source the *features* come from -- that asymmetry is the domain
-# randomisation. Lives here rather than in train.py so the dependency runs one way
-# (train imports recipes, never the reverse).
-SOURCES: dict[str, tuple[str, AudioTransform]] = {
-    "stem": ("stem", Identity()),
-    "mix": ("mix", Identity()),
-    "demucs": ("mix", DemucsSeparator()),
-}
 
 
 def _loader_kwargs(config: TrainConfig) -> dict:
@@ -73,6 +63,18 @@ class Recipe(ABC):
 
     name: str
 
+    def __init__(self, conditions: Sequence[str] | None = None) -> None:
+        """``conditions`` are the input conditions to train over, by tag.
+
+        Held on the recipe rather than passed to ``train_loader`` because the model
+        has to be built from them too: a mix-conditioned condition means a wider
+        first conv, and a recipe that took the conditions only at loader time would
+        already have built a model with the wrong input shape.
+        """
+        self.conditions = resolve(list(conditions or ["stem", "mix"]))
+        # resolve() has already rejected a mixed-width set, so this is unambiguous.
+        self.in_channels = self.conditions[0].in_channels
+
     @abstractmethod
     def build_model(self) -> nn.Module:
         """The encoder. Shared shape across recipes -- what varies is the objective
@@ -86,12 +88,11 @@ class Recipe(ABC):
     def train_loader(
         self,
         root: str,
-        sources: list[str],
         cache: Cache,
         config: TrainConfig,
         limit: int | None,
     ) -> DataLoader:
-        """Batches from the union of the requested source conditions.
+        """Batches from the union of this recipe's input conditions.
 
         Takes the corpus and the cache rather than pre-built paths, because the two
         paradigms need different things from them: the frame path wants per-frame
@@ -119,7 +120,7 @@ class FrameRecipe(Recipe):
     name = "frame"
 
     def build_model(self) -> nn.Module:
-        backbone = TCN()
+        backbone = TCN(in_channels=self.in_channels)
         return FrameTagger(
             backbone,
             {
@@ -131,27 +132,39 @@ class FrameRecipe(Recipe):
     def build_loss(self, config: TrainConfig) -> Loss:
         return FrameBCELoss(HEADS, config.pos_weight)
 
-    def _windows(self, paths: list[Path], config: TrainConfig):
+    def _windows(self, tracks: list[tuple[Path, ...]], config: TrainConfig):
         return frame_ds.FrameWindowDataset(
-            paths, HEADS, config.window_frames, config.hop_frames
+            tracks, HEADS, config.window_frames, config.hop_frames
         )
 
-    def train_loader(self, root, sources, cache, config, limit) -> DataLoader:
-        paths: list[Path] = []
-        for tag in sources:
-            source, transform = SOURCES[tag]
-            ds = SlakhDataset(root, split="train", source=source, limit=limit)
-            paths += prepare_examples(ds, HEADS, cache, transform)
+    def _tracks(
+        self, root: str, split: str, cache: Cache, condition, limit: int | None
+    ) -> list[tuple[Path, ...]]:
+        """One tuple of cached CQT paths per track, ordered by input channel.
+
+        Targets are layered onto channel 0's npz -- it is the audio the labels
+        describe -- and the remaining channels contribute features only."""
+        ds = condition.dataset(root, split, limit)
+        prepare_examples(ds, HEADS, cache, condition.primary.transform)
+        return condition.channel_paths(ds, cache)
+
+    def train_loader(self, root, cache, config, limit) -> DataLoader:
+        tracks: list[tuple[Path, ...]] = []
+        for condition in self.conditions:
+            tracks += self._tracks(root, "train", cache, condition, limit)
         return DataLoader(
-            self._windows(paths, config), shuffle=True,
+            self._windows(tracks, config), shuffle=True,
             collate_fn=frame_ds.collate, **_loader_kwargs(config),
         )
 
     def val_loader(self, root, cache, config, val_limit) -> DataLoader:
-        ds = SlakhDataset(root, split="validation", source="stem", limit=val_limit)
-        paths = prepare_examples(ds, HEADS, cache)
+        # Clean stems, but through the *same channel layout* the model was built
+        # for -- a 2-channel model cannot be fed 1-channel val windows. "stem" and
+        # "stem+mix" are the respective clean-bass conditions.
+        condition = CONDITIONS["stem+mix" if self.in_channels == 2 else "stem"]
+        tracks = self._tracks(root, "validation", cache, condition, val_limit)
         return DataLoader(
-            self._windows(paths, config),
+            self._windows(tracks, config),
             collate_fn=frame_ds.collate, **_loader_kwargs(config),
         )
 
@@ -168,34 +181,48 @@ class SemiCRFRecipe(Recipe):
 
     name = "semicrf"
 
-    def __init__(self, decoder: SemiCRFDecoder | None = None) -> None:
+    def __init__(
+        self,
+        conditions: Sequence[str] | None = None,
+        decoder: SemiCRFDecoder | None = None,
+    ) -> None:
+        super().__init__(conditions)
+        # The sequence dataset feeds the encoder one CQT per track, so a second
+        # input channel has nowhere to go on this path yet. Reject it here rather
+        # than let a 2-channel model meet 1-channel batches at the first conv.
+        if self.in_channels != 1:
+            raise ValueError(
+                "the semicrf objective has no multi-channel sequence loader yet; "
+                f"conditions {[c.name for c in self.conditions]} need "
+                f"{self.in_channels} channels"
+            )
         self.decoder = decoder or SemiCRFDecoder()
 
     def build_model(self) -> nn.Module:
-        return FrameRecipe().build_model()  # same encoder; only the objective differs
+        # Same encoder; only the objective differs.
+        return FrameRecipe([c.name for c in self.conditions]).build_model()
 
     def build_loss(self, config: TrainConfig) -> Loss:
         return SemiCRFLoss(self.decoder)
 
-    def _sequences(
-        self, root: str, split: str, sources: list[str], cache: Cache, limit: int | None
-    ):
-        parts = []
-        for tag in sources:
-            source, transform = SOURCES[tag]
-            ds = SlakhDataset(root, split=split, source=source, limit=limit)
-            parts.append(sequence_ds.SequenceDataset(ds, cache, transform))
+    def _sequences(self, root: str, split: str, conditions, cache, limit: int | None):
+        parts = [
+            sequence_ds.SequenceDataset(
+                c.dataset(root, split, limit), cache, c.primary.transform
+            )
+            for c in conditions
+        ]
         return parts[0] if len(parts) == 1 else ConcatDataset(parts)
 
-    def train_loader(self, root, sources, cache, config, limit) -> DataLoader:
+    def train_loader(self, root, cache, config, limit) -> DataLoader:
         return DataLoader(
-            self._sequences(root, "train", sources, cache, limit), shuffle=True,
+            self._sequences(root, "train", self.conditions, cache, limit), shuffle=True,
             collate_fn=sequence_ds.collate, **_loader_kwargs(config),
         )
 
     def val_loader(self, root, cache, config, val_limit) -> DataLoader:
         return DataLoader(
-            self._sequences(root, "validation", ["stem"], cache, val_limit),
+            self._sequences(root, "validation", [CONDITIONS["stem"]], cache, val_limit),
             collate_fn=sequence_ds.collate, **_loader_kwargs(config),
         )
 

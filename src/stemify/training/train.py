@@ -33,7 +33,6 @@ import torch
 from torch import nn
 
 from stemify.cache import Cache
-from stemify.data.slakh import SlakhDataset
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.heads import onset_head, voicing_head
@@ -45,9 +44,9 @@ from stemify.training.callbacks import (
     ConsoleCallback,
     MLflowCallback,
 )
+from stemify.training.conditions import CONDITIONS
 from stemify.training.config import TrainConfig
-from stemify.training.examples import prepare_examples
-from stemify.training.recipes import HEADS, RECIPES, SOURCES, Recipe
+from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 
@@ -61,8 +60,8 @@ _NOTE_KEY = {
 }
 
 
-def build_model() -> FrameTagger:
-    backbone = TCN()
+def build_model(in_channels: int = 1) -> FrameTagger:
+    backbone = TCN(in_channels=in_channels)
     return FrameTagger(
         backbone,
         {"onset": onset_head(backbone.hidden), "voicing": voicing_head(backbone.hidden)},
@@ -75,10 +74,10 @@ def build_validators(
     conditions: list[str],
     cache: Cache | None = None,
 ) -> dict[str, OnsetValidator]:
-    """One ``OnsetValidator`` per condition, keyed by tag. A condition is just a
-    ``(source, transform)`` pair -- exactly what a validator wraps -- so the same
-    ``SOURCES`` table that defines the *training* conditions defines the validation
-    ones.
+    """One ``OnsetValidator`` per condition, keyed by tag. A condition names the
+    channels the model reads -- exactly what a validator has to reproduce -- so the
+    same ``CONDITIONS`` table that defines the *training* conditions defines the
+    validation ones.
 
     Every condition shares the one ``cache``: contours and CQTs are keyed on each
     condition's *resolved* audio path, so they cannot collide and no per-tag
@@ -95,10 +94,8 @@ def build_validators(
     pointless on a given machine."""
     return {
         tag: OnsetValidator(
-            SlakhDataset(
-                root, split="validation", source=SOURCES[tag][0], limit=val_limit
-            ),
-            SOURCES[tag][1],
+            CONDITIONS[tag].dataset(root, "validation", val_limit),
+            CONDITIONS[tag],
             cache=cache,
         )
         for tag in conditions
@@ -178,7 +175,6 @@ def train(
     root: str,
     cache_dir: Path,
     config: TrainConfig,
-    sources: list[str] | None = None,
     val_conditions: list[str] | None = None,
     val_limit: int = 40,
     val_every: int = 5,
@@ -192,11 +188,25 @@ def train(
     init_from: Path | None = None,
 ) -> None:
     recipe = recipe or RECIPES["frame"]()
-    sources = sources or ["stem", "mix"]
+    sources = [c.name for c in recipe.conditions]
     # Validate on every deployment condition (not just clean stems), so the note
     # F1 gap between stem and demucs is visible during training rather than only
     # at final test. Independent of train sources: monitor the full breakdown.
-    val_conditions = val_conditions or ["stem", "mix", "demucs"]
+    # The default tracks the model's input width, since a validator has to feed
+    # the same channels the model was built for.
+    val_conditions = val_conditions or (
+        ["stem+mix", "demucs+mix"] if recipe.in_channels == 2
+        else ["stem", "mix", "demucs"]
+    )
+    mismatched = [
+        t for t in val_conditions if CONDITIONS[t].in_channels != recipe.in_channels
+    ]
+    if mismatched:
+        raise ValueError(
+            f"val conditions {mismatched} do not match the model's "
+            f"{recipe.in_channels} input channel(s) (training on {sources}). "
+            "Scoring needs the same channel layout the model was trained with."
+        )
     cache = Cache(cache_dir)
     out = out or cache_dir / "onset_model.pt"
 
@@ -206,7 +216,7 @@ def train(
     # and the val conditions transparently reuse whatever this loop already built.
     # The recipe owns the batch shape: fixed windows for frame BCE, whole tracks for
     # the semi-CRF, whose objective scans a whole segmentation.
-    train_loader = recipe.train_loader(root, sources, cache, config, limit)
+    train_loader = recipe.train_loader(root, cache, config, limit)
     val_loader = recipe.val_loader(root, cache, config, val_limit)
 
     model = recipe.build_model()
@@ -244,6 +254,7 @@ def train(
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate, "window": config.window_frames,
                     "objective": recipe.name,
+                    "in_channels": recipe.in_channels,
                     "train_batches": len(train_loader)},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
@@ -288,6 +299,13 @@ def train(
             "loss_state": trainer.loss.state_dict(),
             "heads": HEADS,
             "encoder": "tcn",
+            # The input width is architecture, not a hyperparameter: loading these
+            # weights into a 1-channel TCN fails on the first conv, and guessing it
+            # from the state_dict means reverse-engineering a conv shape. Recorded
+            # alongside the conditions that produced it so a checkpoint says what
+            # it expects to be fed.
+            "in_channels": recipe.in_channels,
+            "conditions": sources,
         },
         out,
     )
@@ -308,9 +326,14 @@ def main() -> None:
     ap.add_argument("--root", default="data/raw/slakh2100")
     ap.add_argument("--cache-dir", type=Path, default=Path("data/cache/onset"))
     ap.add_argument("--sources", default="stem,mix",
-                    help="comma-separated train input conditions from " + ",".join(SOURCES))
-    ap.add_argument("--val-sources", default="stem,mix,demucs",
-                    help="comma-separated val conditions, scored+logged separately")
+                    help="comma-separated train input conditions from "
+                         + ",".join(CONDITIONS) + ". A '+' condition feeds several "
+                         "channels (bass first): 'demucs+mix' gives the model the "
+                         "separated bass and the mixture it came from")
+    ap.add_argument("--val-sources",
+                    help="comma-separated val conditions, scored+logged separately "
+                         "(default: every deployment condition of the model's own "
+                         "channel width)")
     ap.add_argument("--tracking-uri", help="MLflow tracking URI, e.g. file:./mlruns")
     ap.add_argument("--experiment", default="onset-detection",
                     help="MLflow experiment name")
@@ -340,9 +363,10 @@ def main() -> None:
         num_workers=args.num_workers,
     )
     train(
-        args.root, args.cache_dir, config, recipe=RECIPES[args.objective](),
-        init_from=args.init_from, sources=args.sources.split(","),
-        val_conditions=args.val_sources.split(","),
+        args.root, args.cache_dir, config,
+        recipe=RECIPES[args.objective](args.sources.split(",")),
+        init_from=args.init_from,
+        val_conditions=args.val_sources.split(",") if args.val_sources else None,
         val_limit=args.val_limit, val_every=args.val_every,
         experiment=args.experiment, run_name=args.run_name,
         batch_log_every=args.batch_log_every,

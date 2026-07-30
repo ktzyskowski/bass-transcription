@@ -29,6 +29,7 @@ from pathlib import Path
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
+from stemify.sources import Sources
 
 
 class EvalItem(ABC):
@@ -42,6 +43,20 @@ class EvalItem(ABC):
     @abstractmethod
     def audio(self) -> Path:
         """The audio a baseline should listen to."""
+
+    def sources(self) -> Sources:
+        """Every audio role this item can offer, not just the one being listened to.
+
+        ``audio()`` answers "which single file is this item *about*"; this answers
+        "what else is on hand for the same music". They differ only for a dataset
+        that ships more than one rendering -- Slakh has the mixture beside every
+        stem -- and that difference is exactly what a multi-channel encoder reads:
+        the bass in channel 0, the mixture it sits inside in channel 1.
+
+        The default keeps the two the same, so a single-file dataset needs no
+        change and simply has no second channel to offer.
+        """
+        return Sources(bass=self.audio())
 
     @abstractmethod
     def reference(self) -> Contour:

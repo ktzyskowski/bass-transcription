@@ -16,6 +16,7 @@ reasoning is the expensive part, not the code. ``midi_to_bin`` has no caller yet
 same reason.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,10 +96,40 @@ class FrameFeatures:
     frames fall on, and pairing them as one object means the two can't be handed
     over for different tracks by accident -- the same reason ``Contour`` bundles
     its arrays. ``values`` is the model's input; the pyin ``Contour`` is
-    deliberately *not* here (different producer, cache, grid and consumer)."""
+    deliberately *not* here (different producer, cache, grid and consumer).
 
-    values: np.ndarray        # (n_bins, T), the CQT the model ingests
+    ``values`` is ``(n_bins, T)`` for the usual single-input model, or
+    ``(n_channels, n_bins, T)`` when several renderings of the same music are fed
+    side by side (bass in channel 0, the mixture it came from in channel 1). The
+    channel axis leads so that a slice over time is the last axis either way, and
+    so the array drops straight into a conv front-end's channel dimension."""
+
+    values: np.ndarray        # (n_bins, T) or (C, n_bins, T) -- the model's input
     frame_times: np.ndarray   # (T,)
+
+
+def stack_channels(channels: Sequence[FrameFeatures]) -> FrameFeatures:
+    """Several renderings of one track -> one ``(C, n_bins, T)`` model input.
+
+    Truncates to the shortest channel. Separate files for the same music can differ
+    by a frame or two -- a separator's output length, a stem trimmed at render --
+    and since every channel is a CQT on the *same* hop, frame *k* is the same
+    instant in all of them. So the overhang is surplus at the tail, not a
+    misalignment, and dropping it aligns them exactly with nothing to resample.
+    (Measured on Slakh: stem, mix and demucs-bass agree to the frame on every track
+    checked, so this is a guard, not a routine correction.)
+
+    A single channel passes through untouched, keeping ``(n_bins, T)`` -- the
+    one-channel path never pays for a copy or gains a stray axis.
+    """
+    if not channels:
+        raise ValueError("stack_channels needs at least one channel")
+    if len(channels) == 1:
+        return channels[0]
+    n = min(c.values.shape[-1] for c in channels)
+    return FrameFeatures(
+        np.stack([c.values[..., :n] for c in channels]), channels[0].frame_times[:n]
+    )
 
 
 def extract_features(path: str | Path, sr: int = SAMPLE_RATE) -> FrameFeatures:

@@ -25,6 +25,17 @@ class FrameTagger(nn.Module):
         self.backbone = backbone
         self.heads = nn.ModuleDict(heads)
 
+    @property
+    def in_channels(self) -> int:
+        """How many stacked renderings the input carries (see ``_ConvFrontend``).
+
+        Read off the backbone rather than stored, so it cannot drift from the conv
+        that actually has to accept the tensor. Surfaced here because a
+        ``NeuralEncoder`` holds only the tagger and still has to know how many
+        channels to assemble from a track's ``Sources``.
+        """
+        return getattr(self.backbone, "in_channels", 1)
+
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = self.backbone(x)
         return {name: head(features) for name, head in self.heads.items()}

@@ -54,6 +54,7 @@ import yaml
 from stemify.contour import Contour
 from stemify.data.base import Dataset, EvalItem
 from stemify.notes import NoteEvent
+from stemify.sources import Sources
 
 # Frame grid for the reference contour. 10 ms is the mir_eval melody convention
 # and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our
@@ -130,6 +131,17 @@ class BassStem(EvalItem):
 
     def audio(self) -> Path:
         return self.stem_path if self.source == "stem" else self.mix_path
+
+    def sources(self) -> Sources:
+        """The audio ``source`` selected, plus the mixture it sits inside.
+
+        ``mix`` is present unconditionally: Slakh ships ``mix.flac`` beside every
+        stem, so a mix-conditioned channel costs nothing to feed and needs no
+        re-rendering. Note this is the *raw* mixture -- a condition that wants it
+        separated says so with its own transform, which is what keeps the
+        demucs-bass and raw-mix channels on distinct cache keys for the same file.
+        """
+        return Sources(bass=self.audio(), mix=self.mix_path)
 
     @cached_property
     def _notes(self) -> list[tuple[float, float, int]]:
