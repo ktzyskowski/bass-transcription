@@ -22,8 +22,16 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.decoders.heuristic import PITCH_SPLIT_SEMITONES
 from stemify.grids import resample_mask
+
+# How far pyin's pitch must move for ``pitch_jumps`` to mark a frame. This was
+# ``heuristic.PITCH_SPLIT_SEMITONES`` until that constant was turned off by default
+# (a pitch change no longer *places* a note there -- see its docstring). The two
+# usages were never the same question: there the threshold decided a hard note
+# boundary, here it only raises a feature the CRF is free to weight, so the value is
+# pinned locally at what every recorded semi-CRF run used rather than following a
+# default that now means something else.
+JUMP_SEMITONES = 0.8
 
 
 def _check_one_device(what: str, **fields: torch.Tensor) -> None:
@@ -189,8 +197,12 @@ def pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
     """Per-frame indicator of a pyin pitch-change landing at each grid frame.
 
     A ``note`` span crossing a change is penalised (``w_pitch``), so the decoder
-    splits a legato run at the pitch boundary even with no rest and a weak onset --
-    the third split cue ``group()`` uses, restored to the global decoder. Detection
+    splits a legato run at the pitch boundary even with no rest and a weak onset.
+    ``group()`` once split on this cue too and no longer does -- pyin's transition
+    lags a real onset by ~23 ms, which made it place notes late enough to fall outside
+    the match tolerance. Here it is a weighted *feature* rather than a hard boundary,
+    so the same lag is something the decoder can learn to discount; that is a weaker
+    claim than "this cue is good", and it is why the threshold now lives here. Detection
     bridges pyin dropouts the way ``group()``'s running pitch does: a bass note
     transition usually has a one-frame unvoiced attack right at the boundary, so
     comparing only adjacent voiced frames would miss exactly the changes that matter.
@@ -209,7 +221,7 @@ def pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
         m = midi[k]
         if np.isnan(m):
             continue  # dropout: hold `last`
-        if not np.isnan(last) and abs(m - last) > PITCH_SPLIT_SEMITONES:
+        if not np.isnan(last) and abs(m - last) > JUMP_SEMITONES:
             jump[k] = 1.0
         last = m
     return jump

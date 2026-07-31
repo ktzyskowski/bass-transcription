@@ -12,7 +12,9 @@ import pytest
 
 from stemify.contour import Contour
 from stemify.decoders.heuristic import (
+    DSP_PITCH_SPLIT_SEMITONES,
     MERGE_GAP_S,
+    PITCH_SPLIT_SEMITONES,
     group_contour,
     onset_times_from_probs,
 )
@@ -85,11 +87,52 @@ def test_voiced_mask_shape_must_match_contour():
 
 
 def test_merge_keeps_distinct_pitches_apart():
+    # The two notes come from an *onset*, not a pitch split, so this tests the merge
+    # tolerance itself: an octave apart is never "the same note rejoined".
     step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
-    notes = group_contour(step, merge_gap_s=0.05)
+    notes = group_contour(step, onsets=np.array([0.5]), merge_gap_s=0.05)
     assert len(notes) == 2
     assert abs(notes[0].midi_pitch - 45.0) < 0.5
     assert abs(notes[1].midi_pitch - 57.0) < 0.5
+
+
+# --------------------------------------------------------------------------- #
+# the pitch-change cue: off by default, still available to the DSP path        #
+# --------------------------------------------------------------------------- #
+def test_pitch_change_alone_does_not_split_by_default():
+    """A pitch change with no onset is one note now.
+
+    pyin reaches a note's pitch ~23 ms after the true onset, so splitting here placed
+    notes late enough to fall outside the 50 ms match tolerance. The onset head does
+    the placing instead -- see PITCH_SPLIT_SEMITONES.
+    """
+    step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
+    assert len(group_contour(step, merge_gap_s=None)) == 1
+
+
+def test_pitch_split_is_still_available_for_encoders_without_an_onset_head():
+    step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
+    notes = group_contour(
+        step, pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES, merge_gap_s=None
+    )
+    assert len(notes) == 2
+
+
+def test_disabling_the_split_does_not_make_merge_join_everything():
+    """Regression: the split and merge tolerances must stay independent.
+
+    They shared one constant, so expressing "never split on pitch" as a huge tolerance
+    silently turned the rejoin pass into "merge every adjacent note whatever its
+    pitch" -- a perfect fifth collapsing into one note at the average of the two.
+    """
+    step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
+    notes = group_contour(step, onsets=np.array([0.5]), merge_gap_s=0.05)
+    assert len(notes) == 2
+    assert not any(abs(n.midi_pitch - 51.0) < 1.0 for n in notes)  # no 45/57 average
+
+
+def test_pitch_split_is_off_by_default():
+    assert PITCH_SPLIT_SEMITONES is None
 
 
 def test_merge_keeps_notes_across_a_real_rest():

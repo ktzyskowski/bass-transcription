@@ -1,11 +1,14 @@
-"""``HeuristicDecoder``: the greedy DSP-era decode (no learning).
+"""``HeuristicDecoder``: the greedy decode (no learning).
 
-Turns per-frame ``Cues`` into notes by splitting the pitch contour at three cues --
-a rest (an unvoiced run), a pitch change, and an onset (a same-pitch
-re-articulation the contour alone cannot show) -- then rejoining same-pitch
-fragments a spurious cue split. The rest/onset cues over-fire (flux triggers on
-mid-sustain noise; pyin drops out for a frame), so the optional ``merge_gap_s`` pass
-undoes the dominant source of over-segmentation, trading against recall.
+Turns per-frame ``Cues`` into notes by splitting the pitch contour at a rest (an
+unvoiced run) and at an onset (a re-articulation the contour alone cannot show),
+then rejoining fragments a spurious cue split. The rest/onset cues over-fire (flux
+triggers on mid-sustain noise; pyin drops out for a frame), so the optional
+``merge_gap_s`` pass undoes the dominant source of over-segmentation, trading
+against recall.
+
+A *pitch change* used to be a third splitting cue, and is now off by default -- see
+``PITCH_SPLIT_SEMITONES`` for why, and for the one encoder that still needs it.
 
 The pure core is ``group_contour`` -- no audio, no thresholds, taking onset *times*
 and a voiced mask directly -- so a boundary case is testable with a synthetic
@@ -26,11 +29,45 @@ from stemify.grids import resample_mask
 from stemify.notes import NoteEvent
 
 # Below this, a "note" is a tracker blip (onset transient, a frame of octave
-# wobble) rather than a played note.
+# wobble) rather than a played note. Audited 2026-07-31 and it earns its place:
+# removing it costs 0.023 strict F1. Note it is enforced against the *contour* grid
+# (pyin's 23.2 ms hop), so in practice it means "at least 3 contour frames".
 MIN_NOTE_S = 0.05
+
 # A sustained jump this far from the note's running pitch starts a new note.
-# Under half a semitone would split vibrato; this keeps a vibrato'd note whole.
-PITCH_SPLIT_SEMITONES = 0.8
+# ``None`` -- the default -- means a pitch change never places a note on its own.
+#
+# This was the only cue a DSP pipeline had for a new note, and it turned into an
+# active liability the moment a trained onset head existed. pyin reaches a note's true
+# pitch a median 23 ms *after* the onset (37.5 ms mean on separated audio, and past the
+# 50 ms match tolerance for 14.2% of pitch changes), so a real attack makes the contour
+# walk a staircase through intermediate pitches -- 48.1 -> 51.1 -> 52.0 -- and at 0.8
+# every step of that staircase split. Worse, ``group_contour`` *had* already placed a
+# note correctly at the onset: the fragment between the onset and the late pitch
+# transition was ~2 contour frames, under MIN_NOTE_S, so ``emit`` dropped it, and the
+# note that survived started ~58 ms late -- just outside tolerance. One reference note,
+# one false negative and one interior-offpitch false positive.
+#
+# Disabling it was worth +7.5 strict F1 on the held-out test split, on two independent
+# checkpoints, and it wins on both sides at once (precision 0.78 -> 0.92, recall
+# 0.878 -> 0.886). The sweep is monotone from 0.8 out to "off" with no interior
+# optimum, which is the shape of a superseded rule rather than a mistuned one.
+PITCH_SPLIT_SEMITONES: float | None = None
+
+# What an encoder with no trained onset head falls back to. ``DSPEncoder`` has only a
+# spectral-flux spike train and no voicing curve at all, so for it a pitch change
+# really is the only evidence that a new note began; this is the value the project
+# shipped with, kept so the DSP floor stays the floor it always was.
+DSP_PITCH_SPLIT_SEMITONES = 0.8
+
+# "Close enough in pitch to be the same note" for the rejoin pass below. Deliberately
+# its own constant rather than reusing the split tolerance: the two answer different
+# questions ("is this a new note" against "were these ever one note"), and while they
+# shared one, disabling the split silently turned the merge pass into "merge every
+# adjacent note whatever its pitch" -- a perfect fifth collapsing into one note at the
+# average of the two.
+MERGE_PITCH_SEMITONES = 0.8
+
 # Two same-pitch notes closer than this are rejoined: the split that separated them
 # was an artifact (a spurious mid-sustain onset, gap ~0, or a one-frame pyin dropout,
 # gap ~one hop) rather than a real re-articulation. None disables the pass -- the
@@ -40,6 +77,13 @@ MERGE_GAP_S: float | None = None
 # Peak-picking an onset *probability* curve: a local maximum above ONSET_THRESHOLD is
 # an onset; MIN_ONSET_GAP_S enforces a refractory gap so one attack does not fire
 # twice. VOICING_THRESHOLD cuts the voicing curve into a note/rest mask.
+#
+# Both thresholds are genuine operating points rather than leftovers, and the audit
+# found no reason to move either: the best alternative was +0.0012 strict F1, well
+# inside the noise of a 40-track val set. MIN_ONSET_GAP_S is *inert* for a trained
+# onset head (0.0 through 0.05 score identically -- its peaks are already well
+# separated) but is kept for the DSP path, whose flux spikes are exactly what it
+# guards against.
 ONSET_THRESHOLD = 0.5
 MIN_ONSET_GAP_S = 0.03
 VOICING_THRESHOLD = 0.5
@@ -71,7 +115,8 @@ def group_contour(
     voiced: np.ndarray | None = None,
     *,
     min_note_s: float = MIN_NOTE_S,
-    pitch_split_semitones: float = PITCH_SPLIT_SEMITONES,
+    pitch_split_semitones: float | None = PITCH_SPLIT_SEMITONES,
+    merge_pitch_semitones: float = MERGE_PITCH_SEMITONES,
     merge_gap_s: float | None = MERGE_GAP_S,
 ) -> list[NoteEvent]:
     """Group a contour into notes given onset times. The pure core -- no audio, no
@@ -134,7 +179,8 @@ def group_contour(
         # against when the run so far is all pyin-pitchless -> no pitch split.)
         prev = midi[start:i]
         jumped = (
-            not np.isnan(prev).all()
+            pitch_split_semitones is not None
+            and not np.isnan(prev).all()
             and abs(midi[i] - np.nanmedian(prev)) > pitch_split_semitones
         )
         if onset_frame[i] or jumped:
@@ -144,14 +190,14 @@ def group_contour(
         emit(start, times.size)
 
     if merge_gap_s is not None:
-        notes = _merge_same_pitch(notes, merge_gap_s, pitch_split_semitones)
+        notes = _merge_same_pitch(notes, merge_gap_s, merge_pitch_semitones)
     return notes
 
 
 def _merge_same_pitch(
-    notes: list[NoteEvent], merge_gap_s: float, pitch_split_semitones: float
+    notes: list[NoteEvent], merge_gap_s: float, merge_pitch_semitones: float
 ) -> list[NoteEvent]:
-    """Rejoin consecutive notes within ``pitch_split_semitones`` and ``merge_gap_s``
+    """Rejoin consecutive notes within ``merge_pitch_semitones`` and ``merge_gap_s``
     of each other -- the fragments a spurious onset or a pyin dropout left behind.
     The merged note keeps the first fragment's onset (the real one, already matched
     as a true positive) and drops the second's onset (the phantom), which is exactly
@@ -163,7 +209,7 @@ def _merge_same_pitch(
     for nxt in notes[1:]:
         cur = merged[-1]
         gap = nxt.onset - cur.offset
-        same_pitch = abs(nxt.midi_pitch - cur.midi_pitch) <= pitch_split_semitones
+        same_pitch = abs(nxt.midi_pitch - cur.midi_pitch) <= merge_pitch_semitones
         if same_pitch and gap <= merge_gap_s:
             dur_cur = cur.offset - cur.onset
             dur_nxt = nxt.offset - nxt.onset
@@ -185,15 +231,17 @@ class HeuristicDecoder(Decoder):
     def __init__(
         self,
         min_note_s: float = MIN_NOTE_S,
-        pitch_split_semitones: float = PITCH_SPLIT_SEMITONES,
+        pitch_split_semitones: float | None = PITCH_SPLIT_SEMITONES,
         merge_gap_s: float | None = MERGE_GAP_S,
         onset_threshold: float = ONSET_THRESHOLD,
         min_onset_gap_s: float = MIN_ONSET_GAP_S,
         voicing_threshold: float = VOICING_THRESHOLD,
+        merge_pitch_semitones: float = MERGE_PITCH_SEMITONES,
     ) -> None:
         self.min_note_s = min_note_s
         self.pitch_split_semitones = pitch_split_semitones
         self.merge_gap_s = merge_gap_s
+        self.merge_pitch_semitones = merge_pitch_semitones
         self.onset_threshold = onset_threshold
         self.min_onset_gap_s = min_onset_gap_s
         self.voicing_threshold = voicing_threshold
@@ -215,5 +263,6 @@ class HeuristicDecoder(Decoder):
             voiced,
             min_note_s=self.min_note_s,
             pitch_split_semitones=self.pitch_split_semitones,
+            merge_pitch_semitones=self.merge_pitch_semitones,
             merge_gap_s=self.merge_gap_s,
         )

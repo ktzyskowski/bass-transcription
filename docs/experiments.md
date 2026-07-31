@@ -491,6 +491,94 @@ against `recall-w5`'s current 0.824 — about **+12 points of pitch-blind headro
 largest single lever measured so far. Use `recall-w5` as the generator: it has the best
 candidate recall (0.903) and its worse *F1* is by construction, not a defect.
 
+> **Superseded 2026-07-31.** Every note-level number above was decoded with
+> `PITCH_SPLIT_SEMITONES = 0.8`, which was worth ~7.5 strict F1 on its own. They are
+> comparable to each other and to nothing measured after the fix below. The verifier
+> headroom in particular fell from +12 to +2.9/+4.5. See the next section.
+
+## The decoder was throwing the results away (2026-07-31)
+
+### Where the recall ceiling actually goes
+
+`scripts/recall_ceiling.py`, `recall-w5` on `bichannel-separated`, 40 val tracks,
+14238 reference notes, 1376 missed, pitch-blind matching.
+
+**Not label noise.** Only 22 notes (0.2%) are inaudible in the clean stem; recall over
+audible-only notes is 0.9046 against 0.9034 overall. The missing tenth is real notes.
+
+| cause (earliest stage that explains it) | share of misses |
+|---|---|
+| separation stripped >10 dB, pyin then had nothing | 33% |
+| absorbed into a neighbour (pyin's transition lag) | 24% |
+| pyin failed on intact audio | 11% |
+| onset head never fired | 11% |
+| voicing head said rest | 9% |
+| unexplained / matching contention | 11% |
+
+**~69% of the ceiling is pyin**; only ~11% is the onset encoder that rungs 0–2 tuned.
+
+### The mechanism: pyin's lag turned a good onset into a late note
+
+The 24% bucket had a picked onset peak a median **6.6 ms** from truth, yet the nearest
+estimated note sat **57.6 ms** away — 84% of them in a 50–75 ms band, i.e. just outside
+the match tolerance. pyin (hop 512, 23.2 ms) reaches a note's pitch a median 23 ms
+*after* the onset (37.5 ms mean on separated audio; past 50 ms for 14.2% of pitch
+changes), so a real attack walks a staircase through intermediate pitches and every
+step of it split. `group_contour` *had* placed a note correctly at the onset — the
+fragment before the late pitch transition was ~2 contour frames, under `MIN_NOTE_S`,
+so `emit` dropped it. One reference note, one FN **and** one interior-offpitch FP.
+
+### Turning the pitch split off — strict note F1
+
+| checkpoint | validation | test (held out) |
+|---|---|---|
+| `rung0-mono` | 0.7470 → 0.8213 | 0.7421 → **0.8172** |
+| `recall-w5` | 0.7311 → 0.8110 | 0.7331 → **0.8073** |
+
+Monotone across 0.8/1.0/1.25/1.5/2/2.5/3/6/off with no interior optimum. Wins on both
+sides: precision 0.78 → 0.92, recall 0.878 → 0.886, fragmentation FPs down ~45%.
+
+### Constant audit (`scripts/decoder_audit.py`, validation)
+
+| constant | verdict |
+|---|---|
+| `pitch_split_semitones` | **removed** for the neural path; `DSP_PITCH_SPLIT_SEMITONES` keeps the DSP floor honest |
+| `min_onset_gap_s` | inert for a trained head (0.0–0.05 score identically); kept for the DSP path |
+| `min_note_s` | **earns its place** — removing costs −0.023 |
+| `onset_threshold`, `voicing_threshold` | genuine operating points; best alternative +0.0012, inside noise. Unchanged at 0.5 |
+| `merge_gap_s` | stays off. Found a latent coupling: it reused the *split* tolerance as its "same pitch" test, so disabling the split silently made it merge every adjacent note. Now `MERGE_PITCH_SEMITONES` |
+
+### Rungs 0–2 re-scored under the fixed decoder (`scripts/rescore.py`)
+
+| arm | ch | split | recall | prec | blind F1 | strict F1 | pitch gap |
+|---|---|---|---|---|---|---|---|
+| `rung0-mono` | 1 | validation | 0.8860 | 0.9244 | 0.9048 | 0.8213 | +0.0835 |
+| `rung0-mono` | 1 | **test** | 0.8631 | 0.9353 | 0.8977 | **0.8172** | +0.0805 |
+| `balanced` | 2 | validation | 0.9252 | 0.9250 | 0.9251 | 0.8252 | +0.0999 |
+| `balanced` | 2 | **test** | 0.8962 | 0.9307 | 0.9131 | **0.8149** | +0.0982 |
+| `recall-w5` | 2 | validation | 0.9279 | 0.8926 | 0.9099 | 0.8110 | +0.0989 |
+| `recall-w5` | 2 | **test** | 0.9002 | 0.9055 | 0.9028 | **0.8073** | +0.0955 |
+
+**This partly rehabilitates bichannel.** On strict F1 it is still a wash (`balanced`
+0.8149 vs `rung0-mono` 0.8172 on test — within noise, and the sign flips on
+validation). But the mix channel is now visibly buying *placement*: **+3.3 recall and
++1.5 pitch-blind F1 at equal precision**. That gain is cancelled by a pitch gap ~1.8
+points larger, which is coherent — the extra notes it recovers are the quiet, hard ones
+where pyin's pitch is least reliable.
+
+So the earlier "drop bichannel" call should be read as **"bichannel is a null while
+pyin is the pitch source"**. Its pitch-blind ceiling is higher; re-test it after the
+pitch head lands rather than treating it as settled.
+
+### What this leaves for F1
+
+The pitch gap is now the largest measured lever: **+8.1 points** on test for
+`rung0-mono`, ~+9.8 for the bichannel arms. A pitch head also attacks ~69% of the
+recall ceiling, and lands pitch on the 11.6 ms CQT grid — which removes the 23.2 ms
+contour quantisation that made a correctly-placed fragment fall under `MIN_NOTE_S` in
+the first place. The note verifier's headroom fell to +2.9 (`rung0-mono`) / +4.5
+(`recall-w5`) pitch-blind, and by construction it cannot raise recall at all.
+
 ## Future experiments
 
 ### Priority order — revised 2026-07-29
