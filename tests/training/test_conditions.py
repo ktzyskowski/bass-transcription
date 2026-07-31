@@ -216,3 +216,17 @@ def test_a_clean_condition_exists_for_every_width_a_condition_can_have():
     assert widths <= set(CLEAN_BY_WIDTH), (
         f"no clean val condition for width(s) {sorted(widths - set(CLEAN_BY_WIDTH))}"
     )
+
+
+def test_clean_val_conditions_all_filter_to_single_bass():
+    # The pinned protocol (docs/ablation-plan.md): every reported condition is
+    # unambiguous_only, so runs of different input widths early-stop against the same
+    # track set. "stem" is the one condition that keeps multi-bass tracks, and using it
+    # as the 1-channel clean condition would silently reintroduce the mismatch that
+    # made tcn-v2's stem 0.878 incomparable to stem-solo's 0.9375.
+    from stemify.training.conditions import CLEAN_BY_WIDTH
+
+    for width, tag in CLEAN_BY_WIDTH.items():
+        assert CONDITIONS[tag].unambiguous_only, (
+            f"clean condition {tag!r} for width {width} keeps multi-bass tracks"
+        )

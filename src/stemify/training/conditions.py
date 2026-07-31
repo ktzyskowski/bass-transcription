@@ -178,7 +178,13 @@ CONDITIONS: dict[str, Condition] = {
 # table, because a tag spelled inline in recipes.py is one a rename silently misses:
 # that is exactly how ``val_loader`` came to reference a "stem+mix" that no longer
 # existed, which no test caught because none builds a val loader without the corpus.
-CLEAN_BY_WIDTH: dict[int, str] = {1: "stem", 2: "stem-mix"}
+#
+# Both entries are ``unambiguous_only`` (single-bass) deliberately. "stem" would be the
+# obvious 1-channel choice and is wrong here: it is the *only* condition that keeps
+# multi-bass tracks, so a 1-channel run would early-stop against a different, harder
+# track set than its 2-channel counterpart -- which is exactly the mismatch that made
+# tcn-v2's stem 0.878 look worse than stem-solo's 0.9375. See docs/ablation-plan.md.
+CLEAN_BY_WIDTH: dict[int, str] = {1: "stem-solo", 2: "stem-mix"}
 
 _bad_clean = {
     w: t for w, t in CLEAN_BY_WIDTH.items()
