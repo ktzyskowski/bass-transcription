@@ -62,6 +62,26 @@ _NOTE_KEY = {
 }
 
 
+def _parse_pos_weight(spec: str) -> dict[str, float]:
+    """``"onset=5,voicing=2"`` -> ``{"onset": 5.0, "voicing": 2.0}``.
+
+    Validated against ``HEADS`` because a typo here fails *silently* in the worst way:
+    ``FrameBCELoss`` reads its weights with ``.get(head)``, so an unrecognised key is
+    simply never looked up and the run trains unweighted while its logged params claim
+    otherwise. That is precisely how ``pos_weight`` came to be declared in
+    ``TrainConfig``, plumbed through the loss, and never once set by anything.
+    """
+    weights: dict[str, float] = {}
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        head, sep, value = part.partition("=")
+        if not sep or head not in HEADS:
+            raise ValueError(
+                f"--pos-weight expects 'head=value' with head in {HEADS}, got {part!r}"
+            )
+        weights[head] = float(value)
+    return weights
+
+
 def _epoch_batches(loader) -> int | str:
     """Batches per epoch, or ``"streaming"`` when that is not knowable in advance.
 
@@ -273,6 +293,11 @@ def train(
                     "lr": config.learning_rate, "window": config.window_frames,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
+                    # Logged so a run records whether it was a candidate generator or a
+                    # balanced model -- the two are not comparable on F1.
+                    "pos_weight": ",".join(
+                        f"{h}={w}" for h, w in sorted(config.pos_weight.items())
+                    ) or "none",
                     "train_batches": _epoch_batches(train_loader)},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
@@ -369,6 +394,11 @@ def main() -> None:
                     help="warm-start the encoder from a checkpoint's state_dict "
                          "(objective parameters are not restored)")
     ap.add_argument("--epochs", type=int, default=4)
+    ap.add_argument("--pos-weight", default="",
+                    help="per-head BCE positive weight, e.g. 'onset=5'. Comma-separated. "
+                         "Onsets are ~7%% of frames after +-1 widening, so >1 trades "
+                         "precision for recall -- the candidate-generator setting for a "
+                         "two-stage decoder. Unset (the default) is plain unweighted BCE")
     ap.add_argument("--patience", type=int, default=8,
                     help="early-stop after this many epochs with no val gain. Worth "
                          "raising for a structured objective, whose val curve is "
@@ -383,6 +413,7 @@ def main() -> None:
     config = TrainConfig(
         heads=tuple(HEADS), max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
+        pos_weight=_parse_pos_weight(args.pos_weight),
     )
     train(
         args.root, args.cache_dir, config,

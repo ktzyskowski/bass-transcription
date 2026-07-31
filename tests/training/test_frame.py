@@ -203,3 +203,44 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
             [_Item("Track01/S00"), _Item("Track01/S01")],
             ["onset"], Cache(tmp_path / "cache"), Identity(),
         )
+
+
+def test_parse_pos_weight_rejects_unknown_heads():
+    # A typo must not pass silently. FrameBCELoss reads weights with .get(head), so an
+    # unrecognised key is never looked up: the run trains unweighted while its logged
+    # params claim otherwise -- which is exactly how pos_weight sat declared, plumbed
+    # through the loss, and never set by anything.
+    import pytest
+
+    from stemify.training.train import _parse_pos_weight
+
+    assert _parse_pos_weight("") == {}
+    assert _parse_pos_weight("onset=5") == {"onset": 5.0}
+    assert _parse_pos_weight("onset=5,voicing=2") == {"onset": 5.0, "voicing": 2.0}
+    for bad in ("onsett=5", "onset", "pitch=3"):
+        with pytest.raises(ValueError, match="--pos-weight"):
+            _parse_pos_weight(bad)
+
+
+def test_pos_weight_actually_reaches_the_loss():
+    # The end-to-end version of the same concern: a weight that is parsed but never
+    # applied would leave the "optimistic encoder" arm identical to the balanced one.
+    import torch
+
+    from stemify.training.losses.frame import FrameBCELoss
+
+    x = torch.zeros(2, 1, 4, 8)
+    y = {"onset": torch.zeros(2, 8)}
+    y["onset"][:, 0] = 1.0
+
+    class _Const(torch.nn.Module):
+        def forward(self, _x):
+            return {"onset": torch.zeros(2, 8, 1)}
+
+    plain = FrameBCELoss(["onset"], {})
+    heavy = FrameBCELoss(["onset"], {"onset": 5.0})
+    _, m_plain = plain.compute(_Const(), (x, y), torch.device("cpu"))
+    _, m_heavy = heavy.compute(_Const(), (x, y), torch.device("cpu"))
+    assert m_heavy["total"] > m_plain["total"], (
+        "a positive weight must increase the loss on a missed positive"
+    )

@@ -385,6 +385,13 @@ but the direction and the fact of it are not in doubt.
 
 #### What actually caps note F1 — pitch or the decoder?
 
+> **Replicated 2026-07-30 on independently retrained checkpoints** (6 epochs rather
+> than 10, so the F1s differ slightly): `demucs-mix` 0.7006 → 0.7986 pitch-blind
+> (+0.098 against +0.101 below), `stem-mix` 0.9444 → 0.9606 (+0.016 against +0.017).
+> The ratio is what matters and it is stable: **pitch is ~1/3 of the remaining error,
+> segmentation ~2/3**, on both conditions. The measurement is now a script rather than
+> an ad-hoc scratch file — `scripts/pitch_ceiling.py`.
+
 The FP buckets suggested pitch: `interior_offpitch` is 1109 of 2467 FPs on `demucs`
 and grows 11x from `stem` while `rest` grows only 2.7x. **That reading was wrong**,
 and it is worth recording why, because the bucket counts invite it. FP counts are not
