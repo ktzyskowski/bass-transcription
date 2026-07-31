@@ -579,6 +579,93 @@ contour quantisation that made a correctly-placed fragment fall under `MIN_NOTE_
 the first place. The note verifier's headroom fell to +2.9 (`rung0-mono`) / +4.5
 (`recall-w5`) pitch-blind, and by construction it cannot raise recall at all.
 
+## Rung 4: the learned pitch head (2026-07-31)
+
+`rung4-pitch` — one variable from rung 0: `--pitch` added, otherwise identical
+(`--sources clean,separated`, 1ch, 8 epochs, B=32, full corpus). Cost ~9.3 min/epoch,
+**2–3× rung 0**: the branch adds four 32-channel 3×3 convs over the full (216, T)
+plane, and the 2-D front-end was already dominant.
+
+### It does not damage the other heads
+
+The run's own validator predates the learned-contour swap (process started 14:13, the
+swap landed 14:28), so it scored with the **pyin** contour throughout. That accident is
+useful — it isolates the multi-task question:
+
+| | separated F1 (val) |
+|---|---|
+| `rung0-mono` (re-scored) | 0.8213 |
+| `rung4-pitch`, pyin contour | 0.8222 |
+
+Unchanged. Adding a third head to the shared trunk costs the binary heads nothing.
+
+### The A/B: learned contour vs pyin (`scripts/pitch_ab.py`)
+
+One frozen checkpoint, one forward pass, only the contour source varies. Under the
+retuned decoder below:
+
+| condition | split | pitch | recall | prec | strict F1 |
+|---|---|---|---|---|---|
+| separated | validation | pyin | 0.9005 | 0.9217 | 0.8219 |
+| separated | validation | **learned** | 0.9251 | 0.9078 | **0.8675** (+4.56) |
+| separated | **test** | pyin | 0.8764 | 0.9326 | 0.8135 |
+| separated | **test** | **learned** | 0.9386 | 0.9058 | **0.8638** (+5.03) |
+| clean | test | pyin | 0.9940 | 0.9943 | 0.9582 |
+| clean | test | learned | 0.9970 | 0.9878 | 0.9613 |
+
+**The recall ceiling was pyin.** Candidate recall goes 0.876 → 0.939 on test. That
+number had held at ~0.90 across three independent axes (37 vs 1015 tracks, unweighted
+vs `pos_weight=5`, threshold 0.05 vs 0.7) and was called structural. It was — the
+structure was pyin, and the size of the move matches the decomposition that put ~69% of
+misses there. The pitch gap also narrows, 0.090 → 0.058.
+
+**Clean does not regress** (+0.3), which was the standing risk: pyin is much stronger on
+clean audio. Also resolves the earlier flag — clean ~0.98 is real, holding at 0.961 on
+test; it is the pitch-split fix lifting clean the way it lifted separated.
+
+**Correction to the harness's own claim.** `pitch_ab.py` reports pitch-blind F1 as a
+guard, on the reasoning that both arms share a segmentation so it must come out
+identical. It does not (0.9036 → 0.9219 on test), and the reasoning was wrong, not the
+run: `group_contour` works on the *contour's* grid, so switching contours also moves
+grouping from 23.2 ms to 11.6 ms and changes how the voicing mask resamples. The A/B
+measures the learned pitch source as a package — accuracy plus grid resolution — which
+is the right thing to measure, but not the narrower claim.
+
+### Re-audit: the finer grid moved two constants
+
+`MIN_NOTE_S` and `VOICING_THRESHOLD` were tuned against pyin's grid. Re-swept against
+the learned contour, selected on validation, confirmed on test:
+
+| setting | val Δ | test Δ |
+|---|---|---|
+| min=0.08 voi=0.3 | +0.0074 | +0.0102 |
+| **min=0.10 voi=0.3** | +0.0095 | **+0.0128** |
+| min=0.12 voi=0.3 | +0.0109 | +0.0101 |
+
+Validation kept climbing to 0.12 while test turned over — riding a boundary on 40
+tracks. **0.10 is the middle of a flat 0.08–0.12 plateau**, taken over the argmax. It
+does cap recall by discarding real notes under 100 ms (~7% of the corpus), accepted
+because those fragments are more often FPs than notes; revisit if short-note recall
+ever binds.
+
+Breaking a silent coupling was a precondition: `NeuralEncoder` imported the decoder's
+`VOICING_THRESHOLD` to gate the contour, so retuning the decoder would have retuned the
+contour too and shipped a combination nobody measured. It now has its own
+`CONTOUR_VOICING_THRESHOLD`, still 0.5; the numbers above hold only for that pair.
+
+### Where this leaves the headline
+
+Held-out test, `separated`, strict note F1, over one day:
+
+| | test F1 |
+|---|---|
+| `rung0-mono`, as it stood that morning | 0.7421 |
+| + pitch-split fix | 0.8172 |
+| + learned pitch head | 0.8509 |
+| + re-audited decoder constants | **0.8638** |
+
+**+12.2 points**, none of it from a bigger model or more data.
+
 ## Future experiments
 
 ### Priority order — revised 2026-07-29

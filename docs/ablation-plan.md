@@ -91,9 +91,16 @@ protocol. Run at 200 tracks unless the result is close, then confirm at full cor
 | 0 | **baseline** | 1ch, onset+voicing, `group()` | the reference on the pinned protocol | **DONE** — `rung0-mono`, separated **0.7451** |
 | 1 | mix channel | 1ch vs 2ch | does bichannel help at scale? | **DONE — no.** 0.7431 vs 0.7451; AP +4.3 does not convert |
 | 2 | recall weighting | `pos_weight` 1 vs 5 | does candidate recall exceed 0.90? | **DONE — barely.** 0.878 -> 0.903; ceiling holds |
-| 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | **NEXT** — ~+12 pitch-blind F1 headroom |
-| 4 | pitch head | pyin vs learned | does the 1/3 pitch bucket shrink? | not built |
-| 5 | semi-CRF decoder | `group()` vs CRF | parked — loses at 37 tracks, and rung 0's data anchor says scale will not save it | parked |
+| 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | **weakened** — headroom fell from ~+12 to ~+3 once the decoder fix and pitch head landed; it cannot raise recall at all |
+| 4 | pitch head | pyin vs learned | does the 1/3 pitch bucket shrink? | **DONE — the big one.** `rung4-pitch`, separated **0.8638** test (+5.0 over pyin on the same checkpoint). Recall 0.876 → 0.939: the "structural" ceiling *was* pyin |
+| 5 | semi-CRF decoder | `group()` vs CRF | parked — but the parked result tested the *weakest form* (20 linear scalars over 3 hand-crafted features, one of them corrupted by pyin's lag), not a neural segment scorer | parked — rebuild with learned potentials before believing it lost |
+
+**Rungs 1–4 were all decided by the same thing.** Every one of them turned on the pitch
+source or the decoder, never on encoder capacity: bichannel's cue gain would not convert
+through a broken `group()`, recall weighting hit a ceiling that was pyin, and the pitch
+head cleared both. Before adding a rung that grows the model, check the number is not
+already being thrown away downstream — that is where every point of the day's +12.2
+came from.
 
 **Rungs 0-2 ran 2026-07-30 overnight** (see `docs/experiments.md`). Rungs 1 and 2 are
 both nulls, and between them they relocate the problem: the mix channel improves the

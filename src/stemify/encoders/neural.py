@@ -30,7 +30,6 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.decoders.heuristic import VOICING_THRESHOLD
 from stemify.encoders.base import Encoder
 from stemify.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import decode_contour
@@ -38,6 +37,19 @@ from stemify.models.tagger import FrameTagger
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 from stemify.training.device import best_device
+
+
+# Above this, the voicing head is confident enough that the pitch head's guess for a
+# frame is worth reporting at all.
+#
+# Deliberately *not* the decoder's ``VOICING_THRESHOLD``, which this used to import.
+# The two look like the same number and answer different questions: this one asks "does
+# this frame have a pitch worth carrying", the decoder's asks "is a note sounding here",
+# and the 2026-07-31 sweep found different optima (0.5 here, 0.3 there). While they
+# shared a constant, retuning the decoder silently retuned the contour gate too -- so
+# the measured result would have come from one combination and the shipped code from
+# another, with nothing to show the difference.
+CONTOUR_VOICING_THRESHOLD = 0.5
 
 
 class NeuralEncoder(Encoder):
@@ -174,8 +186,8 @@ class NeuralEncoder(Encoder):
         Thin on purpose: the decode itself lives in ``models.heads.decode_contour``,
         which ``NeuralPitch`` also calls. Two entry points, one decode -- the property
         that makes "the learned contour" mean the same thing however it was reached.
-        What this adds is only the operating point, since the voicing *threshold*
-        belongs to the decoder and must not be imported into ``models``.
+        What this adds is only the operating point, which is this encoder's own
+        (``CONTOUR_VOICING_THRESHOLD``) and not the decoder's.
         """
-        voiced = None if voicing is None else voicing > VOICING_THRESHOLD
+        voiced = None if voicing is None else voicing > CONTOUR_VOICING_THRESHOLD
         return decode_contour(pitch_logits, frame_times, voiced)
