@@ -88,16 +88,19 @@ protocol. Run at 200 tracks unless the result is close, then confirm at full cor
 
 | # | rung | arms | question | status |
 |---|---|---|---|---|
-| 0 | **baseline** | 1ch, onset+voicing, `group()` | the reference on the pinned protocol | **MISSING — blocks everything** |
-| 1 | mix channel | 1ch vs 2ch | does bichannel help at scale? | 37-track only |
-| 2 | recall weighting | `pos_weight` 1 vs 5 | does candidate recall exceed 0.90? | running 2026-07-30 |
-| 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | not built |
+| 0 | **baseline** | 1ch, onset+voicing, `group()` | the reference on the pinned protocol | **DONE** — `rung0-mono`, separated **0.7451** |
+| 1 | mix channel | 1ch vs 2ch | does bichannel help at scale? | **DONE — no.** 0.7431 vs 0.7451; AP +4.3 does not convert |
+| 2 | recall weighting | `pos_weight` 1 vs 5 | does candidate recall exceed 0.90? | **DONE — barely.** 0.878 -> 0.903; ceiling holds |
+| 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | **NEXT** — ~+12 pitch-blind F1 headroom |
 | 4 | pitch head | pyin vs learned | does the 1/3 pitch bucket shrink? | not built |
 | 5 | semi-CRF decoder | `group()` vs CRF | parked — loses at 37 tracks, and rung 0's data anchor says scale will not save it | parked |
 
-**Rung 0 is missing and everything else is measured against it.** Tonight's `balanced`
-arm is 2-channel, so it is rung 1's *treatment*, not rung 0's control. The 1-channel
-control on the pinned protocol has never been run on current code.
+**Rungs 0-2 ran 2026-07-30 overnight** (see `docs/experiments.md`). Rungs 1 and 2 are
+both nulls, and between them they relocate the problem: the mix channel improves the
+encoder (+4.3 onset AP) without moving note F1, and recall weighting cannot lift
+candidate recall past ~0.90. **The cue->note step is the binding constraint, and the
+~0.90 recall ceiling is structural** — it now holds across data scale, loss weighting
+and decode threshold alike. Rung 3 is where the remaining headroom is.
 
 ### Ordering rationale
 

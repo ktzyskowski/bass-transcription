@@ -447,6 +447,50 @@ cannot describe a mixture with two basses. At `--limit 40` that is **33 tracks a
 swamped the result. `stem-solo` exists as the matched single-channel control;
 `demucs` needs no twin because it already filters the same way.
 
+### Full corpus, rungs 0-2 — 2026-07-30 overnight
+
+First runs on the pinned protocol (`docs/ablation-plan.md`): 1015 train tracks x 2
+conditions, 40 val tracks, 8 epochs, B=32. ~36 min/arm.
+
+| arm | ch | pos_weight | clean F1 | **separated F1** | separated AP |
+|---|---|---|---|---|---|
+| `rung0-mono` | 1 | — | 0.9317 | **0.7451** | 0.8839 |
+| `balanced` | 2 | — | 0.9308 | **0.7431** | 0.9264 |
+| `recall-w5` | 2 | onset=5 | 0.9325 | **0.7342** | 0.9218 |
+
+*(the two 2-channel arms log under the pre-rename tags `stem-mix`/`demucs-mix`)*
+
+**Rung 1 — bichannel does not help note F1, at any data scale.** 0.7431 against the
+1-channel control's 0.7451: a 0.002 *deficit*, replicating the 37-track null (+0.0007)
+on 27x the data with matched track sets. And it replicates the *mechanism* too — onset
+AP rises (0.8839 -> 0.9264, **+4.3**) while note F1 does not move. Two independent
+measurements now say the same thing: the mix channel genuinely improves the encoder, and
+the cue->note step throws the gain away. **Bichannel can be dropped** — it costs an
+input channel and buys nothing the decoder can use.
+
+**Rung 2 — recall weighting does not break the recall ceiling.** Pitch-blind candidate
+recall on `separated`:
+
+| arm | thresh 0.05 | 0.20 | 0.50 | verifier ceiling |
+|---|---|---|---|---|
+| `rung0-mono` | 0.8932 | 0.8893 | 0.8786 | 0.9354 |
+| `recall-w5` | 0.8998 | 0.9031 | 0.9032 | 0.9491 |
+
+`pos_weight=5` buys **+2.5 points of recall at the default threshold** and essentially
+nothing at a low one. **The ~0.90 recall ceiling now holds across three independent
+axes** — 37 tracks vs 1015, unweighted vs weighted, threshold 0.05 vs 0.7. That makes it
+structural rather than a tuning failure: ~10% of reference notes are not in the onset
+curve, or are destroyed by grouping, and no loss weight or threshold recovers them.
+
+**Data scale, same codebase at last.** 1-channel `separated`: 0.7103 at 37 tracks ->
+0.7451 at 1015, i.e. **+3.5 F1 for 27x the data** (the earlier cross-era estimate was
++1.9). Larger than the archaeology suggested, still small.
+
+**What this sets up for rung 3.** The verifier's ceiling is a pitch-blind F1 of ~0.949
+against `recall-w5`'s current 0.824 — about **+12 points of pitch-blind headroom**, the
+largest single lever measured so far. Use `recall-w5` as the generator: it has the best
+candidate recall (0.903) and its worse *F1* is by construction, not a defect.
+
 ## Future experiments
 
 ### Priority order — revised 2026-07-29
