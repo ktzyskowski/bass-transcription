@@ -10,9 +10,9 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from stemify.encoders.heads import onset_head
-from stemify.encoders.networks import TCN
-from stemify.encoders.tagger import FrameTagger
+from stemify.models.heads import onset_head
+from stemify.models.networks import TCN
+from stemify.models.tagger import FrameTagger
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
 from stemify.training.datasets.frame import collate
@@ -58,9 +58,33 @@ def test_best_checkpoint_is_restored():
     assert history.val_loss[history.best_epoch] <= min(history.val_loss) + 1e-5
 
 
-def test_pitch_head_loss_is_refused():
+def test_unknown_head_loss_is_refused():
     with pytest.raises(NotImplementedError):
-        FrameBCELoss(["pitch"])
+        FrameBCELoss(["tablature"])
+
+
+def test_pitch_head_is_scored_on_voiced_frames_only():
+    """Pitch was refused until its target encoding was settled; it is now the two-hot
+    CQT-bin code. Unvoiced frames (NaN targets) must not contribute -- where the bass
+    sounds is the voicing head's question."""
+    from stemify.features import N_BINS
+    from stemify.training.losses.frame import pitch_bce
+
+    logits = torch.zeros(2, 4, N_BINS)
+    midi = torch.full((2, 4), float("nan"))
+    # All-unvoiced: no signal, but still a real tensor in the graph.
+    assert float(pitch_bce(logits, midi)) == 0.0
+
+    midi[0, 0] = 45.0
+    loss = pitch_bce(logits, midi)
+    assert float(loss) > 0.0
+    # One voiced frame of four: the mean is over voiced frames, not all frames, so
+    # adding more unvoiced frames must not dilute it.
+    wider = torch.full((2, 8), float("nan"))
+    wider[0, 0] = 45.0
+    assert float(pitch_bce(torch.zeros(2, 8, N_BINS), wider)) == pytest.approx(
+        float(loss)
+    )
 
 
 def test_on_batch_fires_per_train_batch_with_monotonic_steps():

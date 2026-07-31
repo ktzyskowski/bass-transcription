@@ -16,7 +16,7 @@ import torch
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.encoders.base import Encoder
-from stemify.encoders.tagger import FrameTagger
+from stemify.models.tagger import FrameTagger
 from stemify.features import FrameFeatures, extract_features, stack_channels
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources

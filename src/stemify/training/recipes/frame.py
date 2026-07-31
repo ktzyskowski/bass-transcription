@@ -14,15 +14,15 @@ from torch.utils.data import DataLoader
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.heads import onset_head, voicing_head
-from stemify.encoders.networks import TCN
-from stemify.encoders.tagger import FrameTagger
+from stemify.models.heads import PitchBranch, onset_head, voicing_head
+from stemify.models.networks import TCN
+from stemify.models.tagger import FrameTagger
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
 from stemify.training.config import TrainConfig
 from stemify.training.datasets import frame as frame_ds
 from stemify.training.examples import prepare_examples
 from stemify.training.losses import FrameBCELoss, Loss
-from stemify.training.recipes.base import HEADS, Recipe, _loader_kwargs
+from stemify.training.recipes.base import Recipe, _loader_kwargs
 
 
 class FrameRecipe(Recipe):
@@ -38,14 +38,17 @@ class FrameRecipe(Recipe):
                 "onset": onset_head(backbone.hidden),
                 "voicing": voicing_head(backbone.hidden),
             },
+            # The branch taps the front-end before its flatten, so it takes no
+            # `hidden`: it reads (B, C, F, T) with the frequency axis still intact.
+            pitch=PitchBranch() if self.pitch else None,
         )
 
     def build_loss(self, config: TrainConfig) -> Loss:
-        return FrameBCELoss(HEADS, config.pos_weight)
+        return FrameBCELoss(self.heads, config.pos_weight)
 
     def _windows(self, tracks: list[tuple[Path, ...]], config: TrainConfig):
         return frame_ds.FrameWindowDataset(
-            tracks, HEADS, config.window_frames, config.hop_frames
+            tracks, self.heads, config.window_frames, config.hop_frames
         )
 
     def _tracks(
@@ -56,7 +59,7 @@ class FrameRecipe(Recipe):
         Targets are layered onto channel 0's npz -- it is the audio the labels
         describe -- and the remaining channels contribute features only."""
         ds = condition.dataset(root, split, limit)
-        prepare_examples(ds, HEADS, cache, condition.primary.transform)
+        prepare_examples(ds, self.heads, cache, condition.primary.transform)
         return condition.channel_paths(ds, cache)
 
     def train_loader(self, root, cache, config, limit) -> DataLoader:

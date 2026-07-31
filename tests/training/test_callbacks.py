@@ -9,9 +9,9 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from stemify.encoders.heads import onset_head
-from stemify.encoders.networks import TCN
-from stemify.encoders.tagger import FrameTagger
+from stemify.models.heads import onset_head
+from stemify.models.networks import TCN
+from stemify.models.tagger import FrameTagger
 from stemify.features import N_BINS
 from stemify.training.callbacks import (
     AsyncValidationCallback,

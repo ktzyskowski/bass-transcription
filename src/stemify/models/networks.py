@@ -51,8 +51,18 @@ class _ConvFrontend(nn.Module):
             nn.ReLU(),
         )
 
+    def conv_features(self, x: torch.Tensor) -> torch.Tensor:
+        """(B, in_channels, F, T) -> (B, conv_channels, F, T), *before* the flatten.
+
+        Split out because this is exactly what a pitch head has to consume: the
+        flatten below gives every ``(channel, bin)`` pair its own downstream weight,
+        which is what ends the frequency equivariance a pitch head depends on. See
+        ``encoders/pitch_head.py``.
+        """
+        return self.conv(x)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.conv(x)                       # (B, C, F, T)
+        z = self.conv_features(x)              # (B, C, F, T)
         b, c, f, t = z.shape
         return z.reshape(b, c * f, t)          # (B, C*F, T)
 
@@ -123,11 +133,29 @@ class TCN(nn.Module):
     def receptive_field(self) -> int:
         return tcn_receptive_field(self.levels, self.kernel)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.frontend(x)          # (B, C*F, T)
-        z = self.project(z)           # (B, hidden, T)
+    def _temporal(self, flat: torch.Tensor) -> torch.Tensor:
+        z = self.project(flat)        # (B, hidden, T)
         z = self.tcn(z)               # (B, hidden, T)
         return z.transpose(1, 2)      # (B, T, hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._temporal(self.frontend(x))
+
+    def spectral_and_temporal(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Both altitudes from a single front-end pass: ``(B, C, F, T)`` for a pitch
+        head, ``(B, T, hidden)`` for the per-frame heads.
+
+        A separate method rather than a wider ``forward`` return, so the backbone
+        contract every existing caller relies on -- and that ``GRU`` also satisfies --
+        is unchanged. A backbone without this method simply cannot host a pitch head,
+        which is the honest outcome: ``GRU`` is an ablation baseline, not a shape the
+        frequency-resolved branch is defined for.
+        """
+        spectral = self.frontend.conv_features(x)   # (B, C, F, T)
+        b, c, f, t = spectral.shape
+        return spectral, self._temporal(spectral.reshape(b, c * f, t))
 
 
 class GRU(nn.Module):

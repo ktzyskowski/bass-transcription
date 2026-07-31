@@ -35,10 +35,10 @@ from torch import nn
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.heads import onset_head, voicing_head
-from stemify.encoders.networks import TCN
+from stemify.models.heads import onset_head, voicing_head
+from stemify.models.networks import TCN
 from stemify.encoders.neural import NeuralEncoder
-from stemify.encoders.tagger import FrameTagger
+from stemify.models.tagger import FrameTagger
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     ConsoleCallback,
@@ -348,7 +348,7 @@ def train(
             # -- saving only the model would discard half the trained system and leave
             # a decode-time decoder freshly initialised, which fails silently.
             "loss_state": trainer.loss.state_dict(),
-            "heads": HEADS,
+            "heads": recipe.heads,
             "encoder": "tcn",
             # The input width is architecture, not a hyperparameter: loading these
             # weights into a 1-channel TCN fails on the first conv, and guessing it
@@ -414,18 +414,26 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader worker subprocesses (0 = main thread)")
+    ap.add_argument("--pitch", action="store_true",
+                    help="train the learned pitch branch alongside onset/voicing, "
+                         "so the encoder produces the contour instead of pyin. Adds a "
+                         "per-frame MIDI target to each cached example.")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
     args = ap.parse_args()
 
+    # The recipe is built first because it owns which heads this run trains: with
+    # --pitch that is three, and the config, the cached targets and the checkpoint all
+    # have to agree on the same list.
+    recipe = RECIPES[args.objective](args.sources.split(","), pitch=args.pitch)
     config = TrainConfig(
-        heads=tuple(HEADS), max_epochs=args.epochs, batch_size=args.batch_size,
+        heads=tuple(recipe.heads), max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
         pos_weight=_parse_pos_weight(args.pos_weight),
     )
     train(
         args.root, args.cache_dir, config,
-        recipe=RECIPES[args.objective](args.sources.split(",")),
+        recipe=recipe,
         init_from=args.init_from,
         val_conditions=args.val_sources.split(",") if args.val_sources else None,
         val_limit=args.val_limit, val_every=args.val_every,

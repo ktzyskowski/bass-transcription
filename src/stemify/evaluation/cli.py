@@ -25,7 +25,7 @@ from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.heuristic import DSP_PITCH_SPLIT_SEMITONES, HeuristicDecoder
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.encoders.base import Encoder
 from stemify.encoders.dsp import DSPEncoder
@@ -46,19 +46,32 @@ def load_tagger(checkpoint: Path):
     ``in_channels`` is architecture, not a hyperparameter -- a mix-conditioned model
     has a wider first conv -- so it comes from the checkpoint. Defaulted to 1 for
     checkpoints written before the field existed, which were all single-channel.
+
+    The pitch branch is rebuilt from ``heads`` the same way, and ``load_state_dict``
+    runs strict: a checkpoint whose saved weights include a branch this rebuild left
+    out would otherwise load *silently*, and the model would go on producing onset and
+    voicing exactly as before while quietly having no pitch head at all. That is the
+    failure mode this repo keeps hitting -- a run that exits 0 having done less than it
+    reported -- so it is worth the explicitness here.
     """
     import torch
 
-    from stemify.encoders.heads import onset_head, voicing_head
-    from stemify.encoders.networks import TCN
-    from stemify.encoders.tagger import FrameTagger
+    from stemify.models.heads import PitchBranch, onset_head, voicing_head
+    from stemify.models.networks import TCN
+    from stemify.models.tagger import FrameTagger
 
     ckpt = torch.load(checkpoint, map_location="cpu")
     backbone = TCN(in_channels=ckpt.get("in_channels", 1))
+    saved = list(ckpt["heads"])
     builders = {"onset": onset_head, "voicing": voicing_head}
-    heads = {h: builders[h](backbone.hidden) for h in ckpt["heads"]}
-    model = FrameTagger(backbone, heads)
-    model.load_state_dict(ckpt["state_dict"])
+    heads = {h: builders[h](backbone.hidden) for h in saved if h in builders}
+    unknown = [h for h in saved if h not in builders and h != "pitch"]
+    if unknown:
+        raise ValueError(f"checkpoint names head(s) this cannot rebuild: {unknown}")
+    model = FrameTagger(
+        backbone, heads, pitch=PitchBranch() if "pitch" in saved else None
+    )
+    model.load_state_dict(ckpt["state_dict"])  # strict: shape and membership must match
     return model
 
 
@@ -76,6 +89,24 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
     from stemify.encoders.neural import NeuralEncoder
 
     return NeuralEncoder(load_tagger(args.checkpoint), device="cpu")
+
+
+def build_decoder(args: argparse.Namespace):
+    """The decoder, with the one setting that depends on which encoder feeds it.
+
+    A pitch change places notes only for an encoder that has no trained onset head.
+    ``DSPEncoder`` emits a spectral-flux spike train and no voicing curve at all, so
+    for it the contour moving really is the only evidence a new note began -- and the
+    DSP floor has to stay the floor it always was, or every comparison against it
+    silently improves. For a ``NeuralEncoder`` the same rule overrides a ~7 ms-accurate
+    onset with a ~58 ms-late pitch transition, which is why it defaults off; see
+    ``heuristic.PITCH_SPLIT_SEMITONES``.
+
+    Only the heuristic decoder has the setting, so the semicrf path is untouched.
+    """
+    if args.decoder == "heuristic" and args.encoder == "pyin":
+        return HeuristicDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
+    return DECODERS[args.decoder]()
 
 
 # Each entry is (default root, factory). Adding a dataset is one line here plus the
@@ -169,7 +200,7 @@ def main() -> None:
         dataset = build_dataset(args)
         encoder = build_encoder(args)
         if args.level == "note":
-            transcriber = Segmenter(encoder, DECODERS[args.decoder]())
+            transcriber = Segmenter(encoder, build_decoder(args))
             report = NoteEvaluation(dataset, transcriber, transform=transform).run()
         else:
             report = CuesEvaluation(dataset, encoder, transform=transform).run()

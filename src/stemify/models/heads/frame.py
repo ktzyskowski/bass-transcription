@@ -28,10 +28,3 @@ def onset_head(hidden: int = 128) -> FrameHead:
 def voicing_head(hidden: int = 128) -> FrameHead:
     """One logit per frame: bass sounding. BCE-with-logits at train time."""
     return FrameHead(hidden, 1)
-
-
-def pitch_head(hidden: int = 128, n_classes: int = 45) -> FrameHead:
-    """One logit per pitch class per frame (default 45 = MIDI 23-67, the 5-string
-    range the confusion matrix already uses). Cross-entropy, or swap for the
-    two-hot cents target later."""
-    return FrameHead(hidden, n_classes)

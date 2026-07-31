@@ -10,7 +10,7 @@ network (TCN/GRU), distinct from the pipeline ``Encoder`` that turns audio into
 import torch
 from torch import nn
 
-from stemify.encoders.heads import FrameHead
+from stemify.models.heads import FrameHead
 
 
 class FrameTagger(nn.Module):
@@ -20,10 +20,21 @@ class FrameTagger(nn.Module):
     or ``GRU``.
     """
 
-    def __init__(self, backbone: nn.Module, heads: dict[str, FrameHead]):
+    def __init__(
+        self,
+        backbone: nn.Module,
+        heads: dict[str, FrameHead],
+        pitch: nn.Module | None = None,
+    ):
         super().__init__()
         self.backbone = backbone
         self.heads = nn.ModuleDict(heads)
+        # Held apart from ``heads`` because it consumes a different tensor: the per-
+        # frame heads read (B, T, hidden), the pitch branch reads the front-end's
+        # (B, C, F, T) with its frequency axis intact. Same forward, same optimiser,
+        # different input -- so a ModuleDict of things taking one argument shape
+        # cannot hold both without lying about it.
+        self.pitch = pitch
 
     @property
     def in_channels(self) -> int:
@@ -37,5 +48,10 @@ class FrameTagger(nn.Module):
         return getattr(self.backbone, "in_channels", 1)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        features = self.backbone(x)
-        return {name: head(features) for name, head in self.heads.items()}
+        if self.pitch is None:
+            features = self.backbone(x)
+            return {name: head(features) for name, head in self.heads.items()}
+        spectral, features = self.backbone.spectral_and_temporal(x)
+        out = {name: head(features) for name, head in self.heads.items()}
+        out["pitch"] = self.pitch(spectral)
+        return out
