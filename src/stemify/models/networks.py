@@ -141,21 +141,21 @@ class TCN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._temporal(self.frontend(x))
 
-    def spectral_and_temporal(
+    def frequency_and_frame(
         self, x: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Both altitudes from a single front-end pass: ``(B, C, F, T)`` for a pitch
-        head, ``(B, T, hidden)`` for the per-frame heads.
+        """Both head inputs from a single front-end pass, in dict order:
+        ``(B, C, F, T)`` for a ``FrequencyHead``, ``(B, T, hidden)`` for a ``FrameHead``.
 
         A separate method rather than a wider ``forward`` return, so the backbone
         contract every existing caller relies on -- and that ``GRU`` also satisfies --
-        is unchanged. A backbone without this method simply cannot host a pitch head,
-        which is the honest outcome: ``GRU`` is an ablation baseline, not a shape the
-        frequency-resolved branch is defined for.
+        is unchanged. A backbone without this method simply cannot host a frequency
+        head, which is the honest outcome: ``GRU`` is an ablation baseline, not a shape
+        the frequency-resolved branch is defined for.
         """
-        spectral = self.frontend.conv_features(x)   # (B, C, F, T)
-        b, c, f, t = spectral.shape
-        return spectral, self._temporal(spectral.reshape(b, c * f, t))
+        frequency = self.frontend.conv_features(x)   # (B, C, F, T)
+        b, c, f, t = frequency.shape
+        return frequency, self._temporal(frequency.reshape(b, c * f, t))
 
 
 class GRU(nn.Module):

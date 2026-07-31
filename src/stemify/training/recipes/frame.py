@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.models.heads import PitchBranch, onset_head, voicing_head
+from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.tagger import FrameTagger
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
@@ -38,9 +38,9 @@ class FrameRecipe(Recipe):
                 "onset": onset_head(backbone.hidden),
                 "voicing": voicing_head(backbone.hidden),
             },
-            # The branch taps the front-end before its flatten, so it takes no
-            # `hidden`: it reads (B, C, F, T) with the frequency axis still intact.
-            pitch=PitchBranch() if self.pitch else None,
+            # A FrequencyHead takes no `hidden`: it taps the front-end before the
+            # flatten, reading (B, C, F, T) with the frequency axis still intact.
+            frequency_heads={"pitch": pitch_head()} if self.pitch else None,
         )
 
     def build_loss(self, config: TrainConfig) -> Loss:

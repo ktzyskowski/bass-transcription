@@ -23,18 +23,20 @@ class FrameTagger(nn.Module):
     def __init__(
         self,
         backbone: nn.Module,
-        heads: dict[str, FrameHead],
-        pitch: nn.Module | None = None,
+        heads: dict[str, FrameHead] | None = None,
+        frequency_heads: dict[str, nn.Module] | None = None,
     ):
         super().__init__()
         self.backbone = backbone
-        self.heads = nn.ModuleDict(heads)
-        # Held apart from ``heads`` because it consumes a different tensor: the per-
-        # frame heads read (B, T, hidden), the pitch branch reads the front-end's
-        # (B, C, F, T) with its frequency axis intact. Same forward, same optimiser,
-        # different input -- so a ModuleDict of things taking one argument shape
-        # cannot hold both without lying about it.
-        self.pitch = pitch
+        # Two dicts because heads differ in *where they tap the network*, which is the
+        # same thing as what granularity they emit. A FrameHead reads (B, T, hidden)
+        # and emits one value per frame; a FrequencyHead reads the front-end's
+        # (B, C, F, T), with its frequency axis intact, and emits one per bin per
+        # frame. One ModuleDict cannot hold both without lying about the argument
+        # shape, and a special-cased singleton would not generalise to a second
+        # frequency-resolved head.
+        self.heads = nn.ModuleDict(heads or {})
+        self.frequency_heads = nn.ModuleDict(frequency_heads or {})
 
     @property
     def in_channels(self) -> int:
@@ -48,10 +50,12 @@ class FrameTagger(nn.Module):
         return getattr(self.backbone, "in_channels", 1)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        if self.pitch is None:
-            features = self.backbone(x)
-            return {name: head(features) for name, head in self.heads.items()}
-        spectral, features = self.backbone.spectral_and_temporal(x)
-        out = {name: head(features) for name, head in self.heads.items()}
-        out["pitch"] = self.pitch(spectral)
+        # Only pay for the frequency-resolved path when something consumes it: without
+        # a frequency head the backbone's plain forward is the whole computation.
+        if not self.frequency_heads:
+            frame = self.backbone(x)
+            return {name: head(frame) for name, head in self.heads.items()}
+        frequency, frame = self.backbone.frequency_and_frame(x)
+        out = {name: head(frame) for name, head in self.heads.items()}
+        out.update({n: h(frequency) for n, h in self.frequency_heads.items()})
         return out

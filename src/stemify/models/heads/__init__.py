@@ -21,16 +21,18 @@ keeps working exactly as it did when this was a single module.
 
 from stemify.models.heads.frame import FrameHead, onset_head, voicing_head
 from stemify.models.heads.pitch import (
-    PitchBranch,
+    FrequencyHead,
     decode_bins,
+    pitch_head,
     two_hot,
 )
 
 __all__ = [
     "FrameHead",
-    "PitchBranch",
+    "FrequencyHead",
     "decode_bins",
     "onset_head",
+    "pitch_head",
     "two_hot",
     "voicing_head",
 ]

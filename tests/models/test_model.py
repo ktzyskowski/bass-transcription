@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from stemify.features import N_BINS
-from stemify.models.heads import PitchBranch, onset_head, voicing_head
+from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import GRU, TCN
 from stemify.models.tagger import FrameTagger
 
@@ -42,8 +42,8 @@ def test_single_head_tagger():
 def test_multi_head_shares_one_backbone():
     net = TCN()
     heads = {"onset": onset_head(net.hidden), "voicing": voicing_head(net.hidden)}
-    pitch = PitchBranch()
-    model = FrameTagger(net, heads, pitch=pitch).eval()
+    pitch = pitch_head()
+    model = FrameTagger(net, heads, frequency_heads={"pitch": pitch}).eval()
     out = model(_cqt_batch())
     assert out["onset"].shape == (B, T, 1)
     assert out["voicing"].shape == (B, T, 1)
@@ -67,7 +67,7 @@ def test_pitch_branch_is_frequency_equivariant():
     the front-end before it: shifting an input pattern up N bins must shift the
     logits up N bins, rather than landing on a differently-weighted position.
     """
-    net, pitch = TCN().eval(), PitchBranch().eval()
+    net, pitch = TCN().eval(), pitch_head().eval()
     x = torch.zeros(1, 1, N_BINS, T)
     x[0, 0, 60:66, :] = 5.0                    # a narrow "partial" at bin 60
     shifted = torch.zeros_like(x)

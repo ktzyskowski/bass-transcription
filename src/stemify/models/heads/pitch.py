@@ -40,8 +40,18 @@ FREQ_DILATIONS = (1, 3, 9, 27)
 TIME_DILATIONS = (1, 2, 4, 8)
 
 
-class PitchBranch(nn.Module):
-    """Front-end features ``(B, C, F, T)`` -> per-bin pitch logits ``(B, T, F)``."""
+class FrequencyHead(nn.Module):
+    """Front-end features ``(B, C, F, T)`` -> one logit per frequency bin ``(B, T, F)``.
+
+    The peer of ``FrameHead``, named for the same thing it is: the granularity of what
+    comes *out*. A ``FrameHead`` emits one value per frame; this emits one per frequency
+    bin per frame. That difference is why the two tap the backbone at different points
+    and why ``FrameTagger`` keeps them in separate dicts.
+
+    Pitch is its only instance today. It is written as the general shape rather than as
+    "the pitch branch" because nothing in it is about pitch -- a polyphonic pitch head,
+    or a string/fret head over the same axis, is this class with a different target.
+    """
 
     def __init__(self, conv_channels: int = 32, n_bins: int = N_BINS) -> None:
         super().__init__()
@@ -106,10 +116,15 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     a graceful degradation to "near the peak" when it is not. Deliberately *local*: a
     centroid over the whole axis would place an octave-ambiguous frame halfway between
     the two candidates, at a pitch the model never proposed.
+
+    Softmax, not per-bin sigmoid: it has to invert the distribution the head is
+    *trained* under, and that is a choice among bins (see ``losses.frame.pitch_ce``).
     """
     if logits.size == 0:
         return np.zeros(0)
-    probs = 1.0 / (1.0 + np.exp(-logits))
+    shifted = logits - logits.max(axis=-1, keepdims=True)   # stable softmax
+    exp = np.exp(shifted)
+    probs = exp / exp.sum(axis=-1, keepdims=True)
     peak = probs.argmax(axis=-1)
 
     offsets = np.arange(-neighbourhood, neighbourhood + 1)
@@ -119,6 +134,16 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     # A frame with no mass anywhere would divide by zero; it has no pitch to report.
     centroid = np.where(total > 0, (local * idx).sum(axis=-1) / np.maximum(total, 1e-9), peak)
     return FMIN * 2.0 ** (centroid / BINS_PER_OCTAVE)
+
+
+def pitch_head(conv_channels: int = 32, n_bins: int = N_BINS) -> FrequencyHead:
+    """The pitch head -- symmetric with ``onset_head``/``voicing_head`` in ``frame``.
+
+    Takes ``conv_channels`` rather than a backbone's ``hidden`` because it reads the
+    front-end's output, not the temporal stack's: the whole point is to tap the network
+    while the frequency axis is still there.
+    """
+    return FrequencyHead(conv_channels, n_bins)
 
 
 def bin_of(midi: float) -> float:

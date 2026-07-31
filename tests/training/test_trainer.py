@@ -68,23 +68,44 @@ def test_pitch_head_is_scored_on_voiced_frames_only():
     CQT-bin code. Unvoiced frames (NaN targets) must not contribute -- where the bass
     sounds is the voicing head's question."""
     from stemify.features import N_BINS
-    from stemify.training.losses.frame import pitch_bce
+    from stemify.training.losses.frame import pitch_ce
 
     logits = torch.zeros(2, 4, N_BINS)
     midi = torch.full((2, 4), float("nan"))
     # All-unvoiced: no signal, but still a real tensor in the graph.
-    assert float(pitch_bce(logits, midi)) == 0.0
+    assert float(pitch_ce(logits, midi)) == 0.0
 
     midi[0, 0] = 45.0
-    loss = pitch_bce(logits, midi)
+    loss = pitch_ce(logits, midi)
     assert float(loss) > 0.0
     # One voiced frame of four: the mean is over voiced frames, not all frames, so
     # adding more unvoiced frames must not dilute it.
     wider = torch.full((2, 8), float("nan"))
     wider[0, 0] = 45.0
-    assert float(pitch_bce(torch.zeros(2, 8, N_BINS), wider)) == pytest.approx(
+    assert float(pitch_ce(torch.zeros(2, 8, N_BINS), wider)) == pytest.approx(
         float(loss)
     )
+
+
+def test_pitch_loss_starts_on_the_same_scale_as_the_binary_heads():
+    """A uniform head must score ln(n_bins), not n_bins * ln 2.
+
+    This is the whole reason the loss is cross-entropy over the bin axis rather than
+    summed per-bin BCE. The first version summed BCE and measured 108.4 against onset
+    0.249 and voicing 0.267 -- ~400x, enough to dominate a shared trunk. Asserting the
+    initial value pins the *functional form*: summed BCE cannot pass this.
+    """
+    import math
+
+    from stemify.features import N_BINS
+    from stemify.training.losses.frame import pitch_ce
+
+    midi = torch.full((2, 4), float("nan"))
+    midi[0, 0], midi[1, 2] = 45.0, 38.5   # one on a bin centre, one between two
+    uniform = pitch_ce(torch.zeros(2, 4, N_BINS), midi)
+    assert float(uniform) == pytest.approx(math.log(N_BINS), abs=1e-4)
+    # ...and that is single digits, the scale a BCE term lives on.
+    assert float(uniform) < 10.0
 
 
 def test_on_batch_fires_per_train_batch_with_monotonic_steps():

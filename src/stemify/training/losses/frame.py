@@ -6,10 +6,10 @@ class-weighted BCE against its frame target, summed over heads. Onsets are a few
 percent of frames, so the positive class is up-weighted.
 
 Pitch was refused here until its target encoding was settled; it is now the two-hot
-CQT-bin code in ``encoders/pitch_head.py``, scored by BCE over bins on *voiced frames
-only*. Unvoiced frames are masked rather than trained toward an all-zero target: where
-the bass is silent is the voicing head's question, and supervising both heads on it
-would put them in competition over the shared trunk.
+CQT-bin code in ``models/heads/pitch.py``, scored by cross-entropy over the bin axis on
+*voiced frames only*. Unvoiced frames are masked rather than trained toward an all-zero
+target: where the bass is silent is the voicing head's question, and supervising both
+heads on it would put them in competition over the shared trunk.
 
 This is the exact objective the old ``Trainer.build_losses``/``_batch_loss`` computed,
 lifted behind the ``Loss`` interface so the same loop also drives the structured
@@ -30,30 +30,37 @@ PITCH_HEAD = "pitch"
 SUPPORTED_HEADS = (*BINARY_HEADS, PITCH_HEAD)
 
 
-def pitch_bce(logits: torch.Tensor, midi: torch.Tensor) -> torch.Tensor:
-    """BCE over CQT bins against the two-hot code, on voiced frames only.
+def pitch_ce(logits: torch.Tensor, midi: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy over the CQT bin axis against the two-hot code, voiced frames only.
 
     ``logits`` is ``(B, T, n_bins)``; ``midi`` is ``(B, T)`` continuous MIDI with NaN
     where the bass is silent.
 
-    Summed over bins rather than averaged: with 216 bins and only two carrying mass, a
-    mean is dominated by the 214 zeros and the term shrinks to nothing beside the
-    binary heads. Summing keeps it on the scale of a cross-entropy over the same axis,
-    which is what it is.
+    **Why cross-entropy and not per-bin BCE.** The two-hot target is a proper
+    distribution -- its rows sum to 1 -- so the axis is a choice among bins, not 216
+    independent yes/no questions. Treating it as the latter is not merely a different
+    parameterisation, it puts the term on the wrong *scale*: 216 independent sigmoids
+    start near ``216 * ln 2 ~ 150``, against ``ln 216 ~ 5.4`` for a choice among 216
+    options. The first version of this summed BCE and measured 108.4 against onset
+    0.249 and voicing 0.267 -- a ~400x imbalance on a shared trunk, which no loss
+    weight should have to correct. This is the same reason DreamerV3 scores its
+    two-hot critic and reward heads with categorical cross-entropy: get the functional
+    form right and fixed coefficients work across scales.
 
-    Unvoiced frames are dropped rather than trained toward an all-zero target. Where
-    the bass sounds is the voicing head's question, and supervising this head on it too
-    would have the two compete over a shared trunk to answer the same thing.
+    Unvoiced frames are dropped rather than trained toward some "no pitch" target.
+    Where the bass sounds is the voicing head's question, and supervising this head on
+    it too would have the two compete over a shared trunk to answer the same thing.
     """
     voiced = ~torch.isnan(midi)
     if not bool(voiced.any()):
         # Nothing to learn from this batch, but the term must stay in the graph or the
         # optimiser sees a different set of parameters depending on the batch drawn.
         return logits.sum() * 0.0
-    per_bin = F.binary_cross_entropy_with_logits(
-        logits, two_hot(midi), reduction="none"
-    )
-    return (per_bin.sum(-1) * voiced).sum() / voiced.sum()
+    # Soft-target cross-entropy: -sum_b target[b] * log q[b]. F.cross_entropy accepts
+    # probability targets too, but only with the class axis at dim 1 -- spelling it out
+    # keeps the bin axis last, matching two_hot and the head's own output.
+    per_frame = -(two_hot(midi) * F.log_softmax(logits, dim=-1)).sum(-1)
+    return (per_frame * voiced).sum() / voiced.sum()
 
 
 class FrameBCELoss(Loss):
@@ -70,8 +77,8 @@ class FrameBCELoss(Loss):
             if h not in SUPPORTED_HEADS:
                 raise NotImplementedError(
                     f"No loss for head '{h}'. Supported: {SUPPORTED_HEADS} -- the "
-                    "binary heads use weighted BCE, pitch uses BCE over the two-hot "
-                    "CQT-bin code on voiced frames."
+                    "binary heads use weighted BCE, pitch uses cross-entropy over the "
+                    "two-hot CQT-bin code on voiced frames."
                 )
 
     def compute(
@@ -83,7 +90,7 @@ class FrameBCELoss(Loss):
         for head in self.heads:
             pred = logits[head]
             if head == PITCH_HEAD:
-                per_head[head] = pitch_bce(pred, y[head].to(device))
+                per_head[head] = pitch_ce(pred, y[head].to(device))
                 continue
             if pred.shape[-1] == 1:  # binary head: (B, W, 1) -> (B, W)
                 pred = pred.squeeze(-1)

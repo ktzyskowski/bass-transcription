@@ -56,7 +56,7 @@ def load_tagger(checkpoint: Path):
     """
     import torch
 
-    from stemify.models.heads import PitchBranch, onset_head, voicing_head
+    from stemify.models.heads import onset_head, pitch_head, voicing_head
     from stemify.models.networks import TCN
     from stemify.models.tagger import FrameTagger
 
@@ -69,7 +69,8 @@ def load_tagger(checkpoint: Path):
     if unknown:
         raise ValueError(f"checkpoint names head(s) this cannot rebuild: {unknown}")
     model = FrameTagger(
-        backbone, heads, pitch=PitchBranch() if "pitch" in saved else None
+        backbone, heads,
+        frequency_heads={"pitch": pitch_head()} if "pitch" in saved else None,
     )
     model.load_state_dict(ckpt["state_dict"])  # strict: shape and membership must match
     return model

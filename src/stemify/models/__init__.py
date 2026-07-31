@@ -24,9 +24,10 @@ level up, in ``encoders/__init__.py``, which is exactly why it still lives there
 
 from stemify.models.heads import (
     FrameHead,
-    PitchBranch,
+    FrequencyHead,
     decode_bins,
     onset_head,
+    pitch_head,
     two_hot,
     voicing_head,
 )
@@ -38,9 +39,10 @@ __all__ = [
     "TCN",
     "FrameHead",
     "FrameTagger",
-    "PitchBranch",
+    "FrequencyHead",
     "decode_bins",
     "onset_head",
+    "pitch_head",
     "tcn_receptive_field",
     "two_hot",
     "voicing_head",
