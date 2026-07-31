@@ -129,7 +129,7 @@ def _whole_track_nll(model, cache, items, feats) -> float:
 def _chunked_nll(model, cache, items, right: int) -> float:
     """The sum of per-chunk telescoping losses over the same track."""
     dataset = ChunkedSequenceDataset(
-        items, cache, CONDITIONS["stem"], chunk_frames=CHUNK, dmax=DMAX,
+        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=right,
     )
     loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -161,7 +161,7 @@ def test_a_second_epoch_gives_the_same_losses(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkedSequenceDataset(
-        items, cache, CONDITIONS["stem"], chunk_frames=CHUNK, dmax=DMAX,
+        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
     loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -182,7 +182,7 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkedSequenceDataset(
-        items, cache, CONDITIONS["stem"], chunk_frames=CHUNK, dmax=DMAX,
+        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
     loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -203,7 +203,7 @@ def test_epoch_batches_survives_a_streaming_loader(track):
     items, cache, _ = track
     streaming = DataLoader(
         ChunkedSequenceDataset(
-            items, cache, CONDITIONS["stem"], chunk_frames=CHUNK, dmax=DMAX,
+            items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
             stride=STRIDE, batch_size=1,
         ),
         batch_size=None,

@@ -24,6 +24,7 @@ question -- "what does the model look at" against "what is it trained to optimis
 apply at all.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.data.base import EvalItem
 from stemify.data.slakh import SlakhDataset
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,17 +88,19 @@ class Condition:
         basses sounding, one reference contour cannot describe what is in the
         mixture, so the model would be shown two basses and scored against one.
 
-        For the three single-channel conditions this reproduces the previous
-        ``SlakhDataset`` default exactly; what it adds is that ``stem-mix`` is
-        filtered too, which the old ``source``-only rule would have missed -- its
-        source is ``stem``, so nothing about it looked mix-flavoured.
+What it adds over the old ``source``-only rule is that ``bichannel-clean`` is
+        filtered too: its source is the stem, so nothing about it looked
+        mix-flavoured, yet it feeds the mixture straight to the model.
 
-        ``solo_only`` overrides the derivation. That exists for *controls*: a plain
-        ``stem`` run keeps two-bass tracks (a stem is unambiguous whatever else the
-        track contains, so they are free extra data), which means it and
-        ``stem-mix`` train on different track sets -- at ``--limit 40``, 33 tracks
-        against 37, sharing 26. Comparing them would vary the input channels and
-        the corpus at once.
+        ``solo_only`` overrides the derivation, and ``clean`` sets it. A stem is
+        unambiguous whatever else the track contains, so an unfiltered clean run
+        gets two-bass tracks as free extra data -- but then it trains on a
+        *different corpus* than ``bichannel-clean`` (at ``--limit 40``: 33 tracks
+        against 37, sharing 26), and an A/B between them would vary the input
+        channels and the track set at once. That is exactly how tcn-v2's stem 0.878
+        came to look worse than a later 0.9375 that was mostly an easier subset;
+        ``clean-multibass`` keeps the unfiltered behaviour for reproducing those
+        runs and is comparable to nothing else.
         """
         if self.solo_only is not None:
             return self.solo_only
@@ -141,35 +146,60 @@ def _mono(name: str, source: str, transform: AudioTransform) -> Condition:
 _METRIC_SAFE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 
 
-# The conditions a run can name. Single-channel entries reproduce the old
-# ``SOURCES`` table exactly, so every existing result stays reproducible by tag.
-#
 # The target is always the clean stem's MIDI regardless of which audio the features
-# come from -- that asymmetry is the domain randomisation, and it is why the mix and
-# demucs conditions are trainable at all.
+# come from -- that asymmetry is the domain randomisation, and it is why the separated
+# and mixture conditions are trainable at all.
+#
+# A tag encodes two independent axes, so it can be read without a lookup:
+#
+#   what is transcribed -- clean (bass stem) | separated (demucs) | mixture (raw)
+#   what the model sees -- one channel, or `bichannel-` = that audio PLUS the mixture
+#                          alongside it as a context channel
+#
+# The old names conflated those: `mix` meant "transcribe the raw mixture", while the
+# `-mix` suffix in `stem-mix` meant "the mixture is a *context* channel" -- the same
+# word for opposite roles. See LEGACY_NAMES for the mapping.
 CONDITIONS: dict[str, Condition] = {
-    "stem": _mono("stem", "stem", Identity()),
-    "mix": _mono("mix", "mix", Identity()),
-    "demucs": _mono("demucs", "mix", DemucsSeparator()),
-    # Bichannel: the bass to transcribe, plus the mixture it was drawn from.
-    # "demucs-mix" is the deployment-shaped one -- a separator's output is what a
-    # user's upload actually becomes -- while "stem-mix" is its clean-bass control,
-    # isolating what the mixture channel adds from what separation damage costs.
-    "stem-mix": Condition(
-        "stem-mix", "stem",
+    # -- one channel ---------------------------------------------------------------
+    # The pinned default: clean bass, single-bass tracks only (docs/ablation-plan.md).
+    "clean": Condition(
+        "clean", "stem", (Channel("bass", Identity()),), solo_only=True
+    ),
+    # The deployment condition -- what a user's upload becomes after separation.
+    "separated": _mono("separated", "mix", DemucsSeparator()),
+    # Negative control: no separation at all. Scores ~0.27, which is what makes
+    # separation non-negotiable rather than a preference.
+    "mixture": _mono("mixture", "mix", Identity()),
+    # Historical only: the one condition that keeps multi-bass tracks, which is what
+    # tcn-v1/tcn-v2 reported. Kept so those numbers stay reproducible by tag, but it is
+    # *not* comparable to anything else here -- multi-bass tracks are strictly harder,
+    # and mistaking that for a model difference is the error docs/ablation-plan.md
+    # exists to stop.
+    "clean-multibass": _mono("clean-multibass", "stem", Identity()),
+    # -- two channels: the audio to transcribe, plus the mixture it came from --------
+    # `bichannel-separated` is the deployment-shaped one; `bichannel-clean` is its
+    # clean-bass control, separating what the mixture channel adds from what
+    # separation damage costs.
+    "bichannel-clean": Condition(
+        "bichannel-clean", "stem",
         (Channel("bass", Identity()), Channel("mix", Identity())),
     ),
-    "demucs-mix": Condition(
-        "demucs-mix", "mix",
+    "bichannel-separated": Condition(
+        "bichannel-separated", "mix",
         (Channel("bass", DemucsSeparator()), Channel("mix", Identity())),
     ),
-    # The matched control for "stem-mix": one channel, but the same single-bass
-    # track set, so an A/B against it varies the input channels and nothing else.
-    # "demucs" needs no such twin -- it already filters to single-bass tracks, so
-    # "demucs" vs "demucs-mix" is controlled as it stands.
-    "stem-solo": Condition(
-        "stem-solo", "stem", (Channel("bass", Identity()),), solo_only=True
-    ),
+}
+
+# Renamed 2026-07-30. Old tags still resolve (with a warning) so the run tags recorded
+# in docs/experiments.md and any saved scripts keep working -- a rename that silently
+# invalidates every documented experiment is worse than the names it fixes.
+LEGACY_NAMES: dict[str, str] = {
+    "stem-solo": "clean",
+    "stem": "clean-multibass",
+    "demucs": "separated",
+    "mix": "mixture",
+    "stem-mix": "bichannel-clean",
+    "demucs-mix": "bichannel-separated",
 }
 
 # The clean-bass condition at each input width. A frame run validates on clean
@@ -184,7 +214,7 @@ CONDITIONS: dict[str, Condition] = {
 # multi-bass tracks, so a 1-channel run would early-stop against a different, harder
 # track set than its 2-channel counterpart -- which is exactly the mismatch that made
 # tcn-v2's stem 0.878 look worse than stem-solo's 0.9375. See docs/ablation-plan.md.
-CLEAN_BY_WIDTH: dict[int, str] = {1: "stem-solo", 2: "stem-mix"}
+CLEAN_BY_WIDTH: dict[int, str] = {1: "clean", 2: "bichannel-clean"}
 
 _bad_clean = {
     w: t for w, t in CLEAN_BY_WIDTH.items()
@@ -206,18 +236,27 @@ del _unsafe
 def resolve(names: list[str]) -> list[Condition]:
     """Condition tags -> conditions, rejecting a set the model cannot have one shape for.
 
-    Mixing widths is the failure worth catching here: ``--sources stem,demucs-mix``
+    Mixing widths is the failure worth catching here: ``--sources clean,bichannel-separated``
     names one 1-channel and one 2-channel condition, and concatenating them yields
     batches whose channel count depends on which track was drawn. That surfaces
     deep inside the first conv as a shape error, or -- worse, if the loader happens
     to draw a uniform first batch -- not until some later epoch.
     """
-    unknown = [n for n in names if n not in CONDITIONS]
+    resolved = []
+    for name in names:
+        if name in LEGACY_NAMES:
+            logger.warning(
+                "condition %r was renamed to %r; the old name still works but the "
+                "metrics will be logged under the new one", name, LEGACY_NAMES[name],
+            )
+            name = LEGACY_NAMES[name]
+        resolved.append(name)
+    unknown = [n for n in resolved if n not in CONDITIONS]
     if unknown:
         raise ValueError(
             f"unknown condition(s) {unknown}; have {sorted(CONDITIONS)}"
         )
-    conditions = [CONDITIONS[n] for n in names]
+    conditions = [CONDITIONS[n] for n in resolved]
     widths = {c.in_channels for c in conditions}
     if len(widths) > 1:
         shapes = ", ".join(f"{c.name}={c.in_channels}ch" for c in conditions)

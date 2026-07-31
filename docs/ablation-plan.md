@@ -15,20 +15,20 @@ Every condition except one filters the corpus to single-bass tracks:
 
 | condition | source | channels | `unambiguous_only` |
 |---|---|---|---|
-| `stem` | stem | 1 | **False** |
-| `stem-solo` | stem | 1 | True |
-| `mix` | mix | 1 | True |
-| `demucs` | mix | 1 | True |
-| `stem-mix` | stem | 2 | True |
-| `demucs-mix` | mix | 2 | True |
+| `clean-multibass` | stem | 1 | **False** |
+| `clean` | stem | 1 | True |
+| `mixture` | mix | 1 | True |
+| `separated` | mix | 1 | True |
+| `bichannel-clean` | stem | 2 | True |
+| `bichannel-separated` | mix | 2 | True |
 
-`stem` is the odd one out, and it is the condition tcn-v1/tcn-v2 reported. So
-**tcn-v2's stem 0.878 and this session's stem-solo 0.9375 are not the same measurement**
+`clean-multibass` is the odd one out, and it is the condition tcn-v1/tcn-v2 reported. So
+**tcn-v2's stem 0.878 and this session's `clean` 0.9375 are not the same measurement**
 — multi-bass tracks are harder and only the first includes them. The gap is mostly
-track set, not model. `stem-solo` exists precisely to fix this and should be preferred
+track set, not model. `clean` exists precisely to fix this and should be preferred
 for anything compared against a mix-input condition.
 
-The `demucs` numbers *are* comparable across both eras (both single-bass, both through
+The `separated` numbers *are* comparable across both eras (both single-bass, both through
 the same separator), which is what makes the data-scale anchor below trustworthy.
 
 ### Pinned protocol
@@ -36,11 +36,11 @@ the same separator), which is what makes the data-scale anchor below trustworthy
 Every number reported from here on:
 
 - **Tracks:** `unambiguous_only=True` everywhere. Required whenever the mixture reaches
-  the model, so pinning it globally is what makes stem / demucs / bichannel one ladder
+  the model, so pinning it globally is what makes clean / separated / bichannel one ladder
   instead of three.
 - **Val:** 40 tracks of the validation split, fixed.
-- **Headline:** `demucs` (or `demucs-mix`) note F1 — separation is non-negotiable at
-  deploy (raw `mix` scores 0.269), so this is the number that ships.
+- **Headline:** `separated` (or `bichannel-separated`) note F1 — separation is non-negotiable at
+  deploy (raw `mixture` scores 0.269), so this is the number that ships.
 - **Always also report:** pitch-blind F1 (`scripts/pitch_ceiling.py`), the four FP
   buckets, onset AP, voicing AUROC. Aggregate F1 alone hid the bichannel mechanism for
   most of a day.
@@ -53,11 +53,11 @@ Do not re-run these.
 
 | finding | evidence | confidence |
 |---|---|---|
-| Separation is mandatory | raw `mix` 0.269 vs `demucs` 0.729 (tcn-v2) | high |
-| Voicing head is near-solved | AUROC 0.984 stem / 0.961 demucs; 0.5 threshold optimal | high |
-| **Data scale barely moves F1** | demucs 0.7103 @37 tracks → 0.729 @1015 (**+1.9 for 27x**) | medium — different eras/codebases |
+| Separation is mandatory | raw `mixture` 0.269 vs `separated` 0.729 (tcn-v2) | high |
+| Voicing head is near-solved | AUROC 0.984 clean / 0.961 separated; 0.5 threshold optimal | high |
+| **Data scale barely moves F1** | separated 0.7103 @37 tracks → 0.729 @1015 (**+1.9 for 27x**) | medium — different eras/codebases |
 | Onset loss ≠ note F1 | tcn-v1: val loss falls, note F1 flat from epoch 1 | high |
-| Bichannel: big cue gain, no note gain | demucs onset AP +11.3, F1 +0.0007; model does read ch 1 | medium — 1 seed, 19 val tracks |
+| Bichannel: big cue gain, no note gain | separated onset AP +11.3, F1 +0.0007; model does read ch 1 | medium — 1 seed, 19 val tracks |
 | Error split ≈ 1/3 pitch, 2/3 segmentation | pitch-blind rescore, replicated on fresh checkpoints | high |
 | Semi-CRF is not undertrained | step-matched ~6300 steps: 0.8733 vs frame 0.9375; overfits 37 tracks | high |
 | Decode threshold cannot buy recall | recall saturates ~0.90 over threshold 0.05–0.7 | medium — 37-track encoder |
@@ -120,10 +120,38 @@ a regressor asked to choose between E1 and E2 outputs the midpoint.
 ## 5. Standing rules
 
 1. **One variable per comparison.** Both today's confounded comparisons (epoch-matched
-   semi-CRF, stem vs stem-solo) came from breaking this.
+   semi-CRF, clean-multibass vs clean) came from breaking this.
 2. **Check the metrics landed.** Three broken runs in this repo have exited 0 — see
    `docs/experiments.md` on the silently-dropped MLflow metrics.
 3. **Report the decomposition, not just F1.** FP buckets and pitch-blind F1 are cheap
    and they are what turn a null result into a mechanism.
 4. **Checkpoints go in `data/checkpoints/`**, never `/tmp` — a session boundary destroyed
    four of them today and the pitch measurement had to retrain to proceed.
+
+---
+
+## 6. Condition names
+
+Renamed 2026-07-30. The old set conflated two axes: `mix` meant "transcribe the raw
+mixture" while the `-mix` suffix in `stem-mix` meant "the mixture is a *context*
+channel" — the same word for opposite roles. A tag now reads as
+`[bichannel-]<what is transcribed>`.
+
+| old | new | meaning |
+|---|---|---|
+| `stem-solo` | `clean` | clean bass stem, single-bass tracks — **the pinned default** |
+| `stem` | `clean-multibass` | clean stem, multi-bass kept — historical (tcn-v1/v2) only |
+| `demucs` | `separated` | demucs output — **the deployment condition** |
+| `mix` | `mixture` | raw mixture, no separation — negative control |
+| `stem-mix` | `bichannel-clean` | clean stem + mixture as channel 1 |
+| `demucs-mix` | `bichannel-separated` | separated bass + mixture as channel 1 |
+
+`separated` rather than `demucs` names the *state*, not the tool, so swapping
+separators does not invalidate a tag — the transform already encodes
+`demucs-htdemucs-bass` for cache keying.
+
+Old tags still resolve, with a warning (`LEGACY_NAMES`), so runs recorded in
+`docs/experiments.md` stay reproducible. **Note the 2026-07-30 overnight runs
+`balanced` and `recall-w5` were launched before the rename and log their metrics under
+`note/stem-mix/…` and `note/demucs-mix/…`.** Read those as `bichannel-clean` and
+`bichannel-separated`.

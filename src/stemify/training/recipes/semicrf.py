@@ -75,7 +75,7 @@ class SemiCRFRecipe(Recipe):
 
     def val_loader(self, root, cache, config, val_limit) -> DataLoader:
         return DataLoader(
-            self._sequences(root, "validation", [CONDITIONS["stem"]], cache, val_limit),
+            self._sequences(root, "validation", [CONDITIONS["clean"]], cache, val_limit),
             collate_fn=sequence_ds.collate, **_loader_kwargs(config),
         )
 

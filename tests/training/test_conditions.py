@@ -51,16 +51,16 @@ class _Item:
 # the table                                                                    #
 # --------------------------------------------------------------------------- #
 def test_single_channel_conditions_stay_single_channel():
-    # The three pre-existing tags must not have gained a channel: every earlier
-    # result is quoted by tag, so their meaning has to be unchanged.
-    for tag in ("stem", "mix", "demucs"):
+    # These must not gain a channel: every earlier result is quoted by tag, so their
+    # meaning has to be unchanged even though the tags themselves were renamed.
+    for tag in ("clean", "clean-multibass", "mixture", "separated"):
         assert CONDITIONS[tag].in_channels == 1
 
 
 def test_bichannel_conditions_put_the_bass_first():
     # Channel 0 is what the contour and every target describe. Reversed, the model
     # would be trained to transcribe the mixture with the bass as context.
-    for tag in ("stem-mix", "demucs-mix"):
+    for tag in ("bichannel-clean", "bichannel-separated"):
         condition = CONDITIONS[tag]
         assert condition.in_channels == 2
         assert condition.primary is condition.channels[0]
@@ -70,12 +70,12 @@ def test_bichannel_conditions_put_the_bass_first():
 
 @pytest.mark.parametrize(
     "tag, expected",
-    [("stem", False), ("mix", True), ("demucs", True),
-     ("stem-mix", True), ("demucs-mix", True)],
+    [("clean-multibass", False), ("clean", True), ("mixture", True),
+     ("separated", True), ("bichannel-clean", True), ("bichannel-separated", True)],
 )
 def test_mix_bearing_conditions_keep_only_single_bass_tracks(tag, expected):
     # With two basses sounding, one reference contour cannot describe the mixture.
-    # "stem-mix" is the case the old source-only rule would have missed: its Slakh
+    # "bichannel-clean" is the case the old source-only rule would have missed: its Slakh
     # source is "stem", so nothing about the tag looks mix-flavoured.
     assert CONDITIONS[tag].unambiguous_only is expected
 
@@ -87,12 +87,12 @@ def test_resolve_rejects_mixed_channel_widths():
     # One model has one input shape. Concatenated, these would yield batches whose
     # channel count depends on which track was drawn.
     with pytest.raises(ValueError, match="agree on input channel count"):
-        resolve(["stem", "demucs-mix"])
+        resolve(["stem", "bichannel-separated"])
 
 
 def test_resolve_accepts_a_uniform_width_set():
-    assert [c.name for c in resolve(["stem-mix", "demucs-mix"])] == [
-        "stem-mix", "demucs-mix"
+    assert [c.name for c in resolve(["bichannel-clean", "bichannel-separated"])] == [
+        "bichannel-clean", "bichannel-separated"
     ]
 
 
@@ -105,7 +105,7 @@ def test_resolve_rejects_an_unknown_tag():
 # channel resolution                                                           #
 # --------------------------------------------------------------------------- #
 def test_channels_reading_one_file_through_different_transforms_stay_distinct(tmp_path):
-    # "demucs-mix" is exactly this: both channels read the track's mix.flac and
+    # "bichannel-separated" is exactly this: both channels read the track's mix.flac and
     # differ only in the transform. If they collided, the model would be handed the
     # same array twice and the second channel would carry no information at all.
     mix = tmp_path / "mix.wav"
@@ -148,7 +148,7 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
         items.append(_Item(f"trk{i}", bass, mix))
 
     condition = Condition(
-        "stem-mix", "stem", (Channel("bass", Identity()), Channel("mix", Identity()))
+        "bichannel-clean", "stem", (Channel("bass", Identity()), Channel("mix", Identity()))
     )
     per_track = condition.channel_paths(items, Cache(tmp_path / "cache"))
 
@@ -161,27 +161,30 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
         assert ch1.name.startswith(item.sources().mix.stem)
 
 
-def test_the_stem_control_matches_its_bichannel_twins_track_filter():
-    # "stem" keeps two-bass tracks (a stem is unambiguous whatever else sounds), so
-    # it and "stem-mix" train on different corpora -- 33 tracks against 37 at
-    # --limit 40. Comparing them would vary the input channels and the data at once.
-    assert CONDITIONS["stem"].unambiguous_only is False
-    assert CONDITIONS["stem-solo"].unambiguous_only is True
-    assert CONDITIONS["stem-solo"].in_channels == 1
+def test_the_clean_control_matches_its_bichannel_twins_track_filter():
+    # "clean-multibass" keeps two-bass tracks (a stem is unambiguous whatever else
+    # sounds), so it and "bichannel-clean" train on different corpora -- 33 tracks
+    # against 37 at --limit 40. Comparing those would vary the input channels and the
+    # data at once, which is what made tcn-v2's 0.878 look worse than a later 0.9375.
+    # "clean" exists to be the matched 1-channel control.
+    assert CONDITIONS["clean-multibass"].unambiguous_only is False
+    assert CONDITIONS["clean"].unambiguous_only is True
+    assert CONDITIONS["clean"].in_channels == 1
     assert (
-        CONDITIONS["stem-solo"].unambiguous_only
-        == CONDITIONS["stem-mix"].unambiguous_only
+        CONDITIONS["clean"].unambiguous_only
+        == CONDITIONS["bichannel-clean"].unambiguous_only
     )
+    assert CONDITIONS["clean"].source == CONDITIONS["bichannel-clean"].source
 
 
 def test_demucs_needs_no_control_twin():
-    # It already filters to single-bass tracks, so demucs vs demucs-mix is
+    # It already filters to single-bass tracks, so separated vs bichannel-separated is
     # controlled as it stands -- the deployment-shaped comparison needs no extra tag.
     assert (
-        CONDITIONS["demucs"].unambiguous_only
-        == CONDITIONS["demucs-mix"].unambiguous_only
+        CONDITIONS["separated"].unambiguous_only
+        == CONDITIONS["bichannel-separated"].unambiguous_only
     )
-    assert CONDITIONS["demucs"].source == CONDITIONS["demucs-mix"].source
+    assert CONDITIONS["separated"].source == CONDITIONS["bichannel-separated"].source
 
 
 def test_every_condition_tag_can_appear_in_a_metric_name():
@@ -230,3 +233,23 @@ def test_clean_val_conditions_all_filter_to_single_bass():
         assert CONDITIONS[tag].unambiguous_only, (
             f"clean condition {tag!r} for width {width} keeps multi-bass tracks"
         )
+
+
+def test_legacy_names_still_resolve():
+    # A rename that silently invalidates every experiment recorded in
+    # docs/experiments.md is worse than the confusing names it fixes, so the old tags
+    # keep working (with a warning) and map to exactly what they used to mean.
+    from stemify.training.conditions import LEGACY_NAMES, resolve
+
+    for old, new in LEGACY_NAMES.items():
+        assert new in CONDITIONS, f"{old!r} maps to missing condition {new!r}"
+        assert resolve([old])[0] is CONDITIONS[new]
+
+
+def test_legacy_names_do_not_collide_with_current_ones():
+    # "mix" and "stem" are legacy tags whose meaning MOVED: "mix" used to be the raw
+    # mixture (now "mixture") while the "-mix" suffix meant a context channel. If a
+    # legacy key were also a live name, resolve() would silently rewrite a valid tag.
+    from stemify.training.conditions import LEGACY_NAMES
+
+    assert not set(LEGACY_NAMES) & set(CONDITIONS)

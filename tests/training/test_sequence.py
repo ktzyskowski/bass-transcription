@@ -113,7 +113,7 @@ def test_sequence_dataset_caches_and_serves_whole_tracks(tmp_path):
     paths = [tmp_path / "a.wav", tmp_path / "b.wav"]
     _write_tone(paths[0], 110.0)
     _write_tone(paths[1], 146.0)
-    ds = SequenceDataset(_ToneSet(paths), Cache(tmp_path / "cache"), CONDITIONS["stem"])
+    ds = SequenceDataset(_ToneSet(paths), Cache(tmp_path / "cache"), CONDITIONS["clean"])
     assert len(ds) == 2
     ex = ds[0]
     assert isinstance(ex, SequenceExample)

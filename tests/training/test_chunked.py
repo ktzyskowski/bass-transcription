@@ -89,7 +89,7 @@ def cache(tmp_path):
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
     ds = _FakeDataset(tmp_path, cache, lengths)
     return ChunkedSequenceDataset(
-        ds, cache, CONDITIONS["stem"], chunk_frames=chunk, dmax=dmax, stride=STRIDE,
+        ds, cache, CONDITIONS["clean"], chunk_frames=chunk, dmax=dmax, stride=STRIDE,
         batch_size=batch_size, right_context=right,
     )
 

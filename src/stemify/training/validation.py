@@ -162,7 +162,7 @@ class OnsetValidator:
     ) -> None:
         # A bare stem condition is the neutral default -- one channel, no transform
         # -- so a caller scoring clean audio need not name one.
-        condition = condition or CONDITIONS["stem"]
+        condition = condition or CONDITIONS["clean"]
         estimator = PyinPitch()
 
         # One ``cache`` replaces the old separate ``contour_cache``/``feature_cache``
