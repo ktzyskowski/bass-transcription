@@ -44,7 +44,7 @@ from stemify.training.callbacks import (
     ConsoleCallback,
     MLflowCallback,
 )
-from stemify.training.conditions import CONDITIONS
+from stemify.training.conditions import CONDITIONS, canonical
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.trainer import Trainer
@@ -233,9 +233,17 @@ def train(
     # The default tracks the model's input width, since a validator has to feed
     # the same channels the model was built for.
     val_conditions = val_conditions or (
-        ["stem+mix", "demucs+mix"] if recipe.in_channels == 2
-        else ["stem", "mix", "demucs"]
+        ["bichannel-clean", "bichannel-separated"] if recipe.in_channels == 2
+        else ["clean", "mixture", "separated"]
     )
+    # Through `canonical` for the same reason `--sources` is: a run given retired tags
+    # otherwise resolves its training conditions and then dies looking up the val ones.
+    val_conditions = [canonical(t) for t in val_conditions]
+    unknown = [t for t in val_conditions if t not in CONDITIONS]
+    if unknown:
+        raise ValueError(
+            f"unknown val condition(s) {unknown}; have {sorted(CONDITIONS)}"
+        )
     mismatched = [
         t for t in val_conditions if CONDITIONS[t].in_channels != recipe.in_channels
     ]

@@ -233,6 +233,27 @@ if _unsafe:
 del _unsafe
 
 
+def canonical(name: str) -> str:
+    """A condition tag, with any retired name mapped to its current one.
+
+    The single place the legacy mapping is applied. It exists because it was *not*
+    single: ``resolve`` translated ``--sources`` while ``train`` looked up
+    ``--val-sources`` straight in ``CONDITIONS``, so a run with old tags resolved its
+    training conditions and then died on a ``KeyError`` for the val ones -- three
+    seconds in, after the previous arm had already succeeded with the same arguments
+    under the pre-rename code.
+
+    Unknown names pass through untouched so the caller can raise with its own message.
+    """
+    if name in LEGACY_NAMES:
+        logger.warning(
+            "condition %r was renamed to %r; the old name still works but the metrics "
+            "will be logged under the new one", name, LEGACY_NAMES[name],
+        )
+        return LEGACY_NAMES[name]
+    return name
+
+
 def resolve(names: list[str]) -> list[Condition]:
     """Condition tags -> conditions, rejecting a set the model cannot have one shape for.
 
@@ -242,15 +263,7 @@ def resolve(names: list[str]) -> list[Condition]:
     deep inside the first conv as a shape error, or -- worse, if the loader happens
     to draw a uniform first batch -- not until some later epoch.
     """
-    resolved = []
-    for name in names:
-        if name in LEGACY_NAMES:
-            logger.warning(
-                "condition %r was renamed to %r; the old name still works but the "
-                "metrics will be logged under the new one", name, LEGACY_NAMES[name],
-            )
-            name = LEGACY_NAMES[name]
-        resolved.append(name)
+    resolved = [canonical(n) for n in names]
     unknown = [n for n in resolved if n not in CONDITIONS]
     if unknown:
         raise ValueError(

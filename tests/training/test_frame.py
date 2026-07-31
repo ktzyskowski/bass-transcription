@@ -244,3 +244,21 @@ def test_pos_weight_actually_reaches_the_loss():
     assert m_heavy["total"] > m_plain["total"], (
         "a positive weight must increase the loss on a missed positive"
     )
+
+
+def test_val_conditions_accept_retired_names():
+    # The exact crash that killed an overnight arm: --val-sources with old tags.
+    import inspect
+
+    from stemify.training import train as train_mod
+
+    src = inspect.getsource(train_mod.train)
+    assert "canonical(t) for t in val_conditions" in src, (
+        "val conditions must go through the legacy mapping, like --sources does"
+    )
+    # And the defaults must name conditions that actually exist.
+    from stemify.training.conditions import CONDITIONS
+
+    for default in ("bichannel-clean", "bichannel-separated", "clean", "mixture",
+                    "separated"):
+        assert default in CONDITIONS

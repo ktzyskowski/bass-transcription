@@ -253,3 +253,19 @@ def test_legacy_names_do_not_collide_with_current_ones():
     from stemify.training.conditions import LEGACY_NAMES
 
     assert not set(LEGACY_NAMES) & set(CONDITIONS)
+
+
+def test_canonical_maps_retired_names_and_passes_others_through():
+    # The legacy mapping must live in ONE place. It did not: resolve() translated
+    # --sources while train() looked up --val-sources straight in CONDITIONS, so a run
+    # with old tags resolved its training conditions and then died on a KeyError for
+    # the val ones -- three seconds in, after the previous arm had succeeded with the
+    # same arguments under the pre-rename code.
+    from stemify.training.conditions import LEGACY_NAMES, canonical
+
+    for old, new in LEGACY_NAMES.items():
+        assert canonical(old) == new
+    for live in CONDITIONS:
+        assert canonical(live) == live
+    # Unknown names pass through so the caller raises with its own message.
+    assert canonical("not-a-condition") == "not-a-condition"
