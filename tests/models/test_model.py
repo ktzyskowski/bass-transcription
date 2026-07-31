@@ -63,21 +63,37 @@ def test_multi_head_shares_one_backbone():
 def test_pitch_branch_is_frequency_equivariant():
     """The same harmonic pattern must score the same at any register.
 
-    This is the property the flatten destroys and the whole reason the branch taps
-    the front-end before it: shifting an input pattern up N bins must shift the
-    logits up N bins, rather than landing on a differently-weighted position.
+    This is the property the flatten destroys and the whole reason the branch taps the
+    front-end before it: shifting an input pattern up N bins must shift the logits up N
+    bins, rather than landing on a differently-weighted position.
+
+    The comparison window has to clear the frequency receptive field on *both* sides,
+    or one of the two reads zero-padding the other never sees and the difference gets
+    blamed on equivariance. That margin is derived here rather than hardcoded, so
+    changing FREQ_DILATIONS cannot quietly turn this into a test of the padding.
     """
+    from stemify.models.heads.pitch import FREQ_DILATIONS
+
+    # 2 front-end 3x3 convs (+/-2), then one 3x3 per dilated block (+/- its dilation).
+    reach = 2 + sum(FREQ_DILATIONS)
+    shift, width = 30, 40
+    start = reach + 1                       # first bin whose window clears the edge
+    assert start + width + shift + reach < N_BINS, "window must clear both edges"
+
     net, pitch = TCN().eval(), pitch_head().eval()
     x = torch.zeros(1, 1, N_BINS, T)
-    x[0, 0, 60:66, :] = 5.0                    # a narrow "partial" at bin 60
+    x[0, 0, start + 10 : start + 16, :] = 5.0          # a narrow "partial"
     shifted = torch.zeros_like(x)
-    shifted[0, 0, 90:96, :] = 5.0              # the same pattern, 30 bins up
+    shifted[0, 0, start + 10 + shift : start + 16 + shift, :] = 5.0   # same, N bins up
 
     with torch.no_grad():
         a = pitch(net.frontend.conv_features(x))
         b = pitch(net.frontend.conv_features(shifted))
-    # Compare away from the padded edges, where the shift is not well defined.
-    assert torch.allclose(a[0, T // 2, 40:80], b[0, T // 2, 70:110], atol=1e-4)
+    assert torch.allclose(
+        a[0, T // 2, start : start + width],
+        b[0, T // 2, start + shift : start + shift + width],
+        atol=1e-5,
+    )
 
 
 # --------------------------------------------------------------------------- #

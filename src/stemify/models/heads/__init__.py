@@ -23,6 +23,7 @@ from stemify.models.heads.frame import FrameHead, onset_head, voicing_head
 from stemify.models.heads.pitch import (
     FrequencyHead,
     decode_bins,
+    decode_contour,
     pitch_head,
     two_hot,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "FrameHead",
     "FrequencyHead",
     "decode_bins",
+    "decode_contour",
     "onset_head",
     "pitch_head",
     "two_hot",

@@ -29,6 +29,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from stemify.contour import Contour
 from stemify.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
 
 # Frequency dilations grow ~3x per level so the branch can see across harmonics
@@ -134,6 +135,34 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     # A frame with no mass anywhere would divide by zero; it has no pitch to report.
     centroid = np.where(total > 0, (local * idx).sum(axis=-1) / np.maximum(total, 1e-9), peak)
     return FMIN * 2.0 ** (centroid / BINS_PER_OCTAVE)
+
+
+def decode_contour(
+    logits: np.ndarray,
+    frame_times: np.ndarray,
+    voiced: np.ndarray | None = None,
+) -> Contour:
+    """Per-bin logits ``(T, n_bins)`` -> a ``Contour`` on the feature grid.
+
+    The single place the head's output becomes a pitch track, so the two callers that
+    need it -- ``NeuralEncoder`` (which already has the logits) and ``NeuralPitch``
+    (which computes them from a path) -- cannot drift into two different decodes.
+
+    Two things fall out that pyin could not give us. The contour shares the CQT's
+    ~11.6 ms grid rather than pyin's 23.2 ms one, so a note boundary is no longer
+    quantised to half the match tolerance -- the quantisation behind the ``MIN_NOTE_S``
+    interaction that cost 7.5 strict F1. And ``voiced`` marks the rests, so "there is
+    no pitch here" and "the bass is silent here" stop being separate claims made by two
+    components that can disagree.
+
+    ``voiced`` is a boolean mask, not a curve and a threshold: the threshold belongs to
+    whoever owns the decoder's operating point, and importing it here would point
+    ``models`` at ``decoders``. With no mask every frame carries the head's best guess.
+    """
+    freqs = decode_bins(logits)
+    if voiced is not None:
+        freqs = np.where(np.asarray(voiced, dtype=bool), freqs, 0.0)
+    return Contour(times=frame_times, freqs=freqs)
 
 
 def pitch_head(conv_channels: int = 32, n_bins: int = N_BINS) -> FrequencyHead:

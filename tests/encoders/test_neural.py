@@ -159,3 +159,80 @@ def test_a_mix_conditioned_model_needs_a_mix(tmp_path):
     encoder = NeuralEncoder(_ChannelCountingModel(2), device="cpu")
     with pytest.raises(ValueError, match="no 'mix' audio"):
         encoder.encode(Sources(bass=bass))
+
+
+# --------------------------------------------------------------------------- #
+# the learned contour: a model with a pitch head is its own pitch source       #
+# --------------------------------------------------------------------------- #
+class _FakePitchModel(nn.Module):
+    """Confidently predicts one MIDI pitch everywhere; voicing on the first half."""
+
+    frequency_heads = {"pitch": object()}   # what has_pitch_head reads
+
+    def __init__(self, midi: float = 45.0):
+        super().__init__()
+        self.midi = midi
+
+    def forward(self, x):  # x: (1, 1, F, T)
+        from stemify.features import N_BINS
+        from stemify.models.heads import two_hot
+
+        t = x.shape[-1]
+        onset = torch.full((1, t, 1), -10.0)
+        voicing = torch.full((1, t, 1), -10.0)
+        voicing[0, : t // 2, 0] = 10.0
+        target = two_hot(torch.full((1, t), self.midi), N_BINS)   # (1, t, n_bins)
+        return {"onset": onset, "voicing": voicing, "pitch": (target - 0.5) * 40.0}
+
+
+def _flat_features(t: int = 40) -> FrameFeatures:
+    from stemify.features import N_BINS
+
+    return FrameFeatures(np.zeros((N_BINS, t), dtype=np.float32), np.arange(t) * 0.01)
+
+
+def test_pitch_head_replaces_the_supplied_contour():
+    """The head is the pitch source when the model has one -- the caller's cached pyin
+    contour is exactly what such a run exists to stop using."""
+    import librosa
+
+    feats = _flat_features()
+    pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
+    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu")
+
+    assert enc.has_pitch_head and enc.pitch_source == "learned"
+    cues = enc.encode_features(pyin_says, feats)
+    # Voiced half carries the head's pitch, not pyin's 200 Hz.
+    voiced = cues.contour.freqs[: feats.frame_times.size // 2]
+    assert np.allclose(librosa.hz_to_midi(voiced), 45.0, atol=0.05)
+    # The contour lands on the FEATURE grid -- the point of the swap.
+    assert np.array_equal(cues.contour.times, feats.frame_times)
+
+
+def test_voicing_head_gates_the_learned_contour():
+    feats = _flat_features()
+    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu")
+    cues = enc.encode_features(Contour(feats.frame_times, np.zeros(40)), feats)
+    half = feats.frame_times.size // 2
+    assert (cues.contour.freqs[:half] > 0).all()     # voiced -> a pitch
+    assert (cues.contour.freqs[half:] == 0.0).all()  # rest -> no pitch
+
+
+def test_use_pyin_keeps_the_supplied_contour():
+    """The A/B escape hatch: same checkpoint, the other pitch source."""
+    feats = _flat_features()
+    pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
+    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu", use_pyin=True)
+
+    assert enc.has_pitch_head and enc.pitch_source == "pyin"
+    cues = enc.encode_features(pyin_says, feats)
+    assert np.allclose(cues.contour.freqs, 200.0)
+
+
+def test_a_model_without_a_pitch_head_still_uses_the_supplied_contour():
+    feats = _flat_features()
+    supplied = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
+    enc = NeuralEncoder(_FakeOnsetVoicingModel(), device="cpu")
+
+    assert not enc.has_pitch_head and enc.pitch_source == "pyin"
+    assert np.allclose(enc.encode_features(supplied, feats).contour.freqs, 200.0)
