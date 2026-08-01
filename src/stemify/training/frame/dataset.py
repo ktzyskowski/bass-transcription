@@ -4,7 +4,8 @@ The batch-serving layer: preparation and caching of the per-track examples lives
 in ``examples.py``; this only slices them into the fixed-length windows the model
 trains on (the temporal stack needs a few seconds of context and a batch needs a
 fixed length). Windows are read straight off the memmapped feature sidecar, so a
-full-scale set never sits in RAM.
+full-scale set never sits in RAM -- but see ``_examples`` for the part of a
+``TrackExample`` that *is* resident, and why the open-track cache is bounded.
 """
 
 from collections.abc import Iterable, Sequence
@@ -15,6 +16,11 @@ import torch
 from torch.utils.data import Dataset
 
 from stemify.serde import TrackExample
+
+# How many tracks' resident state one dataset keeps open. Sized to be negligible per
+# worker rather than to hit some ratio -- see ``_examples`` for why a larger cache
+# would buy nothing.
+CACHE_TRACKS = 64
 
 
 class FrameWindowDataset(Dataset):
@@ -72,16 +78,22 @@ class FrameWindowDataset(Dataset):
         return len(self._index)
 
     def _examples(self, ei: int) -> tuple[TrackExample, ...]:
-        # mmap: each cached TrackExample holds a memmap (no resident feature data)
-        # plus the small targets/frame_times, so this cache stays cheap even
-        # unbounded -- the big features are paged in per-window by the OS, shared
-        # across workers. That sharing is why a second channel costs page cache
-        # rather than a second resident copy per worker.
-        if ei not in self._cache:
-            self._cache[ei] = tuple(
-                TrackExample.load(p, mmap=True) for p in self.tracks[ei]
-            )
-        return self._cache[ei]
+        # Features are memmapped, so they cost page cache the OS shares across
+        # workers. Targets and frame_times are *not*: they are read resident out of
+        # the npz, and every worker is a fork with its own copy.
+        #
+        # Hence the bound. An entry is well under a megabyte, but the train set is one
+        # per track per condition, so an unbounded cache converges on the whole corpus
+        # in each worker -- which is enough to OOM a host well before the GPU notices.
+        # Nothing is lost by evicting: `shuffle=True` leaves no locality to exploit, so
+        # the cache only ever spares a repeat open of a small file.
+        cached = self._cache.get(ei)
+        if cached is None:
+            cached = tuple(TrackExample.load(p, mmap=True) for p in self.tracks[ei])
+            if len(self._cache) >= CACHE_TRACKS:
+                self._cache.pop(next(iter(self._cache)))  # FIFO; dicts keep order
+            self._cache[ei] = cached
+        return cached
 
     def __getitem__(self, i: int) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         ei, start = self._index[i]

@@ -287,3 +287,27 @@ def test_frame_params_report_the_knobs_the_recipe_owns():
         "window": 64, "hop": 32, "pitch": True, "pos_weight": "onset=5.0",
     }
     assert FrameRecipe().params["pos_weight"] == "none"
+
+
+def test_open_track_cache_is_bounded(tmp_path):
+    # Features are memmapped, but each TrackExample's targets and frame_times are
+    # resident and every DataLoader worker is a fork with its own copy. Unbounded,
+    # a worker converges on the whole corpus: a 2-channel pitch run OOM'd a 15 GB
+    # host after one epoch. Nothing here checks speed -- only that it stops growing.
+    from stemify.training.frame.dataset import CACHE_TRACKS
+
+    paths = [
+        (_save_example(tmp_path, f"t{i}", np.full((4, 8), float(i)), np.arange(8)),)
+        for i in range(CACHE_TRACKS + 5)
+    ]
+    ds = FrameWindowDataset(paths, heads=["onset"], window_frames=4, hop_frames=4)
+    for i in range(len(ds)):
+        ds[i]
+    assert len(ds._cache) <= CACHE_TRACKS
+
+    # Eviction must not corrupt what it serves: track 0 is long gone from the cache
+    # by now, so this re-reads it from disk and must still give back track 0's data.
+    x, y = ds[0]
+    assert x.shape == (1, 4, 4)
+    assert (x[0] == 0.0).all()
+    assert (y["onset"] == torch.arange(4, dtype=torch.float32)).all()
