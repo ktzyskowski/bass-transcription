@@ -106,11 +106,16 @@ shapes every feature that can ever be added; see *Can the pitch head feed the CR
 model in the classical Sarawagi & Cohen sense: the encoder is deep, the thing scoring
 segments is `wᵀf(segment)`. "Not a neural CRF" means exactly this.
 
-**The pitch term is currently pyin's.** `w_pitch` weights `pitch_jumps` — a binary
+**Three pitch terms, from two sources.** `w_pitch` weights `pitch_jumps` — a binary
 indicator thresholded at 0.8 semitones on the *pyin* contour, the same cue `group()`
-retired because its transition lags the onset. The decoded pitch is likewise read from
-pyin (median over the span) **after** segmentation. So the learned pitch head does not
-reach this decoder at all yet.
+retired because its transition lags the onset. `w_path` and `w_spread` weight the two
+features derived from the learned head's per-bin logits (see *Can the pitch head feed
+the CRF?*); both are zero-initialised, so a run that gains them starts from the model
+that did not have them, and both read zero when a checkpoint has no pitch head.
+
+The *decoded* pitch is still read from the contour (median over the span) **after**
+segmentation, so segmentation and pitch value remain decided independently — the
+limitation the pitch-labelled segment set below would remove.
 
 **Transition score:** a 2×2 learned matrix over `{note, rest}` plus an initial
 distribution — the cost of `note→note` vs `note→rest` vs `rest→note`, encoding the
