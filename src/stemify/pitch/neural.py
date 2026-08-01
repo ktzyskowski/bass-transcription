@@ -24,11 +24,11 @@ import numpy as np
 import torch
 
 from stemify.contour import Contour
+from stemify.device import best_device
 from stemify.features import extract_features
 from stemify.models.heads import decode_contour
 from stemify.models.tagger import FrameTagger
 from stemify.pitch.base import PitchEstimator
-from stemify.training.device import best_device
 
 VOICING_THRESHOLD = 0.5  # matches the decoder's; see ``estimate``
 

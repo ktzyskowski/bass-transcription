@@ -30,13 +30,13 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
+from stemify.device import best_device
 from stemify.encoders.base import Encoder
 from stemify.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import decode_contour
 from stemify.models.tagger import FrameTagger
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
-from stemify.training.device import best_device
 
 
 # Above this, the voicing head is confident enough that the pitch head's guess for a
