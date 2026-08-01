@@ -317,3 +317,27 @@ choose pitch and boundaries **jointly**: the same recurrence at `O(T · dmax · 
 with pitch evidence able to *veto* a boundary rather than being applied downstream of
 it. Expensive at `K=216` (bucketing to semitones gives `K≈48`), still monophonic —
 but it addresses a real independence assumption, which polyphony does not.
+
+### Why the pitch head still needs its own loss
+
+Both features above measure *change* and *disagreement*. Neither measures **value** —
+nothing in `path_length` or `pitch_spread` says the pitch is correct, only that it is
+self-consistent and moves where the boundaries are.
+
+That is the right division of labour (the head answers *what pitch*, the CRF answers
+*where the notes are*), but it has a consequence: a pitch head trained under the NLL
+**alone** can place every boundary correctly and still score near zero on strict F1,
+because decoded note pitch is read from the contour those same logits produce and
+nothing constrained its value. Random initialisation compounds it — a near-uniform
+softmax over 216 bins makes consecutive frames near-identical, so both features start
+near zero and the gradient through them is small.
+
+A constant-output head is *not* an attractor, though it is easy to assume so: it zeroes
+both features on every span, gold and competing alike, which makes them uninformative
+rather than rewarded. The CRF's gradient is discriminative — it wants low spread on
+gold note spans and high spread on spans straddling a boundary.
+
+So: keep an auxiliary `pitch_ce` whenever the head is trainable under the CRF. The
+alternative that needs no auxiliary loss is the pitch-labelled segment set above —
+gold says "note at bin 40", the unary reads the head's probability *there*, and the CRF
+supervises pitch value directly at `O(T · dmax · K)`.
