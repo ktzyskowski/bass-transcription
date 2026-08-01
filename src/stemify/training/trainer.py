@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
 from stemify.training.device import best_device
-from stemify.training.losses import Loss
+from stemify.training.base import Loss
 
 
 @dataclass

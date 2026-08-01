@@ -23,7 +23,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from stemify.models.heads import two_hot
-from stemify.training.losses.base import Loss
+from stemify.training.base import Loss
 
 BINARY_HEADS = ("onset", "voicing")
 PITCH_HEAD = "pitch"

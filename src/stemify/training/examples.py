@@ -1,7 +1,7 @@
 """Assemble per-frame training targets on top of a cached CQT.
 
 The target layer, on top of the persistence layer (``cache.py``) and below the
-windowing that serves batches (``datasets/frame.py``). Two pieces, split so each is
+windowing that serves batches (``frame/dataset.py``). Two pieces, split so each is
 testable and the expensive one (the CQT) is cached once:
 
   - ``build_example`` turns one track's features + references into a full-track

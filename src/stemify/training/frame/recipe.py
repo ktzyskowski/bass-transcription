@@ -19,10 +19,11 @@ from stemify.models.networks import TCN
 from stemify.models.tagger import FrameTagger
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
 from stemify.training.config import TrainConfig
-from stemify.training.datasets import frame as frame_ds
+from stemify.training.frame import dataset as frame_ds
 from stemify.training.examples import prepare_examples
-from stemify.training.losses import FrameBCELoss, Loss
-from stemify.training.recipes.base import Recipe, _loader_kwargs
+from stemify.training.base import Loss
+from stemify.training.frame.loss import FrameBCELoss
+from stemify.training.base import Recipe, _loader_kwargs
 
 
 class FrameRecipe(Recipe):

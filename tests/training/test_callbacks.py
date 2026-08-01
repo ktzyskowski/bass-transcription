@@ -21,8 +21,8 @@ from stemify.training.callbacks import (
     MLflowCallback,
 )
 from stemify.training.config import TrainConfig
-from stemify.training.datasets.frame import collate
-from stemify.training.losses import FrameBCELoss
+from stemify.training.frame.dataset import collate
+from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.trainer import Trainer
 
 

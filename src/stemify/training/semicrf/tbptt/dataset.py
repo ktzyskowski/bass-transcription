@@ -15,7 +15,7 @@ this is an ``IterableDataset`` that emits whole ``ChunkBatch`` objects (use
 Each row carries a ``stream`` id and a ``reset`` flag rather than relying on position,
 because with ``num_workers > 1`` consecutive batches come from *different* workers, so
 row ``b`` of one batch is not the continuation of row ``b`` of the last. The trainer
-keys its carries by ``stream``; see ``losses/segmental.py``.
+keys its carries by ``stream``; see ``semicrf/loss.py``.
 """
 
 from collections.abc import Iterator
@@ -30,7 +30,7 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.training.conditions import Condition
-from stemify.training.datasets.tracks import TrackInputs, channel_window, track_inputs
+from stemify.training.semicrf.tracks import TrackInputs, channel_window, track_inputs
 
 # Segmentation of one chunk in *window-local* DP indices: (label, start, end).
 Segmentation = list[tuple[int, int, int]]

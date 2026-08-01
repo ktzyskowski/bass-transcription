@@ -1,26 +1,19 @@
-"""``Recipe``: the objective and everything that must move with it, as one unit.
+"""What a training *strategy* has to implement: ``Recipe`` and ``Loss``.
 
-Swapping training paradigm is not one choice but four coupled ones -- the batch shape,
-the loss, the decoder that scores a checkpoint, and what a checkpoint has to contain.
-A flat CLI (``--loss X --dataset Y``) would let you name combinations that cannot
-work: ``FrameBCELoss`` over a ``SequenceBatch`` type-checks as strings and fails at
-epoch 0, or worse broadcasts into silence. Binding them into a ``Recipe`` makes the
-valid combinations the only expressible ones, and reduces the CLI to ``--objective``.
+The two contracts live together because they are two halves of one thing -- a
+``Recipe`` *builds* a ``Loss`` (``build_loss``), and a strategy that changes one almost
+always changes the other. Splitting them across packages is what made the semi-CRF
+spread over three directories before the training tree was sliced by strategy.
 
-This module holds only the seam and what every recipe shares; the concrete recipes
-live one file each beside it (``frame.py``, ``semicrf.py``) and are assembled into the
-``RECIPES`` table by the package ``__init__``. That split is why adding a paradigm
-does not grow a file every other paradigm has to be read around.
-
-The ``decoder_from`` member is the one an earlier version of this code got wrong by
-omission: the async validator hardcoded the heuristic, so a semi-CRF run would have
-reported the *heuristic's* note F1 over its learned cues -- plausible numbers for a
-model nobody trained.
+The implementations live in ``training/frame`` and ``training/semicrf``, one package
+per paradigm; ``training/recipes.py`` is the table that names them. This module knows
+about neither, which is what lets a strategy package import it without a cycle.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -28,7 +21,6 @@ from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.training.conditions import resolve
 from stemify.training.config import TrainConfig
-from stemify.training.losses import Loss
 
 HEADS = ["onset", "voicing"]
 
@@ -43,6 +35,50 @@ def _loader_kwargs(config: TrainConfig) -> dict:
     if config.num_workers > 0:
         kwargs["persistent_workers"] = True
     return kwargs
+
+
+class Loss(ABC):
+    """A training objective the ``Trainer`` optimises, agnostic to batch shape."""
+
+    @abstractmethod
+    def compute(
+        self, model: nn.Module, batch: object, device: torch.device
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """``(loss, metrics)``: the scalar to backward, and per-component scalars to
+        log. ``metrics`` must include a ``"total"`` key -- the number the early-stopper
+        monitors -- so the loop never reaches into a paradigm-specific breakdown."""
+
+    @abstractmethod
+    def batch_size(self, batch: object) -> int:
+        """How many examples ``batch`` holds, for the example-weighted epoch mean."""
+
+    def parameters(self) -> Iterable[nn.Parameter]:
+        """Learnable parameters this objective adds beyond the model (none by
+        default; a structured decoder overrides to return its own)."""
+        return ()
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """The objective's own learned state, for snapshotting and persistence.
+
+        The companion to ``parameters``: anything the optimiser is allowed to move
+        must also be capturable, or it is trained and then lost. A structured
+        decoder's potentials are the model in every sense that matters at decode
+        time -- an encoder saved without them pairs with a *freshly initialised*
+        decoder, which still emits notes and so fails silently rather than loudly."""
+        return {}
+
+    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
+        """Restore what ``state_dict`` captured. No-op for a parameterless objective."""
+        if state:
+            raise ValueError(
+                f"{type(self).__name__} holds no parameters but was given state "
+                f"{sorted(state)}"
+            )
+
+    def to(self, device: torch.device) -> "Loss":
+        """Move any owned modules onto ``device`` (no-op unless the objective holds
+        parameters). Returns self for chaining, like ``nn.Module.to``."""
+        return self
 
 
 class Recipe(ABC):
@@ -118,5 +154,3 @@ class Recipe(ABC):
         ``state`` is a ``Trainer.state_cpu`` snapshot, so a structured objective can
         rebuild its trained potentials from ``state["loss"]`` rather than being scored
         through a freshly initialised decoder."""
-
-

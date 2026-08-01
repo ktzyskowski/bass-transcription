@@ -15,7 +15,7 @@ from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
-from stemify.training.datasets.frame import FrameWindowDataset, collate
+from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.examples import build_example
 
 
@@ -227,7 +227,7 @@ def test_pos_weight_actually_reaches_the_loss():
     # applied would leave the "optimistic encoder" arm identical to the balanced one.
     import torch
 
-    from stemify.training.losses.frame import FrameBCELoss
+    from stemify.training.frame.loss import FrameBCELoss
 
     x = torch.zeros(2, 1, 4, 8)
     y = {"onset": torch.zeros(2, 8)}

@@ -14,8 +14,8 @@ from stemify.contour import Contour
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.notes import NoteEvent
 from stemify.training.config import TrainConfig
-from stemify.training.datasets.sequence import SequenceExample, collate
-from stemify.training.losses import SemiCRFLoss
+from stemify.training.semicrf.dataset import SequenceExample, collate
+from stemify.training.semicrf.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer
 
 DT = 0.0116

@@ -15,8 +15,8 @@ from stemify.models.networks import TCN
 from stemify.models.tagger import FrameTagger
 from stemify.features import N_BINS
 from stemify.training.config import TrainConfig
-from stemify.training.datasets.frame import collate
-from stemify.training.losses import FrameBCELoss
+from stemify.training.frame.dataset import collate
+from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.trainer import Trainer
 
 
@@ -68,7 +68,7 @@ def test_pitch_head_is_scored_on_voiced_frames_only():
     CQT-bin code. Unvoiced frames (NaN targets) must not contribute -- where the bass
     sounds is the voicing head's question."""
     from stemify.features import N_BINS
-    from stemify.training.losses.frame import pitch_ce
+    from stemify.training.frame.loss import pitch_ce
 
     logits = torch.zeros(2, 4, N_BINS)
     midi = torch.full((2, 4), float("nan"))
@@ -98,7 +98,7 @@ def test_pitch_loss_starts_on_the_same_scale_as_the_binary_heads():
     import math
 
     from stemify.features import N_BINS
-    from stemify.training.losses.frame import pitch_ce
+    from stemify.training.frame.loss import pitch_ce
 
     midi = torch.full((2, 4), float("nan"))
     midi[0, 0], midi[1, 2] = 45.0, 38.5   # one on a bin centre, one between two

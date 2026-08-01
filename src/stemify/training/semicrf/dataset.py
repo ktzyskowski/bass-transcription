@@ -1,6 +1,6 @@
 """Whole-track sequence data for structured (semi-CRF) training.
 
-The frame-head path serves fixed windows (``dataset.py``); the structured decoder
+The frame-head path serves fixed windows (``frame/dataset.py``); the structured decoder
 needs *whole* tracks -- a note can exceed any window, and the segmental DP scans the
 entire sequence. ``SequenceDataset`` yields one track per item (its CQT, grid, pyin
 contour and reference notes); the padding ``collate`` stacks a minibatch to a common
@@ -26,7 +26,7 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
 from stemify.training.conditions import Condition
-from stemify.training.datasets.tracks import channel_window, track_inputs
+from stemify.training.semicrf.tracks import channel_window, track_inputs
 
 
 @dataclass

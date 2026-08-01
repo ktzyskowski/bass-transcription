@@ -32,11 +32,11 @@ from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
 from stemify.training.conditions import CONDITIONS
-from stemify.training.datasets.chunked import ChunkedSequenceDataset
-from stemify.training.datasets.sequence import SequenceExample
-from stemify.training.datasets.sequence import collate as sequence_collate
-from stemify.training.losses.segmental import SemiCRFLoss
-from stemify.training.losses.tbptt import ChunkedSemiCRFLoss
+from stemify.training.semicrf.tbptt.dataset import ChunkedSequenceDataset
+from stemify.training.semicrf.dataset import SequenceExample
+from stemify.training.semicrf.dataset import collate as sequence_collate
+from stemify.training.semicrf.loss import SemiCRFLoss
+from stemify.training.semicrf.tbptt.loss import ChunkedSemiCRFLoss
 
 N_BINS, HOP_S, STRIDE = 12, 0.0116, 3
 CHUNK, DMAX = 10, 30

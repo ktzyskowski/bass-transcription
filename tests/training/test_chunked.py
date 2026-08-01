@@ -23,7 +23,7 @@ from stemify.decoders.semicrf.forward import batched_log_partition, chunk_log_pa
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
-from stemify.training.datasets.chunked import ChunkedSequenceDataset, collate
+from stemify.training.semicrf.tbptt.dataset import ChunkedSequenceDataset, collate
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
@@ -167,7 +167,7 @@ def test_streams_interleave_distinct_tracks(tmp_path, cache):
 def test_collate_rejects_mixed_widths(tmp_path, cache):
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
     a, b = list(ds)[:2]
-    from stemify.training.datasets.chunked import Chunk
+    from stemify.training.semicrf.tbptt.dataset import Chunk
 
     wide = Chunk(
         np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, a.contours[0], [], 30, 0,
@@ -186,7 +186,7 @@ def test_collate_rejects_mixed_margins(tmp_path, cache):
     # scanned as chunk -- silently, since the widths still match.
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
     a = next(iter(ds))
-    from stemify.training.datasets.chunked import Chunk
+    from stemify.training.semicrf.tbptt.dataset import Chunk
 
     lhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0,
                 0, False)
