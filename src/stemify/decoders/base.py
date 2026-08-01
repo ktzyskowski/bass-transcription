@@ -20,6 +20,7 @@ trainable ``SemiCRFDecoder`` can slot in where the heuristic sits.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from stemify.cues import Cues
 from stemify.notes import NoteEvent
@@ -33,3 +34,21 @@ class Decoder(ABC):
     @abstractmethod
     def decode(self, cues: Cues) -> list[NoteEvent]:
         """The notes implied by ``cues``."""
+
+    def decode_batch(self, cues: Sequence[Cues]) -> list[list[NoteEvent]]:
+        """Notes for several tracks at once, one list per input.
+
+        Defaults to decoding them one at a time, which is what every decoder does
+        today. It is a **default rather than an abstract method** so that callers can
+        be written against the batched shape now and gain the speedup whenever a
+        decoder overrides it -- no ``hasattr`` check, no ``try``/``except``, no branch
+        that has to be removed later.
+
+        Raising here instead would push the branch onto every caller, and would demand
+        an implementation from ``HeuristicDecoder``, where there is nothing to gain:
+        it is numpy and scipy, with no per-call launch overhead to amortise. The
+        decoder that *does* gain is the semi-CRF, whose DP is launch-bound and runs at
+        a few hundred elements per step -- so batching it is worth roughly the batch
+        factor, and the default keeps everything else working meanwhile.
+        """
+        return [self.decode(c) for c in cues]
