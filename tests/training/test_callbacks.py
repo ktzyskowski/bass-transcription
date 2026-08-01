@@ -47,7 +47,7 @@ def _loader(n=4, window=16):
 def _trainer(max_epochs=3):
     model = FrameTagger(TCN(), {"onset": onset_head()})
     return Trainer(model, FrameBCELoss(("onset",)),
-                   TrainConfig(heads=("onset",), device="cpu",
+                   TrainConfig(device="cpu",
                                max_epochs=max_epochs, patience=99))
 
 

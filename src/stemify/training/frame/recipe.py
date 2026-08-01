@@ -26,10 +26,52 @@ from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.base import Recipe, _loader_kwargs
 
 
+# A window is one training example: enough frames for context, short enough to batch.
+# 256 frames ~= 3 s at the 11.6 ms hop, and a 50% hop puts an onset that sat near one
+# window's edge in the middle of the next.
+WINDOW_FRAMES = 256
+HOP_FRAMES = 128
+
+
 class FrameRecipe(Recipe):
     """Per-frame BCE over fixed windows; the heuristic groups cues into notes."""
 
     name = "frame"
+
+    def __init__(
+        self,
+        conditions: Sequence[str] | None = None,
+        pitch: bool = False,
+        window_frames: int = WINDOW_FRAMES,
+        hop_frames: int = HOP_FRAMES,
+        pos_weight: dict[str, float | None] | None = None,
+    ) -> None:
+        """These three used to live on ``TrainConfig``, and only this recipe read them.
+
+        The semi-CRF sets its chunk length from its own ``CHUNK_FRAMES`` and its
+        objective takes no class weights, so while they were shared settings
+        ``--pos-weight`` on a semi-CRF run was accepted and quietly did nothing. Held
+        here, handing one to another strategy is a ``TypeError``.
+
+        ``pitch`` is here for the same reason, having previously sat on the ``Recipe``
+        base: only this strategy has that head. It changes the model's shape, what
+        every cached example must carry (a per-frame MIDI target), and what the
+        checkpoint records -- see ``heads``.
+        """
+        super().__init__(conditions)
+        self.pitch = pitch
+        self.window_frames = window_frames
+        self.hop_frames = hop_frames
+        self.pos_weight = dict(pos_weight or {})
+
+    @property
+    def heads(self) -> list[str]:
+        """The binary pair, plus pitch when this run trains it.
+
+        The single list the cached targets, the loss terms and the checkpoint's
+        ``heads`` field are all derived from, so they cannot drift apart.
+        """
+        return [*super().heads, "pitch"] if self.pitch else super().heads
 
     def build_model(self) -> nn.Module:
         backbone = TCN(in_channels=self.in_channels)
@@ -45,11 +87,11 @@ class FrameRecipe(Recipe):
         )
 
     def build_loss(self, config: TrainConfig) -> Loss:
-        return FrameBCELoss(self.heads, config.pos_weight)
+        return FrameBCELoss(self.heads, self.pos_weight)
 
     def _windows(self, tracks: list[tuple[Path, ...]], config: TrainConfig):
         return frame_ds.FrameWindowDataset(
-            tracks, self.heads, config.window_frames, config.hop_frames
+            tracks, self.heads, self.window_frames, self.hop_frames
         )
 
     def _tracks(

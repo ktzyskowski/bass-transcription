@@ -43,16 +43,11 @@ class SemiCRFRecipe(Recipe):
         self,
         conditions: Sequence[str] | None = None,
         decoder: SemiCRFDecoder | None = None,
-        pitch: bool = False,
     ) -> None:
-        if pitch:
-            # Refused rather than ignored: the DP scores onset and voicing evidence
-            # only, so a pitch branch here would train a head no potential reads and
-            # report a successful run that learned nothing with it.
-            raise NotImplementedError(
-                "the semi-CRF scores onset and voicing evidence only, so a pitch "
-                "branch would be trained but never read. Use --objective frame."
-            )
+        # No ``pitch`` parameter, deliberately: the DP scores onset and voicing
+        # evidence only, so a pitch branch here would train a head no potential ever
+        # reads. Not accepting the argument makes that a TypeError at construction
+        # rather than a successful run that learned nothing with it.
         super().__init__(conditions)
         self.decoder = decoder or SemiCRFDecoder()
 

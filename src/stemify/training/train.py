@@ -423,13 +423,34 @@ def main() -> None:
     args = ap.parse_args()
 
     # The recipe is built first because it owns which heads this run trains: with
-    # --pitch that is three, and the config, the cached targets and the checkpoint all
-    # have to agree on the same list.
-    recipe = RECIPES[args.objective](args.sources.split(","), pitch=args.pitch)
+    # --pitch that is three, and the cached targets and the checkpoint both have to
+    # agree with that list.
+    #
+    # --pos-weight is a frame-strategy setting and is refused elsewhere rather than
+    # ignored: the semi-CRF's objective takes no class weights, so while this lived on
+    # TrainConfig the flag was accepted and quietly did nothing.
+    strategy_kwargs: dict = {}
+    if args.objective == "frame":
+        strategy_kwargs = {
+            "pitch": args.pitch,
+            "pos_weight": _parse_pos_weight(args.pos_weight),
+        }
+    else:
+        unsupported = [
+            flag for flag, given in
+            (("--pitch", args.pitch), ("--pos-weight", bool(args.pos_weight)))
+            if given
+        ]
+        if unsupported:
+            raise SystemExit(
+                f"{', '.join(unsupported)} applies to --objective frame, not "
+                f"{args.objective!r}: the semi-CRF's DP scores onset and voicing "
+                "evidence only, and its structured NLL takes no class weights."
+            )
+    recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(
-        heads=tuple(recipe.heads), max_epochs=args.epochs, batch_size=args.batch_size,
+        max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
-        pos_weight=_parse_pos_weight(args.pos_weight),
     )
     train(
         args.root, args.cache_dir, config,

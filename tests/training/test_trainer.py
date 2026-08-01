@@ -40,7 +40,7 @@ def test_fit_reduces_loss():
     loader = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
     model = FrameTagger(TCN(), {"onset": onset_head()})
     config = TrainConfig(
-        heads=("onset",), device="cpu", max_epochs=20,
+        device="cpu", max_epochs=20,
         learning_rate=1e-2, patience=99,
     )
     history = Trainer(model, FrameBCELoss(("onset",)), config).fit(loader)
@@ -50,7 +50,7 @@ def test_fit_reduces_loss():
 def test_best_checkpoint_is_restored():
     loader = DataLoader(_FixedMapping(4, window=16), batch_size=4, collate_fn=collate)
     model = FrameTagger(TCN(), {"onset": onset_head()})
-    config = TrainConfig(heads=("onset",), device="cpu", max_epochs=5, patience=99)
+    config = TrainConfig(device="cpu", max_epochs=5, patience=99)
     history = Trainer(model, FrameBCELoss(("onset",)), config).fit(loader)
     assert 0 <= history.best_epoch < len(history.val_loss)
     # best_epoch tracks the minimum up to the 1e-5 improvement threshold the
@@ -113,7 +113,7 @@ def test_on_batch_fires_per_train_batch_with_monotonic_steps():
     train = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
     val = DataLoader(_FixedMapping(8, window=16), batch_size=4, collate_fn=collate)
     model = FrameTagger(TCN(), {"onset": onset_head()})
-    config = TrainConfig(heads=("onset",), device="cpu", max_epochs=2, patience=99)
+    config = TrainConfig(device="cpu", max_epochs=2, patience=99)
 
     calls: list[tuple[int, dict]] = []
 
@@ -170,7 +170,7 @@ class _ScalarLoss(FrameBCELoss):
 def _tiny_trainer(loss):
     backbone = TCN()
     model = FrameTagger(backbone, {"onset": onset_head(backbone.hidden)})
-    config = TrainConfig(heads=("onset",), max_epochs=3, batch_size=4, device="cpu")
+    config = TrainConfig(max_epochs=3, batch_size=4, device="cpu")
     return Trainer(model, loss, config)
 
 

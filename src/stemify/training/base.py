@@ -86,36 +86,34 @@ class Recipe(ABC):
 
     name: str
 
-    def __init__(
-        self, conditions: Sequence[str] | None = None, pitch: bool = False
-    ) -> None:
+    def __init__(self, conditions: Sequence[str] | None = None) -> None:
         """``conditions`` are the input conditions to train over, by tag.
 
         Held on the recipe rather than passed to ``train_loader`` because the model
         has to be built from them too: a mix-conditioned condition means a wider
         first conv, and a recipe that took the conditions only at loader time would
         already have built a model with the wrong input shape.
-
-        ``pitch`` adds the learned pitch branch. Opt-in for the same reason the
-        conditions live here: it changes the model's shape, what every cached example
-        must carry (a per-frame MIDI target), and what the checkpoint contains.
         """
         self.conditions = resolve(list(conditions or ["stem", "mix"]))
         # resolve() has already rejected a mixed-width set, so this is unambiguous.
         self.in_channels = self.conditions[0].in_channels
-        self.pitch = pitch
 
     @property
     def heads(self) -> list[str]:
-        """The heads this run trains -- the binary pair, plus pitch when asked for.
+        """The heads this run trains. The binary pair unless a strategy says otherwise.
 
-        Not the module-level ``HEADS``: that is the default pair, and a run that adds
-        pitch needs the extra target prepared, the extra loss term built, and the extra
-        name recorded in the checkpoint. Deriving all three from one list here is what
-        stops those three drifting apart -- a checkpoint whose ``heads`` disagrees with
-        the branch it actually holds loads *silently* without it.
+        A property rather than a constant because a strategy that can train more (the
+        frame path, with ``--pitch``) has to drive three things from one list: the
+        target cached per example, the loss terms built, and the names recorded in the
+        checkpoint. A checkpoint whose ``heads`` disagrees with the branches it holds
+        loads *silently* without them.
+
+        Deliberately does not mention pitch here. Only the frame strategy has that
+        head -- the semi-CRF's DP scores onset and voicing evidence and would never
+        read it -- so naming it in the base would be the contract advertising a
+        capability most of its implementations do not have.
         """
-        return [*HEADS, "pitch"] if self.pitch else list(HEADS)
+        return list(HEADS)
 
     @abstractmethod
     def build_model(self) -> nn.Module:
