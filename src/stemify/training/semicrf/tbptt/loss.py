@@ -38,8 +38,8 @@ from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.window import initial_window
-from stemify.training.semicrf.tbptt.dataset import ChunkBatch
 from stemify.training.base import Loss
+from stemify.training.semicrf.tbptt.dataset import ChunkBatch
 
 
 class ChunkedSemiCRFLoss(Loss):

@@ -1,25 +1,27 @@
-"""Train the onset head on Slakh, scored by note-level F1.
+"""Train the frame heads on Slakh, scored by note-level F1.
 
     uv run python -m stemify.training.train --root data/raw/slakh2100 \
-        --cache-dir data/cache/onset --tracking-uri file:./mlruns \
-        --sources stem,mix,demucs --limit 400
+        --cache-dir data/cache --tracking-uri file:./mlruns \
+        --sources clean,separated --pitch
 
-Domain randomisation: the input is drawn from several source conditions
-(``--sources``) while the target is always the clean-stem MIDI, so the head is
-robust to the condition it will actually see. stem+mix need no separation; adding
-``demucs`` separates the train set first (cached; ~8s/track on MPS).
+Trains onset and voicing, plus a learned pitch contour with ``--pitch`` (worth +5.0
+strict F1 over pyin on held-out test; see docs/experiments.md).
 
-Validation runs on every deployment condition (``--val-sources``, default
-stem,mix,demucs), not just clean stems: cheap BCE val loss on the stem set drives
-early stopping inline, while ``AsyncValidationCallback`` scores each checkpoint
-through the real ``NeuralEncoder`` + ``HeuristicDecoder`` pair -- one
-``OnsetValidator`` per condition, each caching its pyin contours so a score is a
-model forward, not a pyin re-run. From that one forward it logs both altitudes to
-MLflow -- ``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap,
-voicing_auroc}`` (encoder) -- and attaches a per-epoch ``validation/`` JSON artifact
-with the full breakdown. The gap between ``note/stem/f1`` and ``note/demucs/f1`` is
-the verdict on how well the learned onsets survive separation (the DSP stem floor is
-~80% on val / 73% on test).
+Domain randomisation: the input is drawn from several *conditions* (``--sources``,
+tags from ``training.conditions``) while the target is always the clean-stem MIDI, so
+the heads are robust to the condition deployment actually sees. ``clean`` needs no
+separation; ``separated`` runs demucs over the train set first, cached.
+
+Validation runs on every deployment condition of the model's own channel width
+(``--val-sources``), not just clean stems. Cheap per-frame val loss drives early
+stopping inline, while ``AsyncValidationCallback`` scores each checkpoint through the
+real ``NeuralEncoder`` + ``HeuristicDecoder`` pair -- one ``OnsetValidator`` per
+condition, each caching its contours so a score is a model forward rather than a pyin
+re-run. From that one forward it logs both altitudes to MLflow --
+``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap, voicing_auroc}``
+(encoder) -- and attaches a per-epoch ``validation/`` JSON artifact with the full
+breakdown. The gap between ``note/clean/f1`` and ``note/separated/f1`` is the verdict
+on how well the learned cues survive separation.
 """
 
 import argparse
@@ -35,9 +37,9 @@ from torch import nn
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.encoders.neural import NeuralEncoder
 from stemify.models.heads import onset_head, voicing_head
 from stemify.models.networks import TCN
-from stemify.encoders.neural import NeuralEncoder
 from stemify.models.tagger import FrameTagger
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -53,7 +55,7 @@ from stemify.training.validation import OnsetValidator
 logger = logging.getLogger(__name__)
 
 # score_examples' metric keys -> the short leaf name under note/<condition>/, so
-# MLflow groups them: note/stem/f1, note/demucs/recall, ... one section per metric.
+# MLflow groups them: note/clean/f1, note/separated/recall, ... one per metric.
 _NOTE_KEY = {
     "note_f1": "f1", "note_precision": "precision",
     "note_recall": "recall", "fragmentation": "fragmentation",
@@ -283,7 +285,7 @@ def train(
             )
         logger.info("initialised encoder from %s", init_from)
 
-    trainer = Trainer(model, recipe.build_loss(config), config)
+    trainer = Trainer(model, recipe.build_loss(), config)
 
     callbacks: list = [ConsoleCallback()]
     mlflow = None
@@ -376,11 +378,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default="data/raw/slakh2100")
     ap.add_argument("--cache-dir", type=Path, default=Path("data/cache/onset"))
-    ap.add_argument("--sources", default="stem,mix",
+    ap.add_argument("--sources", default="clean,separated",
                     help="comma-separated train input conditions from "
-                         + ",".join(CONDITIONS) + ". A '+' condition feeds several "
-                         "channels (bass first): 'demucs+mix' gives the model the "
-                         "separated bass and the mixture it came from")
+                         + ", ".join(CONDITIONS) + ". A 'bichannel-' condition feeds "
+                         "two channels, the bass first and the mixture it came from "
+                         "second, and needs a 2-channel model")
     ap.add_argument("--val-sources",
                     help="comma-separated val conditions, scored+logged separately "
                          "(default: every deployment condition of the model's own "

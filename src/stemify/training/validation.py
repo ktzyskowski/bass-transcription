@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset
@@ -28,7 +29,6 @@ from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues, scor
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
-from stemify.cache import Cache
 from stemify.training.conditions import CONDITIONS, Condition
 from stemify.training.examples import prepare_examples
 from stemify.training.labels import onset_targets

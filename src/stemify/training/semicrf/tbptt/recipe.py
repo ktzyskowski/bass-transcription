@@ -12,7 +12,6 @@ from stemify.features import HOP_LENGTH, SAMPLE_RATE
 from stemify.models.networks import tcn_receptive_field
 from stemify.training.base import Loss
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
-from stemify.training.config import TrainConfig
 from stemify.training.semicrf.recipe import SemiCRFRecipe
 from stemify.training.semicrf.tbptt import dataset as chunked_ds
 from stemify.training.semicrf.tbptt.loss import ChunkedSemiCRFLoss
@@ -39,7 +38,7 @@ class SemiCRFTbpttRecipe(SemiCRFRecipe):
 
     name = "semicrf-tbptt"
 
-    def build_loss(self, config: TrainConfig) -> Loss:
+    def build_loss(self) -> Loss:
         return ChunkedSemiCRFLoss(self.decoder)
 
     @property

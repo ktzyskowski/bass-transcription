@@ -94,7 +94,12 @@ class Recipe(ABC):
         first conv, and a recipe that took the conditions only at loader time would
         already have built a model with the wrong input shape.
         """
-        self.conditions = resolve(list(conditions or ["stem", "mix"]))
+        # ``clean,separated`` rather than the old ``stem,mix``: those were retired tags
+        # resolving to ``clean-multibass`` (kept only to reproduce tcn-v1/v2, and
+        # comparable to nothing else) and ``mixture`` (the un-separated negative
+        # control, which scores 0.27) -- so the default trained on the two conditions
+        # least worth training on, with a deprecation warning for each.
+        self.conditions = resolve(list(conditions or ["clean", "separated"]))
         # resolve() has already rejected a mixed-width set, so this is unambiguous.
         self.in_channels = self.conditions[0].in_channels
 
@@ -121,8 +126,12 @@ class Recipe(ABC):
         over its outputs, not the backbone."""
 
     @abstractmethod
-    def build_loss(self, config: TrainConfig) -> Loss:
-        """The objective. May own parameters of its own; ``Trainer`` spans them."""
+    def build_loss(self) -> Loss:
+        """The objective. May own parameters of its own; ``Trainer`` spans them.
+
+        Takes nothing: a strategy's own knobs live on the recipe (see
+        ``FrameRecipe``), so the only thing this needs is already ``self``.
+        """
 
     @abstractmethod
     def train_loader(

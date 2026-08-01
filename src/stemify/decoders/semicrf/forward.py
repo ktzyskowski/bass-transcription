@@ -219,5 +219,3 @@ def chunk_log_partition(
         pot, batch, dmax, dur_bucket, window, start=context, stop=Tmax - right
     )
     return torch.logsumexp(window[:, -1, :2], dim=1), window
-
-

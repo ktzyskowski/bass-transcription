@@ -17,13 +17,12 @@ from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.tagger import FrameTagger
+from stemify.training.base import Loss, Recipe, _loader_kwargs
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
 from stemify.training.config import TrainConfig
-from stemify.training.frame import dataset as frame_ds
 from stemify.training.examples import prepare_examples
-from stemify.training.base import Loss
+from stemify.training.frame import dataset as frame_ds
 from stemify.training.frame.loss import FrameBCELoss
-from stemify.training.base import Recipe, _loader_kwargs
 
 
 # A window is one training example: enough frames for context, short enough to batch.
@@ -86,10 +85,10 @@ class FrameRecipe(Recipe):
             frequency_heads={"pitch": pitch_head()} if self.pitch else None,
         )
 
-    def build_loss(self, config: TrainConfig) -> Loss:
+    def build_loss(self) -> Loss:
         return FrameBCELoss(self.heads, self.pos_weight)
 
-    def _windows(self, tracks: list[tuple[Path, ...]], config: TrainConfig):
+    def _windows(self, tracks: list[tuple[Path, ...]]) -> frame_ds.FrameWindowDataset:
         return frame_ds.FrameWindowDataset(
             tracks, self.heads, self.window_frames, self.hop_frames
         )
@@ -110,7 +109,7 @@ class FrameRecipe(Recipe):
         for condition in self.conditions:
             tracks += self._tracks(root, "train", cache, condition, limit)
         return DataLoader(
-            self._windows(tracks, config), shuffle=True,
+            self._windows(tracks), shuffle=True,
             collate_fn=frame_ds.collate, **_loader_kwargs(config),
         )
 
@@ -120,11 +119,9 @@ class FrameRecipe(Recipe):
         condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
         tracks = self._tracks(root, "validation", cache, condition, val_limit)
         return DataLoader(
-            self._windows(tracks, config),
+            self._windows(tracks),
             collate_fn=frame_ds.collate, **_loader_kwargs(config),
         )
 
     def decoder_from(self, state: dict) -> Decoder:
         return HeuristicDecoder()
-
-

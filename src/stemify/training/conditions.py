@@ -30,8 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stemify.cache import Cache
-from stemify.data.base import Dataset as SlakhLikeDataset
-from stemify.data.base import EvalItem
+from stemify.data.base import Dataset as SlakhLikeDataset, EvalItem
 from stemify.data.slakh import SlakhDataset
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 

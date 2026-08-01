@@ -17,9 +17,9 @@ objective over it, and the recipe binding them -- so they now live together, and
 *contracts* they implement stay one level up in ``training.base``.
 """
 
+from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.frame.loss import FrameBCELoss, pitch_ce
 from stemify.training.frame.recipe import FrameRecipe
-from stemify.training.frame.dataset import FrameWindowDataset, collate
 
 __all__ = [
     "FrameBCELoss",

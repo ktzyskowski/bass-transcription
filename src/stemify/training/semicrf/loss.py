@@ -16,8 +16,8 @@ import torch
 from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
-from stemify.training.semicrf.dataset import SequenceBatch
 from stemify.training.base import Loss
+from stemify.training.semicrf.dataset import SequenceBatch
 
 
 class SemiCRFLoss(Loss):

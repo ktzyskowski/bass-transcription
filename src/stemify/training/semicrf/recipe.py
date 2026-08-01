@@ -12,22 +12,16 @@ gradient step sees. Its recipe subclasses this one.
 
 from collections.abc import Sequence
 
-import numpy as np
 from torch import nn
 from torch.utils.data import ConcatDataset, DataLoader
 
-from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.models.networks import tcn_receptive_field
-from stemify.features import HOP_LENGTH, SAMPLE_RATE
-from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
-from stemify.training.config import TrainConfig
-from stemify.training.semicrf import dataset as sequence_ds
-from stemify.training.base import Loss
-from stemify.training.semicrf.loss import SemiCRFLoss
-from stemify.training.base import Recipe, _loader_kwargs
+from stemify.training.base import Loss, Recipe, _loader_kwargs
+from stemify.training.conditions import CONDITIONS
 from stemify.training.frame.recipe import FrameRecipe
+from stemify.training.semicrf import dataset as sequence_ds
+from stemify.training.semicrf.loss import SemiCRFLoss
 
 
 class SemiCRFRecipe(Recipe):
@@ -55,7 +49,7 @@ class SemiCRFRecipe(Recipe):
         # Same encoder; only the objective differs.
         return FrameRecipe([c.name for c in self.conditions]).build_model()
 
-    def build_loss(self, config: TrainConfig) -> Loss:
+    def build_loss(self) -> Loss:
         return SemiCRFLoss(self.decoder)
 
     def _sequences(self, root: str, split: str, conditions, cache, limit: int | None):
