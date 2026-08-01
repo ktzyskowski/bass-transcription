@@ -120,6 +120,18 @@ class Recipe(ABC):
         """
         return list(HEADS)
 
+    @property
+    def params(self) -> dict[str, object]:
+        """Strategy-specific settings worth recording on a run.
+
+        The entry point merges these into the run's logged params because it cannot
+        know them: window length means nothing to the semi-CRF, chunk length means
+        nothing to the frame path, and a run tagged with a knob its strategy never read
+        is worse than one tagged with neither. A strategy that gains a knob records it
+        here, so the thing that owns the value is also the thing that reports it.
+        """
+        return {}
+
     @abstractmethod
     def build_model(self) -> nn.Module:
         """The encoder. Shared shape across recipes -- what varies is the objective

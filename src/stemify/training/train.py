@@ -298,17 +298,15 @@ def train(
         mlflow = MLflowCallback(
             run_name=f"{run_name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
             batch_log_every=batch_log_every,
+            # Loop-level settings here; strategy knobs come from ``recipe.params``,
+            # which is the only thing that knows which of them this run even has.
             params={"encoder": "tcn", "sources": ",".join(sources),
                     "val_conditions": ",".join(val_conditions),
-                    "lr": config.learning_rate, "window": config.window_frames,
+                    "lr": config.learning_rate,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
-                    # Logged so a run records whether it was a candidate generator or a
-                    # balanced model -- the two are not comparable on F1.
-                    "pos_weight": ",".join(
-                        f"{h}={w}" for h, w in sorted(config.pos_weight.items())
-                    ) or "none",
-                    "train_batches": _epoch_batches(train_loader)},
+                    "train_batches": _epoch_batches(train_loader),
+                    **recipe.params},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
         # once; async scores are then just model forwards. Slowest at construction

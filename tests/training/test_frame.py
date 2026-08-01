@@ -15,8 +15,9 @@ from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
-from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.examples import build_example
+from stemify.training.frame.dataset import FrameWindowDataset, collate
+from stemify.training.frame.recipe import FrameRecipe
 
 
 def test_build_example_aligns_onset_and_voicing():
@@ -262,3 +263,27 @@ def test_val_conditions_accept_retired_names():
     for default in ("bichannel-clean", "bichannel-separated", "clean", "mixture",
                     "separated"):
         assert default in CONDITIONS
+
+
+def test_every_recipe_exposes_loggable_params():
+    # The run's params dict is assembled from ``recipe.params`` because the entry point
+    # cannot know which knobs a strategy has. Reaching for one directly is how
+    # ``config.window_frames`` survived the move onto FrameRecipe and crashed the next
+    # launch -- after the tests passed. Every registered recipe must answer.
+    from stemify.training.recipes import RECIPES
+
+    for name, cls in RECIPES.items():
+        params = cls().params
+        assert isinstance(params, dict), name
+        assert all(isinstance(k, str) for k in params), name
+
+
+def test_frame_params_report_the_knobs_the_recipe_owns():
+    # These four moved off TrainConfig; a run that does not record them cannot be told
+    # apart from one trained with different windows or weights.
+    r = FrameRecipe(pitch=True, window_frames=64, hop_frames=32,
+                    pos_weight={"onset": 5.0})
+    assert r.params == {
+        "window": 64, "hop": 32, "pitch": True, "pos_weight": "onset=5.0",
+    }
+    assert FrameRecipe().params["pos_weight"] == "none"

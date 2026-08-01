@@ -72,6 +72,20 @@ class FrameRecipe(Recipe):
         """
         return [*super().heads, "pitch"] if self.pitch else super().heads
 
+    @property
+    def params(self) -> dict[str, object]:
+        """What this strategy contributes to the run's logged params."""
+        return {
+            "window": self.window_frames,
+            "hop": self.hop_frames,
+            "pitch": self.pitch,
+            # Logged so a run records whether it was a candidate generator or a
+            # balanced model -- the two are not comparable on F1.
+            "pos_weight": ",".join(
+                f"{h}={w}" for h, w in sorted(self.pos_weight.items())
+            ) or "none",
+        }
+
     def build_model(self) -> nn.Module:
         backbone = TCN(in_channels=self.in_channels)
         return FrameTagger(
