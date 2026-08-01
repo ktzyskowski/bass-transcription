@@ -74,8 +74,8 @@ class SemiCRFRecipe(Recipe):
     def decoder_from(self, state: dict) -> Decoder:
         decoder = SemiCRFDecoder(
             stride=self.decoder.stride,
-            dmax_s=self.decoder.pot.dmax_s,
-            dur_edges_s=self.decoder.pot.dur_edges_s.cpu().numpy(),
+            dmax_s=self.decoder.scorer.dmax_s,
+            dur_edges_s=self.decoder.scorer.dur_edges_s.cpu().numpy(),
         )
         decoder.load_state_dict(state["loss"])
         return decoder

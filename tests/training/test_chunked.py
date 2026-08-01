@@ -18,8 +18,9 @@ from stemify.training.conditions import CONDITIONS
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.decoders.semicrf.emissions import build_emissions, pad_emissions
-from stemify.decoders.semicrf.forward import batched_log_partition, chunk_log_partition
+from stemify.decoders.semicrf.evidence import build_evidence
+from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
+from stemify.decoders.semicrf.spans import Grid
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
@@ -215,7 +216,7 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
     n_cqt, chunk, dmax = 900, 40, 30
     ds = _dataset(tmp_path, cache, [n_cqt], chunk=chunk, dmax=dmax, batch_size=1)
     dec = SemiCRFDecoder(dmax_s=dmax * HOP_S * STRIDE)
-    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     batches = list(ds)
     n_dp = (n_cqt // STRIDE // chunk) * chunk
@@ -223,13 +224,11 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
     # whole track, over exactly the frames the chunks cover
     contour = _NoOpCache(tmp_path).contour(None, "x")
     ft = np.arange(n_dp * STRIDE) * HOP_S
-    whole_e = build_emissions(_cues(ft, contour), STRIDE)
-    whole = batched_log_partition(dec.pot, pad_emissions([whole_e]), dmax, dur_bucket)
+    whole_e = build_evidence(_cues(ft, contour), STRIDE)
+    whole = log_partitions(dec.scorer, whole_e, grid)
 
     carry, A = None, None
     for batch in batches:
-        e = build_emissions(_cues(batch.frame_times[0], batch.contours[0]), STRIDE)
-        A, carry = chunk_log_partition(
-            dec.pot, pad_emissions([e]), dmax, dur_bucket, carry, batch.context
-        )
+        e = build_evidence(_cues(batch.frame_times[0], batch.contours[0]), STRIDE)
+        A, carry = chunk_log_partition(dec.scorer, e, grid, carry, batch.context)
     assert torch.allclose(A, whole, atol=1e-3), f"{A.item()} != {whole.item()}"

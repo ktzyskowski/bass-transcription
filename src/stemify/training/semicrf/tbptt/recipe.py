@@ -55,7 +55,7 @@ class SemiCRFTbpttRecipe(SemiCRFRecipe):
         ``forward.chunk_log_partition``'s ``right``.
         """
         dp_hop = HOP_LENGTH / SAMPLE_RATE * self.decoder.stride
-        dmax, _ = self.decoder.pot.grid(np.arange(2) * dp_hop)
+        dmax = self.decoder.scorer.grid(np.arange(2) * dp_hop).dmax
         half = tcn_receptive_field() // 2
         right = -(-half // self.decoder.stride)     # ceil, into DP frames
         return dmax, right

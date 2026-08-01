@@ -17,13 +17,13 @@ from stemify.cues import Cues
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.constants import NOTE, REST, START
 from stemify.decoders.semicrf.forward import (
-    batched_log_partition,
     chunk_log_partition,
-    log_partition,
+    log_partitions,
 )
+from stemify.decoders.semicrf.spans import Grid
 from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
-from stemify.decoders.semicrf.emissions import Emissions, build_emissions, pad_emissions
+from stemify.decoders.semicrf.evidence import Evidence, build_evidence
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
 
@@ -69,9 +69,9 @@ def _notes(spans: list[tuple[float, float]], midis: list[float]) -> list[NoteEve
 def test_gold_rest_across_audible_gap():
     # 0.9 -> 1.2 is a 0.3 s gap (> GAP_REST_S): a real rest between the two notes.
     dec = SemiCRFDecoder()
-    e = build_emissions(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
-    dmax, _ = dec.pot.grid(e.frame_times)
-    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    e = build_evidence(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
+    dmax = dec.scorer.grid(e.frame_times[0]).dmax
+    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     labels = [lab for lab, _, _ in gold]
     assert labels.count(NOTE) == 2
     assert REST in labels  # the audible gap became a rest
@@ -81,78 +81,80 @@ def test_gold_closes_a_note_off_artifact_gap():
     # 0.5 -> 0.55 is a 0.05 s gap (< GAP_REST_S): a note-off artifact, so the notes
     # are made contiguous (note -> note) with no interior rest.
     dec = SemiCRFDecoder()
-    e = build_emissions(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
-    dmax, _ = dec.pot.grid(e.frame_times)
-    gold = gold_segments(e.frame_times, _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
+    e = build_evidence(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
+    dmax = dec.scorer.grid(e.frame_times[0]).dmax
+    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
     # No rest between the notes: everything from the first note to the last is NOTE.
     note_idx = [k for k, (lab, _, _) in enumerate(gold) if lab == NOTE]
     between = gold[note_idx[0] : note_idx[-1] + 1]
     assert all(lab == NOTE for lab, _, _ in between)
 
 
-def _score_by_loop(pot, e, gold, dur_bucket):
+def _score_by_loop(scorer, ev, gold, grid):
     """The pre-vectorisation reference: one segment at a time, straight from the
-    definition. Kept in the test rather than the library so the fast path is pinned
-    against an independent implementation, not against itself."""
-    score = e.onset_logit.new_zeros(())
+    definition ``sum of unary + incoming transition``.
+
+    It shares ``scorer.unary`` with the code under test, deliberately. What this pins
+    is the *enumeration and transition bookkeeping* -- which segments exist, what
+    precedes each -- and that is where a recurrence goes subtly wrong. The unary
+    formula now has exactly one definition by construction, so pinning it against a
+    hand-copy would only assert that a copy was made correctly."""
+    score = ev.onset_logit.new_zeros(())
     prev = START
     for label, i, j in gold:
-        idx = torch.tensor([i], device=e.device)
-        if label == NOTE:
-            unary = pot.note_potentials(e, idx, j, dur_bucket)[0]
-        else:
-            unary = pot.rest_potentials(e, idx, j)[0]
-        trans = pot.init[label] if prev == START else pot.trans[prev, label]
-        score = score + unary + trans
+        score = score + scorer.unary(ev, grid, 0, i, j)[label]
+        score = score + scorer.transitions()[prev, label]
         prev = label
     return score
 
 
-def _fitted_potentials(dec):
+def _fitted_scorer(dec):
     """Move the potentials off their symmetric init, so a bug that happens to cancel
     at w=1/bias=0 cannot pass."""
     with torch.no_grad():
-        dec.pot.w_on.fill_(0.7)
-        dec.pot.w_v.fill_(1.3)
-        dec.pot.w_u.fill_(0.4)
-        dec.pot.w_pitch.fill_(-0.9)
-        dec.pot.b_note.fill_(0.25)
-        dec.pot.b_rest.fill_(-0.4)
-        dec.pot.dur.copy_(torch.linspace(-1.0, 1.0, dec.pot.dur.numel()))
-        dec.pot.trans.copy_(torch.tensor([[0.3, -0.2], [-0.5, 0.1]]))
-        dec.pot.init.copy_(torch.tensor([0.6, -0.3]))
+        dec.scorer.w_on.fill_(0.7)
+        dec.scorer.w_v.fill_(1.3)
+        dec.scorer.w_u.fill_(0.4)
+        dec.scorer.w_pitch.fill_(-0.9)
+        dec.scorer.b_note.fill_(0.25)
+        dec.scorer.b_rest.fill_(-0.4)
+        dec.scorer.dur.copy_(torch.linspace(-1.0, 1.0, dec.scorer.dur.numel()))
+        dec.scorer.trans.copy_(torch.tensor([[0.3, -0.2], [-0.5, 0.1]]))
+        dec.scorer.init.copy_(torch.tensor([0.6, -0.3]))
     return dec
 
 
 def test_gold_score_matches_the_per_segment_loop():
     # The vectorised gold_score evaluates both label branches and selects with
     # `where`; the loop it replaced branched. They must agree exactly.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    e = build_emissions(cues, dec.stride)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
-    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    e = build_evidence(cues, dec.stride)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
+    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     assert len(gold) > 2  # the test is vacuous if gold is trivial
 
-    fast = segmentation_score(dec.pot, e, gold, dur_bucket)
-    ref = _score_by_loop(dec.pot, e, gold, dur_bucket)
+    fast = segmentation_score(dec.scorer, e, gold, grid)
+    ref = _score_by_loop(dec.scorer, e, gold, grid)
     assert torch.allclose(fast, ref, atol=1e-5), f"{fast.item()} != {ref.item()}"
 
 
 def test_gold_score_gradient_matches_the_per_segment_loop():
     # gold_score is half the NLL, so its gradient is what trains the potentials.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    e = build_emissions(cues, dec.stride)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
-    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    e = build_evidence(cues, dec.stride)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
+    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
 
     g_fast = torch.autograd.grad(
-        segmentation_score(dec.pot, e, gold, dur_bucket), list(dec.pot.parameters()),
+        segmentation_score(dec.scorer, e, gold, grid), list(dec.scorer.parameters()),
         retain_graph=True, allow_unused=True,
     )
     g_ref = torch.autograd.grad(
-        _score_by_loop(dec.pot, e, gold, dur_bucket), list(dec.pot.parameters()),
+        _score_by_loop(dec.scorer, e, gold, grid), list(dec.scorer.parameters()),
         allow_unused=True,
     )
     for a, b in zip(g_fast, g_ref, strict=True):
@@ -166,7 +168,7 @@ def test_gold_scores_batched_equals_per_track():
     # The batched form flattens every track's segments into one indexed set and folds
     # them back with index_add; a mis-grouped `first` mask would mis-assign the START
     # transition, which only shows up with more than one track.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     short = Cues(
@@ -175,13 +177,19 @@ def test_gold_scores_batched_equals_per_track():
     )
     ns = _notes([(0.2, 0.9)], [45])
 
-    es = [build_emissions(c, dec.stride) for c in (a, short)]
-    dmax, dur_bucket = dec.pot.grid(es[0].frame_times)
-    golds = [gold_segments(e.frame_times, n, dmax) for e, n in zip(es, [na, ns])]
+    ev = build_evidence([a, short], dec.stride)
+    grid = dec.scorer.grid(ev.frame_times[0])
+    golds = [
+        gold_segments(ft, n, grid.dmax)
+        for ft, n in zip(ev.frame_times, [na, ns], strict=True)
+    ]
 
-    batched = segmentation_scores(dec.pot, pad_emissions(es), golds, dur_bucket)
+    batched = segmentation_scores(dec.scorer, ev, golds, grid)
+    # ``one(b)`` re-cuts row b to its own length, so the single-track path never sees
+    # the flat padding the batch carries past the short track's end.
     single = torch.stack([
-        segmentation_score(dec.pot, e, g, dur_bucket) for e, g in zip(es, golds)
+        segmentation_score(dec.scorer, ev.one(b), g, grid)
+        for b, g in enumerate(golds)
     ])
     assert torch.allclose(batched, single, atol=1e-4)
 
@@ -191,20 +199,21 @@ def test_gold_scores_handles_a_track_with_no_segments():
     # rather than dropping the row and shifting every later track's score.
     dec = SemiCRFDecoder()
     cues = _two_note_cues([(0.2, 0.9)], [110.0])
-    e = build_emissions(cues, dec.stride)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
-    gold = gold_segments(e.frame_times, _notes([(0.2, 0.9)], [45]), dmax)
+    e = build_evidence(cues, dec.stride)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
+    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9)], [45]), dmax)
 
-    scores = segmentation_scores(dec.pot, pad_emissions([e, e]), [[], gold], dur_bucket)
+    scores = segmentation_scores(dec.scorer, build_evidence([cues, cues], dec.stride), [[], gold], grid)
     assert scores[0].item() == 0.0
-    assert torch.allclose(scores[1], segmentation_score(dec.pot, e, gold, dur_bucket), atol=1e-4)
+    assert torch.allclose(scores[1], segmentation_score(dec.scorer, e, gold, grid), atol=1e-4)
 
 
-def _truncate(e, n):
-    """The first ``n`` DP frames of an Emissions, so chunks tile it exactly."""
-    return Emissions(
-        e.onset_logit[:n], e.Vc[: n + 1], e.Uc[: n + 1], e.Jc[: n + 1],
-        e.frame_times[:n], e.contour,
+def _truncate(ev, n):
+    """The first ``n`` DP frames of an Evidence, so chunks tile it exactly."""
+    return Evidence(
+        ev.onset_logit[:, :n], ev.voiced_c[:, : n + 1], ev.rest_c[:, : n + 1],
+        ev.jump_c[:, : n + 1], [n], [ev.frame_times[0][:n]], ev.contours,
     )
 
 
@@ -222,7 +231,24 @@ def _long_emissions(dec, seconds=25.0, seed=0):
         contour=Contour(times=times, freqs=freqs),
         onset=onset, frame_times=times, voicing=voicing,
     )
-    return build_emissions(cues, dec.stride)
+    return build_evidence(cues, dec.stride)
+
+
+def _stack_evidence(es):
+    """Concatenate equal-length single-track ``Evidence`` into one batch.
+
+    The library builds a batch from *cues*; these tests build evidence directly from
+    random tensors to drive the recurrence without a contour, so they need their own
+    way to batch it. Equal lengths only -- padding is what ``build_evidence`` is for."""
+    return Evidence(
+        torch.cat([e.onset_logit for e in es]),
+        torch.cat([e.voiced_c for e in es]),
+        torch.cat([e.rest_c for e in es]),
+        torch.cat([e.jump_c for e in es]),
+        [e.lengths[0] for e in es],
+        [e.frame_times[0] for e in es],
+        [e.contours[0] for e in es],
+    )
 
 
 def _all_segmentations(T, dmax):
@@ -246,8 +272,10 @@ def _random_emissions(T, seed=0):
     g = torch.Generator().manual_seed(seed)
     ft = np.arange(T) * DT
     contour = Contour(times=ft, freqs=np.full(T, 110.0, dtype=np.float32))
-    cs = lambda: torch.cumsum(torch.randn(T + 1, generator=g), 0)
-    return Emissions(torch.randn(T, generator=g), cs(), cs(), cs(), ft, contour)
+    cs = lambda: torch.cumsum(torch.randn(T + 1, generator=g), 0).unsqueeze(0)
+    return Evidence(
+        torch.randn(1, T, generator=g), cs(), cs(), cs(), [T], [ft], [contour],
+    )
 
 
 def test_log_partition_equals_brute_force_enumeration():
@@ -255,17 +283,17 @@ def test_log_partition_equals_brute_force_enumeration():
     # file compares one of our implementations against another -- batched vs single,
     # chunked vs whole, cpu vs cuda -- which two copies of the *same* wrong recurrence
     # would pass. This one enumerates all segmentations explicitly and sums them.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     T, dmax = 8, 3
     e = _random_emissions(T)
-    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     segs = list(_all_segmentations(T, dmax))
     assert len(segs) > 100, f"only {len(segs)} segmentations -- not a real test"
     brute = torch.logsumexp(
-        torch.stack([_score_by_loop(dec.pot, e, s, dur_bucket) for s in segs]), dim=0
+        torch.stack([_score_by_loop(dec.scorer, e, s, grid) for s in segs]), dim=0
     )
-    got = log_partition(dec.pot, e, dmax, dur_bucket)
+    got = log_partitions(dec.scorer, e, grid)[0]
     assert torch.allclose(got, brute, atol=1e-4), (
         f"log Z {got.item()} != brute-force {brute.item()} over {len(segs)} segmentations"
     )
@@ -274,18 +302,18 @@ def test_log_partition_equals_brute_force_enumeration():
 def test_viterbi_equals_brute_force_argmax():
     # Same ground truth, max semiring: the returned segmentation must be the single
     # highest-scoring one out of every possible tiling.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     T, dmax = 8, 3
     e = _random_emissions(T, seed=1)
-    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     scored = [
-        (_score_by_loop(dec.pot, e, s, dur_bucket).item(), s)
+        (_score_by_loop(dec.scorer, e, s, grid).item(), s)
         for s in _all_segmentations(T, dmax)
     ]
     best_score, best = max(scored, key=lambda kv: kv[0])
-    got = viterbi(dec.pot, e, dmax, dur_bucket)
-    got_score = _score_by_loop(dec.pot, e, got, dur_bucket).item()
+    got = viterbi(dec.scorer, e, grid)
+    got_score = _score_by_loop(dec.scorer, e, got, grid).item()
     assert abs(got_score - best_score) < 1e-4, (
         f"viterbi scored {got_score}, best possible {best_score}"
     )
@@ -295,24 +323,25 @@ def test_viterbi_equals_brute_force_argmax():
 def test_batched_log_partition_equals_brute_force():
     # The batched scan is what training actually runs; check it against ground truth
     # too, not only against the single-track version.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     T, dmax = 7, 3
     es = [_random_emissions(T, seed=s) for s in (2, 3)]
-    dur_bucket = torch.arange(dmax + 1).clamp(max=dec.pot.dur.numel() - 1)
+    ev = _stack_evidence(es)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     segs = list(_all_segmentations(T, dmax))
     brute = torch.stack([
         torch.logsumexp(
-            torch.stack([_score_by_loop(dec.pot, e, s, dur_bucket) for s in segs]), dim=0
+            torch.stack([_score_by_loop(dec.scorer, e, s, grid) for s in segs]), dim=0
         )
         for e in es
     ])
-    got = batched_log_partition(dec.pot, pad_emissions(es), dmax, dur_bucket)
+    got = log_partitions(dec.scorer, ev, grid)
     assert torch.allclose(got, brute, atol=1e-4), f"{got.tolist()} != {brute.tolist()}"
 
 
 def _chunks(e, size, dmax):
-    """Split one track's Emissions into fixed-size chunks, each prefixed with up to
+    """Split one track's Evidence into fixed-size chunks, each prefixed with up to
     ``dmax`` frames of left context.
 
     The context is not optional: the alpha carry covers a boundary-crossing span's
@@ -326,26 +355,25 @@ def _chunks(e, size, dmax):
     for s in range(0, e.T - size + 1, size):
         lo = max(0, s - dmax)
         out.append((
-            Emissions(
-                e.onset_logit[lo : s + size],
-                e.Vc[lo : s + size + 1] - e.Vc[lo],
-                e.Uc[lo : s + size + 1] - e.Uc[lo],
-                e.Jc[lo : s + size + 1] - e.Jc[lo],
-                e.frame_times[lo : s + size],
-                e.contour,
+            Evidence(
+                e.onset_logit[:, lo : s + size],
+                e.voiced_c[:, lo : s + size + 1] - e.voiced_c[:, lo : lo + 1],
+                e.rest_c[:, lo : s + size + 1] - e.rest_c[:, lo : lo + 1],
+                e.jump_c[:, lo : s + size + 1] - e.jump_c[:, lo : lo + 1],
+                [s + size - lo],
+                [e.frame_times[0][lo : s + size]],
+                e.contours,
             ),
             s - lo,
         ))
     return out
 
 
-def _run_chunked(dec, e, size, dmax, dur_bucket):
+def _run_chunked(dec, e, size, grid):
     """Scan a track chunk by chunk, carrying alpha. Returns the cumulative log-mass."""
     carry, A = None, None
-    for chunk, ctx in _chunks(e, size, dmax):
-        A, carry = chunk_log_partition(
-            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx
-        )
+    for chunk, ctx in _chunks(e, size, grid.dmax):
+        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)
     return A
 
 
@@ -360,13 +388,14 @@ def _chunks_with_right(e, size, dmax, right):
         lo = max(0, s - dmax)
         hi = min(e.T, s + size + right)
         out.append((
-            Emissions(
-                e.onset_logit[lo:hi],
-                e.Vc[lo : hi + 1] - e.Vc[lo],
-                e.Uc[lo : hi + 1] - e.Uc[lo],
-                e.Jc[lo : hi + 1] - e.Jc[lo],
-                e.frame_times[lo:hi],
-                e.contour,
+            Evidence(
+                e.onset_logit[:, lo:hi],
+                e.voiced_c[:, lo : hi + 1] - e.voiced_c[:, lo : lo + 1],
+                e.rest_c[:, lo : hi + 1] - e.rest_c[:, lo : lo + 1],
+                e.jump_c[:, lo : hi + 1] - e.jump_c[:, lo : lo + 1],
+                [hi - lo],
+                [e.frame_times[0][lo:hi]],
+                e.contours,
             ),
             s - lo,
             hi - (s + size),
@@ -379,14 +408,15 @@ def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
     # The property the whole truncated-BPTT design rests on: carrying the alpha window
     # across chunk boundaries reproduces the whole-track log Z exactly. If this drifts,
     # chunked training optimises a different objective than it reports.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
 
     size = e.T // n_chunks
     trimmed = _truncate(e, size * n_chunks)  # chunks must tile it exactly
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
-    got = _run_chunked(dec, trimmed, size, dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
+    got = _run_chunked(dec, trimmed, size, grid)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -394,16 +424,17 @@ def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
     # dmax spans several chunks here, so a span's candidate starts reach back through
     # more than one boundary -- where an off-by-one in the window or a short context
     # shows up and a single-boundary test would not.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
 
     size = max(1, dmax // 3)
     n = e.T // size
     assert n > 3 and size < dmax, "the point is several chunks inside one dmax"
     trimmed = _truncate(e, size * n)
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
-    got = _run_chunked(dec, trimmed, size, dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
+    got = _run_chunked(dec, trimmed, size, grid)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -414,18 +445,17 @@ def test_a_right_margin_is_not_scanned(right):
     # `right` frames ahead of where the next chunk resumes and those frames are
     # scanned twice. Every shape still matches when that happens and the loss still
     # falls, so nothing but this equality catches it.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
 
     carry, got = None, None
-    for chunk, ctx, rgt in _chunks_with_right(trimmed, size, dmax, right):
-        got, carry = chunk_log_partition(
-            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx, rgt
-        )
+    for chunk, ctx, rgt in _chunks_with_right(trimmed, size, grid.dmax, right):
+        got, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx, rgt)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -433,18 +463,17 @@ def test_scanning_the_right_margin_corrupts_the_carry():
     # The negative control for the above: passing right=0 while the window *has* a
     # right margin double-counts those frames. Pinned so nobody "simplifies" the
     # parameter away on the grounds that the tests pass without it.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
 
     carry, got = None, None
-    for chunk, ctx, _rgt in _chunks_with_right(trimmed, size, dmax, 11):
-        got, carry = chunk_log_partition(
-            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx  # right=0
-        )
+    for chunk, ctx, _rgt in _chunks_with_right(trimmed, size, grid.dmax, 11):
+        got, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)  # right=0
     assert not torch.allclose(got, whole, atol=1e-3)
 
 
@@ -452,18 +481,17 @@ def test_dropping_the_left_context_changes_the_answer():
     # Guards the invariant the docstring states: the carry alone is not enough. Without
     # the overlap the scan clamps boundary-crossing starts to the chunk's own frame 0
     # and scores them against the wrong cues -- silently, so it needs an explicit test.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
 
     carry, A = None, None
     for chunk, _ in _chunks(trimmed, size, 0):  # dmax=0 -> no overlap at all
-        A, carry = chunk_log_partition(
-            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, 0
-        )
+        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, 0)
     assert not torch.allclose(A, whole, atol=1e-3), (
         "dropping the left context still matched, so the parity tests above prove "
         "nothing about the context"
@@ -474,21 +502,21 @@ def test_detaching_the_carry_still_reaches_every_chunk():
     # Truncated BPTT: with the carry detached, a single end-of-track loss would only
     # reach the last chunk. The telescoping per-chunk loss must put gradient on every
     # chunk's own cues.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
 
     grads, carry, prev_A = [], None, 0.0
-    for chunk, ctx in _chunks(trimmed, size, dmax):
+    for chunk, ctx in _chunks(trimmed, size, grid.dmax):
         onset = chunk.onset_logit.detach().clone().requires_grad_(True)
-        live = Emissions(
-            onset, chunk.Vc, chunk.Uc, chunk.Jc, chunk.frame_times, chunk.contour
+        live = Evidence(
+            onset, chunk.voiced_c, chunk.rest_c, chunk.jump_c,
+            chunk.lengths, chunk.frame_times, chunk.contours,
         )
-        A, carry = chunk_log_partition(
-            dec.pot, pad_emissions([live]), dmax, dur_bucket, carry, ctx
-        )
+        A, carry = chunk_log_partition(dec.scorer, live, grid, carry, ctx)
         (A - prev_A).sum().backward()
         carry, prev_A = carry.detach(), A.detach()
         grads.append(onset.grad)
@@ -502,18 +530,17 @@ def test_detaching_the_carry_still_reaches_every_chunk():
 def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
     # The training loss is sum_k (A_k - A_{k-1}); with A_0 = 0 that must telescope to
     # the whole-track log Z, or the reported NLL is not the NLL being optimised.
-    dec = _fitted_potentials(SemiCRFDecoder())
+    dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
-    dmax, dur_bucket = dec.pot.grid(e.frame_times)
+    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = batched_log_partition(dec.pot, pad_emissions([trimmed]), dmax, dur_bucket)
+    whole = log_partitions(dec.scorer, trimmed, grid)
 
     total, carry, prev_A = 0.0, None, 0.0
-    for chunk, ctx in _chunks(trimmed, size, dmax):
-        A, carry = chunk_log_partition(
-            dec.pot, pad_emissions([chunk]), dmax, dur_bucket, carry, ctx
-        )
+    for chunk, ctx in _chunks(trimmed, size, grid.dmax):
+        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)
         total = total + (A - prev_A)
         carry, prev_A = carry.detach(), A.detach()
     assert torch.allclose(total, whole, atol=1e-3), f"{total.item()} != {whole.item()}"
@@ -524,15 +551,16 @@ def test_chunk_log_partition_rejects_ragged_lengths():
     # read at the wrong position rather than failing loudly.
     dec = SemiCRFDecoder()
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    ea = build_emissions(a, dec.stride)
+    ea = build_evidence(a, dec.stride)
     short = Cues(
         contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
         onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
     )
-    dmax, dur_bucket = dec.pot.grid(ea.frame_times)
-    batch = pad_emissions([ea, build_emissions(short, dec.stride)])
+    grid = dec.scorer.grid(ea.frame_times[0])
+    dmax = grid.dmax
+    ragged = build_evidence([a, short], dec.stride)
     with pytest.raises(ValueError, match="uniform lengths"):
-        chunk_log_partition(dec.pot, batch, dmax, dur_bucket)
+        chunk_log_partition(dec.scorer, ragged, grid)
 
 
 def test_nll_is_differentiable_and_trains_down():
@@ -548,7 +576,7 @@ def test_nll_is_differentiable_and_trains_down():
         loss = dec.nll(cues, notes)
         loss.backward()
         # a learned potential receives gradient -> the encoder would too, end to end
-        assert dec.pot.w_on.grad is not None
+        assert dec.scorer.w_on.grad is not None
         opt.step()
     assert dec.nll(cues, notes).item() < first.item()
 
@@ -576,7 +604,7 @@ def test_numpy_cues_nll_does_not_reach_the_inputs():
     # only in the CRF's own potentials -- never the (already-computed) cues.
     dec = SemiCRFDecoder()
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    e = build_emissions(cues, dec.stride)
+    e = build_evidence(cues, dec.stride)
     assert not e.onset_logit.requires_grad
 
 
@@ -681,7 +709,7 @@ def test_tensor_cues_grad_reaches_encoder_on_device(device):
     tcues = _tensor_cues(_two_note_cues(SPANS, HZ), device, bias)
     dec.nll(tcues, _notes(SPANS, MIDI)).backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
-    assert dec.pot.w_on.grad is not None
+    assert dec.scorer.w_on.grad is not None
 
 
 def test_nll_batch_on_device(device):
@@ -726,13 +754,16 @@ def test_cuda_decode_matches_cpu():
         assert a.midi_pitch == pytest.approx(b.midi_pitch, abs=1e-4)
 
 
-def test_emissions_rejects_fields_on_different_devices():
+def test_evidence_rejects_fields_on_different_devices():
     # The invariant's guard. A "meta" tensor is device-distinct from CPU without
     # needing an accelerator, so this runs everywhere -- including the laptop where
     # the original bug was invisible.
-    t, cum = torch.zeros(4), torch.zeros(5)
+    t, cum = torch.zeros(1, 4), torch.zeros(1, 5)
     with pytest.raises(ValueError, match="span multiple devices"):
-        Emissions(t, cum, cum, torch.zeros(5, device="meta"), np.zeros(4), Contour.empty())
+        Evidence(
+            t, cum, cum, torch.zeros(1, 5, device="meta"),
+            [4], [np.zeros(4)], [Contour.empty()],
+        )
 
 
 def test_decode_empty_contour_is_no_notes():
