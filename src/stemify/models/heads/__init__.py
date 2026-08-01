@@ -21,6 +21,7 @@ keeps working exactly as it did when this was a single module.
 
 from stemify.models.heads.frame import FrameHead, onset_head, voicing_head
 from stemify.models.heads.pitch import (
+    CONTOUR_VOICING_THRESHOLD,
     FrequencyHead,
     decode_bins,
     decode_contour,
@@ -29,6 +30,7 @@ from stemify.models.heads.pitch import (
 )
 
 __all__ = [
+    "CONTOUR_VOICING_THRESHOLD",
     "FrameHead",
     "FrequencyHead",
     "decode_bins",

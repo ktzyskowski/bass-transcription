@@ -33,23 +33,12 @@ from stemify.cues import Cues
 from stemify.device import best_device
 from stemify.encoders.base import Encoder
 from stemify.features import FrameFeatures, extract_features, stack_channels
-from stemify.models.heads import decode_contour
+from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.tagger import FrameTagger
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 
 
-# Above this, the voicing head is confident enough that the pitch head's guess for a
-# frame is worth reporting at all.
-#
-# Deliberately *not* the decoder's ``VOICING_THRESHOLD``, which this used to import.
-# The two look like the same number and answer different questions: this one asks "does
-# this frame have a pitch worth carrying", the decoder's asks "is a note sounding here",
-# and the 2026-07-31 sweep found different optima (0.5 here, 0.3 there). While they
-# shared a constant, retuning the decoder silently retuned the contour gate too -- so
-# the measured result would have come from one combination and the shipped code from
-# another, with nothing to show the difference.
-CONTOUR_VOICING_THRESHOLD = 0.5
 
 
 class NeuralEncoder(Encoder):

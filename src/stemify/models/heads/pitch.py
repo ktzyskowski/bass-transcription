@@ -137,6 +137,19 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     return FMIN * 2.0 ** (centroid / BINS_PER_OCTAVE)
 
 
+# Above this, the voicing head is confident enough that the pitch head's guess for a
+# frame is worth reporting at all. Lives beside ``decode_contour`` because it is part of
+# reading this head's output, and both callers of that function need it: NeuralEncoder,
+# which has the logits already, and NeuralPitch, which computes them from a path.
+#
+# Deliberately *not* the decoder's ``VOICING_THRESHOLD``. The two look like the same
+# number and answer different questions -- this asks "does this frame have a pitch worth
+# carrying", the decoder's asks "is a note sounding here" -- and the 2026-07-31 sweep put
+# them at different optima (0.5 here, 0.3 there). While they shared a constant, retuning
+# the decoder silently retuned the contour gate too.
+CONTOUR_VOICING_THRESHOLD = 0.5
+
+
 def decode_contour(
     logits: np.ndarray,
     frame_times: np.ndarray,

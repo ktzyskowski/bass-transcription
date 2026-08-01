@@ -8,7 +8,8 @@ interface:
   - ``DSPEncoder`` -- spectral-flux onset envelope + pyin pitch, no learning (the
     floor).
   - ``NeuralEncoder`` -- a trained backbone (TCN) + heads producing onset/voicing
-    probabilities, pitch still from pyin (until a learned pitch head replaces it).
+    probabilities, and the pitch contour from its own ``FrequencyHead`` when the
+    checkpoint carries one, falling back to pyin when it does not.
 
 The encoder *produces* the pitch contour rather than receiving it: pitch is a cue,
 and which cue-source to use (pyin, or later a learned head) is an encoder's own

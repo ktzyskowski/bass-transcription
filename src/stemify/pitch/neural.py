@@ -26,12 +26,9 @@ import torch
 from stemify.contour import Contour
 from stemify.device import best_device
 from stemify.features import extract_features
-from stemify.models.heads import decode_contour
+from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.tagger import FrameTagger
 from stemify.pitch.base import PitchEstimator
-
-VOICING_THRESHOLD = 0.5  # matches the decoder's; see ``estimate``
-
 
 class NeuralPitch(PitchEstimator):
     """A ``FrameTagger``'s pitch head as an audio-in pitch source."""
@@ -42,7 +39,7 @@ class NeuralPitch(PitchEstimator):
         self,
         model: FrameTagger,
         device: str | None = None,
-        voicing_threshold: float = VOICING_THRESHOLD,
+        voicing_threshold: float = CONTOUR_VOICING_THRESHOLD,
     ) -> None:
         if not getattr(model, "frequency_heads", None) or "pitch" not in model.frequency_heads:
             raise ValueError(

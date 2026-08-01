@@ -27,9 +27,14 @@ from stemify.pitch.base import PitchEstimator
 # an octave above the dataset's highest label on purpose: it lets octave-up errors --
 # which weak bass fundamentals invite -- show up instead of being clipped to the right
 # octave.
+# Distinct from ``features.FMIN`` (D#1), which is the CQT's lower *bin* edge and sits a
+# semitone lower for margin. This is the lowest pitch pyin will search for.
 FMIN = librosa.note_to_hz("E1")
 FMAX = librosa.note_to_hz("A4")
 HOP_LENGTH = 512  # pyin's default; pinned so the time grid is explicit
+# Twice ``features.HOP_LENGTH`` (256), which is the CQT's. Same name, different grid:
+# any contour from this estimator is half the resolution of the model's frame grid, and
+# every note boundary derived from it inherits that. See the note there.
 
 
 class PyinPitch(PitchEstimator):

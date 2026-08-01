@@ -35,6 +35,13 @@ BINS_PER_SEMITONE = 3
 BINS_PER_OCTAVE = 12 * BINS_PER_SEMITONE
 N_BINS = 6 * BINS_PER_OCTAVE
 HOP_LENGTH = 256  # ~11.6 ms per frame at 22.05 kHz
+# NB there is a *second* ``HOP_LENGTH`` in ``pitch.pyin``, at 512. They are different
+# grids, not a duplicate: this one is the CQT's, that one is pyin's, and pyin's is
+# twice as coarse. The name collision is why the mismatch stayed invisible for so long
+# -- ``group_contour`` works on whichever grid the contour arrived on, so a note
+# boundary from a pyin contour is quantised to 23.2 ms against a 50 ms match tolerance.
+# That interaction cost 7.5 strict F1 (see decoders/heuristic.PITCH_SPLIT_SEMITONES),
+# and the learned pitch head removes it by landing the contour on *this* grid.
 TOP_DB = 80.0     # dB floor for the log-magnitude conversion
 
 # Identity of the CQT *as configured here* -- the producer half of a cached feature's
