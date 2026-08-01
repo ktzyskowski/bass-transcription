@@ -4,8 +4,8 @@
         --cache-dir data/cache --tracking-uri file:./mlruns \
         --sources clean,separated --pitch
 
-Trains onset and voicing, plus a learned pitch contour with ``--pitch`` (worth +5.0
-strict F1 over pyin on held-out test; see docs/experiments.md).
+Trains onset and voicing, plus a learned pitch contour with ``--pitch``, which replaces
+pyin as the pitch source (see docs/experiments.md for what that is worth).
 
 Domain randomisation: the input is drawn from several *conditions* (``--sources``,
 tags from ``training.conditions``) while the target is always the clean-stem MIDI, so

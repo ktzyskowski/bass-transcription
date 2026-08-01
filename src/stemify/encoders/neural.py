@@ -39,8 +39,6 @@ from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 
 
-
-
 class NeuralEncoder(Encoder):
     """Neural cue producer: a ``FrameTagger``'s onset/voicing probs, plus a contour
     from its own pitch head when it has one and pyin when it does not."""

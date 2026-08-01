@@ -4,19 +4,15 @@ Feature settings are not here: they live in ``stemify.features`` because they ar
 shared with the pyin baseline and the eval harness, and a model that trained on a
 different CQT than it is evaluated on would be silently broken.
 
-Strategy settings are not here either, which is newer. Window length, window hop and
-per-head ``pos_weight`` are read by the frame recipe and by nothing else; the semi-CRF
-sets its chunk length from ``CHUNK_FRAMES`` and its objective takes no class weights.
-While they sat here, ``--pos-weight onset=5`` on a semi-CRF run was accepted and
-silently ignored -- the failure mode this project keeps paying for. They now live on
-``FrameRecipe``, where passing one to another strategy is an error instead.
+Strategy settings are not here either. Window length, window hop and per-head
+``pos_weight`` are read by the frame recipe and by nothing else; the semi-CRF sets its
+chunk length from ``CHUNK_FRAMES`` and its objective takes no class weights. A knob that
+only one strategy reads belongs on that strategy's ``Recipe``, where handing it to a
+different one raises -- while they sat here, ``--pos-weight onset=5`` on a semi-CRF run
+was accepted and silently ignored, the failure mode this project keeps paying for.
 
-Four fields were deleted outright when this was audited, all with zero readers:
-``heads`` (duplicated ``Recipe.heads``, the actual source of truth), ``train_sources``
-(superseded by ``Recipe.conditions`` -- and its default still named the pre-2026-07-30
-condition tags, so it would have raised if anything had read it), ``seed`` (nothing was
-ever seeded from it) and ``onset_tolerance_frames`` (``examples.py`` has its own
-parameter with the same default, never wired to this one).
+The bar for adding a field: every strategy reads it. Anything else has a home that can
+reject it.
 """
 
 from dataclasses import dataclass

@@ -32,7 +32,8 @@ import torch
 from stemify.cache import Cache
 from stemify.cues import Cues
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import CONTOUR_VOICING_THRESHOLD, NeuralEncoder
+from stemify.encoders.neural import NeuralEncoder
+from stemify.models.heads import CONTOUR_VOICING_THRESHOLD
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates

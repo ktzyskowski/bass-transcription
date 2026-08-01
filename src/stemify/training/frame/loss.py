@@ -5,14 +5,13 @@ per-frame logits per head, and each binary head (onset, voicing) is scored by
 class-weighted BCE against its frame target, summed over heads. Onsets are a few
 percent of frames, so the positive class is up-weighted.
 
-Pitch was refused here until its target encoding was settled; it is now the two-hot
-CQT-bin code in ``models/heads/pitch.py``, scored by cross-entropy over the bin axis on
-*voiced frames only*. Unvoiced frames are masked rather than trained toward an all-zero
-target: where the bass is silent is the voicing head's question, and supervising both
-heads on it would put them in competition over the shared trunk.
+Pitch is the odd one out: its target is the two-hot CQT-bin code from
+``models/heads/pitch.py``, scored by cross-entropy over the bin axis on *voiced frames
+only*. Unvoiced frames are masked rather than trained toward an all-zero target --
+where the bass is silent is the voicing head's question, and supervising both heads on
+it would put them in competition over the shared trunk.
 
-This is the exact objective the old ``Trainer.build_losses``/``_batch_loss`` computed,
-lifted behind the ``Loss`` interface so the same loop also drives the structured
+Sits behind the ``Loss`` interface so the same training loop also drives the structured
 semi-CRF objective.
 """
 
@@ -37,15 +36,14 @@ def pitch_ce(logits: torch.Tensor, midi: torch.Tensor) -> torch.Tensor:
     where the bass is silent.
 
     **Why cross-entropy and not per-bin BCE.** The two-hot target is a proper
-    distribution -- its rows sum to 1 -- so the axis is a choice among bins, not 216
-    independent yes/no questions. Treating it as the latter is not merely a different
-    parameterisation, it puts the term on the wrong *scale*: 216 independent sigmoids
-    start near ``216 * ln 2 ~ 150``, against ``ln 216 ~ 5.4`` for a choice among 216
-    options. The first version of this summed BCE and measured 108.4 against onset
-    0.249 and voicing 0.267 -- a ~400x imbalance on a shared trunk, which no loss
-    weight should have to correct. This is the same reason DreamerV3 scores its
-    two-hot critic and reward heads with categorical cross-entropy: get the functional
-    form right and fixed coefficients work across scales.
+    distribution -- its rows sum to 1 -- so the axis is a choice among bins, not
+    ``n_bins`` independent yes/no questions. Treating it as the latter is not merely a
+    different parameterisation, it puts the term on the wrong *scale*: 216 independent
+    sigmoids start near ``216 * ln 2 ~ 150``, against ``ln 216 ~ 5.4`` for a choice
+    among 216 options. Summed BCE therefore arrives ~400x the binary heads on a shared
+    trunk, which no loss weight should have to correct. This is the same reason
+    DreamerV3 scores its two-hot critic and reward heads with categorical cross-entropy:
+    get the functional form right and fixed coefficients work across scales.
 
     Unvoiced frames are dropped rather than trained toward some "no pitch" target.
     Where the bass sounds is the voicing head's question, and supervising this head on

@@ -3,13 +3,12 @@
 The floor a learned head has to beat, and still the pitch source for any encoder
 whose model has no pitch head.
 
-Its two known weaknesses are both measured (docs/experiments.md, 2026-07-31) and both
-are why the learned head exists. It runs at hop 512 -- 23.2 ms, twice the CQT's frame
-period -- so every note boundary derived from it is quantised to half the 50 ms match
-tolerance. And its transition lags a real onset by a median 23 ms (37.5 ms mean on
-separated audio), which is what made a pitch change an unusable cue for placing notes.
-On separated audio it fails to reach a note's pitch at all on 12.5% of pitch changes,
-against 1.1% on clean stems.
+Two structural weaknesses, both quantified in docs/experiments.md and both the reason
+the learned head exists. It runs at hop 512 -- 23.2 ms, twice the CQT's frame period --
+so every note boundary derived from it is quantised to half the 50 ms match tolerance.
+And its pitch transition *lags* a real onset, which is what made a pitch change an
+unusable cue for placing notes; the lag worsens on separated audio, where it also more
+often fails to reach a note's pitch at all.
 
 Torch-free, so the DSP path never pulls torch in through the pitch source.
 """

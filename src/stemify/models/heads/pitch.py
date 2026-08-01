@@ -4,9 +4,9 @@ Onset and voicing are per-frame *scalars*, so their heads are a linear projectio
 the backbone's ``(B, T, hidden)`` features. Pitch is not: it is a position along the
 frequency axis, and by the time the backbone has produced those features that axis is
 gone. ``_ConvFrontend`` flattens ``(B, C, F, T) -> (B, C*F, T)`` and projects with a
-1x1 conv, which gives every ``(channel, bin)`` pair its own weight -- ~884k of the
-TCN's 1.29M parameters, and the end of any frequency equivariance. A filter that
-learned to recognise a harmonic stack at E1 has to learn it again at E2.
+1x1 conv, which gives every ``(channel, bin)`` pair its own weight -- the bulk of the
+TCN's parameters, and the end of any frequency equivariance. A filter that learned to
+recognise a harmonic stack at E1 has to learn it again at E2.
 
 So the pitch branch taps the front-end *before* that flatten and stays 2-D
 throughout, ending in a 1x1 conv to a single channel: ``(B, C, F, T) -> (B, T, F)``,
@@ -32,11 +32,11 @@ from torch import nn
 from stemify.contour import Contour
 from stemify.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
 
-# Frequency dilations grow ~3x per level so the branch can see across harmonics
-# rather than only its immediate neighbours: 1 + 2*(1+3+9+27) = 81 bins, about 2.25
-# octaves, which reaches a low bass fundamental's first few partials. Time dilations
-# double as in the TCN. Both are small -- 4 blocks of 32 channels is ~37k parameters,
-# against the 884k the flatten spends to destroy this structure.
+# Frequency dilations grow ~3x per level so the branch can see across harmonics rather
+# than only its immediate neighbours: 1 + 2*(1+3+9+27) = 81 bins, about 2.25 octaves,
+# which reaches a low bass fundamental's first few partials. Time dilations double as in
+# the TCN. Both stacks are deliberately narrow -- sharing weights across frequency buys
+# the receptive field for a small fraction of what the flatten spends destroying it.
 FREQ_DILATIONS = (1, 3, 9, 27)
 TIME_DILATIONS = (1, 2, 4, 8)
 
@@ -119,7 +119,8 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     the two candidates, at a pitch the model never proposed.
 
     Softmax, not per-bin sigmoid: it has to invert the distribution the head is
-    *trained* under, and that is a choice among bins (see ``losses.frame.pitch_ce``).
+    *trained* under, and that is a choice among bins (see
+    ``training.frame.loss.pitch_ce``).
     """
     if logits.size == 0:
         return np.zeros(0)
@@ -144,9 +145,9 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
 #
 # Deliberately *not* the decoder's ``VOICING_THRESHOLD``. The two look like the same
 # number and answer different questions -- this asks "does this frame have a pitch worth
-# carrying", the decoder's asks "is a note sounding here" -- and the 2026-07-31 sweep put
-# them at different optima (0.5 here, 0.3 there). While they shared a constant, retuning
-# the decoder silently retuned the contour gate too.
+# carrying", the decoder's asks "is a note sounding here" -- and they sweep to different
+# optima. While they shared a constant, retuning the decoder silently retuned the
+# contour gate too.
 CONTOUR_VOICING_THRESHOLD = 0.5
 
 
@@ -164,9 +165,9 @@ def decode_contour(
     Two things fall out that pyin could not give us. The contour shares the CQT's
     ~11.6 ms grid rather than pyin's 23.2 ms one, so a note boundary is no longer
     quantised to half the match tolerance -- the quantisation behind the ``MIN_NOTE_S``
-    interaction that cost 7.5 strict F1. And ``voiced`` marks the rests, so "there is
-    no pitch here" and "the bass is silent here" stop being separate claims made by two
-    components that can disagree.
+    interaction that made the pitch-split cue a liability. And ``voiced`` marks the
+    rests, so "there is no pitch here" and "the bass is silent here" stop being separate
+    claims made by two components that can disagree.
 
     ``voiced`` is a boolean mask, not a curve and a threshold: the threshold belongs to
     whoever owns the decoder's operating point, and importing it here would point

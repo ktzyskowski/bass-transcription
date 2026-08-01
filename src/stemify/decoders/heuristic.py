@@ -28,43 +28,33 @@ from stemify.decoders.base import Decoder
 from stemify.grids import resample_mask
 from stemify.notes import NoteEvent
 
-# Below this, a "note" is a tracker blip (onset transient, a frame of octave
-# wobble) rather than a played note. It earns its place -- removing it costs 0.023
-# strict F1 -- and it is enforced against the *contour* grid, which is what makes the
-# value depend on where the contour came from.
+# Below this, a "note" is a tracker blip (onset transient, a frame of octave wobble)
+# rather than a played note. Enforced against the *contour* grid, which is what makes
+# the right value depend on where the contour came from: a threshold set against pyin's
+# 23.2 ms frames admits far more short fragments on the CQT's 11.6 ms grid, so this has
+# to be re-swept whenever the pitch source changes.
 #
-# Raised 0.05 -> 0.10 on 2026-07-31 when the learned pitch head moved the contour from
-# pyin's 23.2 ms grid to the CQT's 11.6 ms one. The old value was three pyin frames;
-# on the finer grid the same 50 ms admits a great many more short fragments, and
-# precision fell 4.2 points. Re-swept: +0.0095 strict F1 on validation and +0.0128 on
-# test, taken together with VOICING_THRESHOLD below.
-#
-# 0.10 is the *middle* of a flat 0.08-0.12 plateau, not its argmax. Validation kept
-# climbing to 0.12 while test turned over there, which is what riding a boundary looks
-# like on 40 tracks; the middle is the defensible point. Note this discards real notes
-# shorter than 100 ms (~7% of the corpus), a permanent recall cap accepted because
-# those fragments are more often false positives than notes -- revisit it if short-note
-# recall ever becomes the binding constraint.
+# Sits at the *middle* of a flat plateau rather than at its argmax -- validation and
+# test disagreed about which end was better, which is what riding a boundary looks like
+# on a split this size. Note this discards real notes shorter than it, a permanent
+# recall cap accepted because fragments that short are more often false positives than
+# notes; revisit if short-note recall ever becomes the binding constraint.
 MIN_NOTE_S = 0.10
 
 # A sustained jump this far from the note's running pitch starts a new note.
 # ``None`` -- the default -- means a pitch change never places a note on its own.
 #
-# This was the only cue a DSP pipeline had for a new note, and it turned into an
-# active liability the moment a trained onset head existed. pyin reaches a note's true
-# pitch a median 23 ms *after* the onset (37.5 ms mean on separated audio, and past the
-# 50 ms match tolerance for 14.2% of pitch changes), so a real attack makes the contour
-# walk a staircase through intermediate pitches -- 48.1 -> 51.1 -> 52.0 -- and at 0.8
-# every step of that staircase split. Worse, ``group_contour`` *had* already placed a
-# note correctly at the onset: the fragment between the onset and the late pitch
-# transition was ~2 contour frames, under MIN_NOTE_S, so ``emit`` dropped it, and the
-# note that survived started ~58 ms late -- just outside tolerance. One reference note,
-# one false negative and one interior-offpitch false positive.
+# This was the only cue a DSP pipeline had for a new note, and it became an active
+# liability the moment a trained onset head existed. pyin reaches a note's true pitch
+# well *after* the attack -- often past the match tolerance -- so a real onset makes the
+# contour walk a staircase through intermediate pitches, and every step of that
+# staircase split. Worse, ``group_contour`` had already placed the note correctly at the
+# onset: the split then cut a sub-``MIN_NOTE_S`` fragment off its front, ``emit``
+# dropped that, and the note that survived started late enough to miss tolerance. One
+# reference note, one false negative and one interior-offpitch false positive.
 #
-# Disabling it was worth +7.5 strict F1 on the held-out test split, on two independent
-# checkpoints, and it wins on both sides at once (precision 0.78 -> 0.92, recall
-# 0.878 -> 0.886). The sweep is monotone from 0.8 out to "off" with no interior
-# optimum, which is the shape of a superseded rule rather than a mistuned one.
+# The sweep is monotone from 0.8 out to "off" with no interior optimum, which is the
+# shape of a superseded rule rather than a mistuned one. See docs/experiments.md.
 PITCH_SPLIT_SEMITONES: float | None = None
 
 # What an encoder with no trained onset head falls back to. ``DSPEncoder`` has only a
@@ -91,22 +81,17 @@ MERGE_GAP_S: float | None = None
 # an onset; MIN_ONSET_GAP_S enforces a refractory gap so one attack does not fire
 # twice. VOICING_THRESHOLD cuts the voicing curve into a note/rest mask.
 #
-# Both thresholds are genuine operating points rather than leftovers. ONSET_THRESHOLD
-# re-confirmed at 0.5 against the learned contour (0.6 is -0.0005). MIN_ONSET_GAP_S is
-# *inert* for a trained onset head (0.0 through 0.05 score identically -- its peaks are
-# already well separated) but is kept for the DSP path, whose flux spikes are exactly
-# what it guards against.
-#
-# VOICING_THRESHOLD dropped 0.5 -> 0.3 on 2026-07-31, in the same re-sweep as
-# MIN_NOTE_S: a lower bar marks more frames as sounding, so the mask punches fewer
-# spurious rests through a held note, and fragmentation FPs fall (946 -> 755 on
-# validation) at unchanged recall.
+# Both thresholds are genuine operating points rather than leftovers, though
+# MIN_ONSET_GAP_S is *inert* for a trained onset head -- its peaks are already well
+# separated -- and is kept for the DSP path, whose flux spikes are exactly what it
+# guards against. VOICING_THRESHOLD trades the way MIN_NOTE_S does: a lower bar marks
+# more frames as sounding, so the mask punches fewer spurious rests through a held note
+# and fragmentation false positives fall, at some cost to how crisply rests are placed.
 #
 # This is *not* the threshold that gates the learned contour -- that is
-# ``encoders.neural.CONTOUR_VOICING_THRESHOLD``, deliberately separate and still 0.5.
-# The two were one constant until this change, which meant retuning here silently
-# retuned the contour as well; the numbers above were measured with 0.3 here and 0.5
-# there, and they only hold for that pair.
+# ``models.heads.CONTOUR_VOICING_THRESHOLD``, deliberately separate. The two were one
+# constant once, which meant retuning here silently retuned the contour as well; they
+# were swept together and their values only hold as a pair. See docs/experiments.md.
 ONSET_THRESHOLD = 0.5
 MIN_ONSET_GAP_S = 0.03
 VOICING_THRESHOLD = 0.3
