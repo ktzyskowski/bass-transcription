@@ -50,6 +50,8 @@ class SemiCRFLoss(Loss):
         out = model(batch.features.to(device))       # {head: (B, Tmax, 1)}
         onset = out["onset"].squeeze(-1)             # (B, Tmax)
         voicing = out["voicing"].squeeze(-1) if "voicing" in out else None
+        # (B, T, K) -- the CRF's path/spread features read these.
+        pitch = out["pitch"] if "pitch" in out else None
 
         # Slice each track to its true length (drop the right-padding) and wrap the
         # head logits as a grad-bearing TensorCues, so the batched NLL reaches the
@@ -60,7 +62,8 @@ class SemiCRFLoss(Loss):
             v = voicing[b, :length] if voicing is not None else None
             cues_list.append(
                 TensorCues.from_logits(
-                    batch.contours[b], onset[b, :length], batch.frame_times[b], v
+                    batch.contours[b], onset[b, :length], batch.frame_times[b], v,
+                    None if pitch is None else pitch[b, :length],
                 )
             )
             notes_list.append(batch.notes[b])

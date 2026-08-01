@@ -37,17 +37,35 @@ class SemiCRFRecipe(Recipe):
         self,
         conditions: Sequence[str] | None = None,
         decoder: SemiCRFDecoder | None = None,
+        pitch: bool = False,
     ) -> None:
-        # No ``pitch`` parameter, deliberately: the DP scores onset and voicing
-        # evidence only, so a pitch branch here would train a head no potential ever
-        # reads. Not accepting the argument makes that a TypeError at construction
-        # rather than a successful run that learned nothing with it.
+        """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
+        features read. This recipe used to *refuse* the argument, on the reasoning
+        that the DP scored onset and voicing only and a pitch branch would train a
+        head no potential read. That stopped being true when the scorer gained its
+        path and spread features -- both are functions of the head's distribution.
+
+        """
         super().__init__(conditions)
         self.decoder = decoder or SemiCRFDecoder()
+        self.pitch = pitch
+
+    @property
+    def heads(self) -> list[str]:
+        """The binary pair, plus pitch when this run carries the head. Drives the
+        cached targets and the checkpoint's head list, which must agree with the
+        branches the model actually holds."""
+        return [*super().heads, "pitch"] if self.pitch else super().heads
+
+    @property
+    def params(self) -> dict[str, object]:
+        return {"pitch": self.pitch}
 
     def build_model(self) -> nn.Module:
         # Same encoder; only the objective differs.
-        return FrameRecipe([c.name for c in self.conditions]).build_model()
+        return FrameRecipe(
+            [c.name for c in self.conditions], pitch=self.pitch
+        ).build_model()
 
     def build_loss(self) -> Loss:
         return SemiCRFLoss(self.decoder)

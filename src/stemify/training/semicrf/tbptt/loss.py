@@ -109,11 +109,14 @@ class ChunkedSemiCRFLoss(Loss):
         out = model(batch.features.to(device))       # {head: (B, window, 1)}
         onset = out["onset"].squeeze(-1)
         voicing = out["voicing"].squeeze(-1) if "voicing" in out else None
+        # (B, T, K) -- the CRF's path/spread features read these.
+        pitch = out["pitch"] if "pitch" in out else None
 
         cues_list = [
             TensorCues.from_logits(
                 batch.contours[b], onset[b], batch.frame_times[b],
                 voicing[b] if voicing is not None else None,
+                pitch[b] if pitch is not None else None,
             )
             for b in range(len(batch))
         ]
