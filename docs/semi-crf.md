@@ -95,13 +95,22 @@ The name: *semi-Markov* because the Markov (memoryless) transitions happen betwe
 **Segment (unary) score**, all read off the frozen frame heads:
 
 - `note [i, j)`: `w_on · onset_logit[i]` (onset evidence *at the start*) `+ w_v ·
-  Σ_{t∈[i,j)} log P_voiced(t)` (voiced across the span) `+ dur(j−i)` (learned
-  duration potential) `+ b_note`.
+  Σ_{t∈[i,j)} log P_voiced(t)` (voiced across the span) `+ w_pitch · (# pitch changes
+  strictly inside)` `+ dur(j−i)` (learned duration potential) `+ b_note`.
 - `rest [i, j)`: `w_u · Σ_{t∈[i,j)} log(1−P_voiced(t)) + b_rest`.
 
-Cumulative sums make each span score O(1). Pitch is **not** in the v1 score — it's
-still read from the pyin contour (median over the span) after decoding, exactly as
-`group()` does. A learned pitch head folds in as a pitch-consistency term later.
+Cumulative sums make each span score O(1) — that constraint is load-bearing and
+shapes every feature that can ever be added; see *Can the pitch head feed the CRF?*.
+
+**Five features, ~15 learned scalars, one dot product.** This is a *log-linear*
+model in the classical Sarawagi & Cohen sense: the encoder is deep, the thing scoring
+segments is `wᵀf(segment)`. "Not a neural CRF" means exactly this.
+
+**The pitch term is currently pyin's.** `w_pitch` weights `pitch_jumps` — a binary
+indicator thresholded at 0.8 semitones on the *pyin* contour, the same cue `group()`
+retired because its transition lags the onset. The decoded pitch is likewise read from
+pyin (median over the span) **after** segmentation. So the learned pitch head does not
+reach this decoder at all yet.
 
 **Transition score:** a 2×2 learned matrix over `{note, rest}` plus an initial
 distribution — the cost of `note→note` vs `note→rest` vs `rest→note`, encoding the
@@ -181,3 +190,130 @@ score directly — what matters is *how many* note segments it emits, *where the
 start*, and *their pitch*. Rests and the duration potential earn their keep
 indirectly: by suppressing spurious note starts (precision) and by letting real
 weak-onset notes exist (recall).
+
+## Faithfulness ledger
+
+What the implementation actually guarantees, and where it departs from the model
+above. Checked by reading `gold.py`, `forward.py`, `score.py` and `potentials.py`
+against the theory — 2026-08-01.
+
+### Verified sound
+
+For `log Z − score(gold)` to be a proper NLL, gold has to be a **member of the space
+the partition function sums over**: an exact tiling of `[0, T)` with every segment
+of length `≤ dmax`. Both hold.
+
+- **Gold tiles exactly.** Every branch of `gold_segments` advances `cur` to the
+  segment end; interior gaps fill through `add_rest`; the tail fills at the end.
+- **Every gold segment is `≤ dmax`.** Notes clipped at `min(j, i + dmax)`; the
+  extend-over-artifact branch bounded by `min(i, prev_start + dmax)`; rests chunked
+  by `add_rest`.
+- **`START` is reachable only at position 0.** Its alpha slot is written `NEG` after
+  the first push, so no later segment can transition out of it.
+- **`note→note` is representable and gold produces it** (the `GAP_REST_S` rule), so
+  the model is not forced to invent a rest between slurred notes.
+- **The recurrence is checked against brute-force enumeration** — `log_partition`,
+  `viterbi` *and* the batched scan, at `T=7–8, dmax=3`. Every other DP test compares
+  one implementation against another, which two copies of the same wrong recurrence
+  would pass. This one does not.
+
+### Known departures
+
+1. **A note longer than `dmax` gets a `rest` tail.** `gold_segments` clips the note
+   to `dmax`; the remainder falls through the gap logic and is labelled `rest`. Gold
+   then asserts silence where the reference says a note sounds. Rare at `DMAX_S=4.0`
+   for bass, but it is a silent mislabel rather than an approximation.
+
+2. **Gold is one arbitrary tiling among several that mean the same thing.** A 10 s
+   rest becomes `4+4+2`; `3+3+4` describes identical audio, is an equally valid
+   member of the space, and the NLL treats it as a *negative*. The model compensates
+   by learning `trans[rest][rest] ≈ 0`. Properly one would marginalise over
+   equivalent golds. Mis-specification, not a bug.
+
+3. **No STOP transition.** `log Z = logsumexp(alpha[T][:2])` with no end potential,
+   so "tracks tend to end in a rest" is inexpressible. Looks deliberate; nothing
+   records it as a choice.
+
+4. **The pitch feature is pyin's** (see *The model*). One of five features is derived
+   from the source the rest of the pipeline replaced.
+
+### Structural risk
+
+The unary is written out in **four places**: `potentials.note_potentials` /
+`rest_potentials` (used only by the unbatched paths), `forward._scan` (the batched
+and chunked hot path), and `score._terms` (gold, single and batched). The latter two
+read `pot.w_on`, `pot.w_v`, `pot.b_note` and friends directly.
+
+If `log Z` and `score(gold)` ever compute *different* unaries, the NLL still
+decreases and gradients still flow — the model simply optimises a quantity that
+means nothing. Nothing in the training loop can detect this. The interior-only
+convention `Jc[j] − Jc[i+1]` is the sharpest edge: it appears four times, and in
+`score.py` the `+1` is applied by the **caller** while `_terms` merely documents
+"caller offsets by 1".
+
+## Can the pitch head feed the CRF?
+
+The pitch head emits `(T, 216)` bin logits per frame. Folding them in is the natural
+fix for departure (4), but *what* can be folded in is fixed by the O(1)-per-span
+constraint: there are `O(T · dmax)` spans, so an interior contribution must be
+**additive over frames** (hence a prefix cumsum) or depend only on the endpoints and
+the length.
+
+Writing `p_t = softmax(logits_t)` over the 216 bins:
+
+### Tier 0 — soft pitch instability (O(1), drop-in)
+
+Per frame, `1 − ⟨p_t, p_{t−1}⟩`: near 0 while the pitch holds, rising as the
+distribution moves. Cumsum it and a span's total is `C[j] − C[i+1]` — the *same
+shape and cost as `Jc` today*. It replaces a thresholded pyin indicator with a
+threshold-free, differentiable quantity from the learned head, and unlike `Jc` its
+gradient reaches the encoder.
+
+This is the free upgrade: no new machinery, one feature swapped.
+
+### Tier 1 — span pitch disagreement (O(K) per span)
+
+The segment-level question is "does this span hold *one* pitch?", which no per-frame
+feature answers. Cumsum the distributions themselves (`Pc`, a 216-wide prefix sum),
+take the span's mean `P̄ = (Pc[j] − Pc[i]) / d`, and score
+
+    JSD = H(P̄) − (1/d) Σ_{t∈[i,j)} H(p_t)
+
+the generalised Jensen–Shannon divergence of the span's frames: exactly zero when
+every frame agrees on the pitch, large when the span straddles a change. The second
+term is a per-frame scalar (cumsum, O(1)); only `H(P̄)` costs `O(K)`.
+
+Cost at `B=8, dmax=115, K=216, chunk=128`: ~795 KB per scan step for `P̄`, ~100 MB
+retained per chunk, ~300 MB including the entropy intermediates. Affordable.
+
+**This is where multimodality earns its keep** — and it is worth being exact about
+what that means here. The head *can* represent a bimodal posterior (an octave
+ambiguity shows as two peaks rather than one averaged pitch), but it was trained on
+monophonic bass against a single-pitch two-hot target, so a second mode means
+**uncertainty, not a second simultaneous note**. Under Tier 1 a bimodal `P̄` is
+evidence the span *contains a pitch change and should be split*, which is precisely
+the boundary decision the CRF exists to make.
+
+### What this does *not* buy: polyphony
+
+Three independent reasons, any one of which is sufficient:
+
+1. The pitch head never saw polyphonic supervision.
+2. A segmentation is a **tiling** — one label per frame. Two overlapping notes are
+   not expressible in the output space at all, whatever the features say.
+3. `{note, rest}` has no way to name *which* note. Polyphony needs a factorial model
+   (per-string chains, or a multi-track CRF), which is a different model class rather
+   than a richer potential.
+
+### The larger prize the question points at
+
+Pitch is currently read **after** decoding — `_segs_to_notes` takes the median pyin
+pitch over each emitted span — so segmentation and pitch are decided *independently*.
+A span the CRF got wrong (straddling two notes) still receives a confident median,
+wrong for both halves.
+
+Extending the label from `{note, rest}` to `{rest} ∪ {note at pitch p}` makes the DP
+choose pitch and boundaries **jointly**: the same recurrence at `O(T · dmax · K)`,
+with pitch evidence able to *veto* a boundary rather than being applied downstream of
+it. Expensive at `K=216` (bucketing to semitones gives `K≈48`), still monophonic —
+but it addresses a real independence assumption, which polyphony does not.
