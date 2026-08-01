@@ -85,10 +85,15 @@ class TensorCues:
     here, not beside ``Cues``, so ``cues.py`` stays torch-free and the light DSP path
     never pulls torch."""
 
-    contour: Contour               # pyin pitch track (numpy) -- the pitch source
+    contour: Contour               # pitch track (numpy) -- used for note pitches
     onset: torch.Tensor            # (T,) P(onset), differentiable
     frame_times: np.ndarray        # (T,) feature-grid times, seconds
     voicing: torch.Tensor | None = None  # (T,) P(voiced), differentiable, or None
+    # (T, n_bins) raw per-bin logits from a FrequencyHead, or None when the model has
+    # no pitch head. Raw rather than softmaxed, because the span features normalise
+    # across the bin axis themselves and squashing twice would be the wrong
+    # distribution. Grad-bearing: this is how the CRF objective reaches the pitch head.
+    pitch_logits: torch.Tensor | None = None
 
     @classmethod
     def from_logits(
@@ -97,11 +102,15 @@ class TensorCues:
         onset_logit: torch.Tensor,
         frame_times: np.ndarray,
         voicing_logit: torch.Tensor | None = None,
+        pitch_logits: torch.Tensor | None = None,
     ) -> TensorCues:
-        """Wrap a model's raw head logits, squashing to the probabilities ``Cues``
-        carries so the two intermediaries hold the same quantity in the same range."""
+        """Wrap a model's raw head logits, squashing the *binary* heads to the
+        probabilities ``Cues`` carries so the two intermediaries hold the same quantity
+        in the same range. Pitch stays as logits -- see the field."""
         voicing = None if voicing_logit is None else torch.sigmoid(voicing_logit)
-        return cls(contour, torch.sigmoid(onset_logit), frame_times, voicing)
+        return cls(
+            contour, torch.sigmoid(onset_logit), frame_times, voicing, pitch_logits
+        )
 
 
 @dataclass
@@ -123,10 +132,17 @@ class Evidence:
     onset_logit: torch.Tensor       # (B, Tmax)
     voiced_c: torch.Tensor          # (B, Tmax+1) cumsum log P(voiced)
     rest_c: torch.Tensor            # (B, Tmax+1) cumsum log(1 - P(voiced))
-    jump_c: torch.Tensor            # (B, Tmax+1) cumsum of pitch-change indicators
+    jump_c: torch.Tensor            # (B, Tmax+1) cumsum of pyin pitch-change flags
     lengths: list[int]
     frame_times: list[np.ndarray]   # per track, strided grid, absolute seconds
     contours: list[Contour]         # per track, for reading note pitches
+    # From a learned pitch head, all None when the model has none. Three cumsums
+    # because the two span features they serve need different aggregates: a *path
+    # length* (how far the distribution travelled, frame to frame) and a *spread* (how
+    # much the span's frames disagree with each other). See docs/semi-crf.md.
+    path_c: torch.Tensor | None = None      # (B, Tmax+1) cumsum of 1 - BC(p_t, p_t-1)
+    entropy_c: torch.Tensor | None = None   # (B, Tmax+1) cumsum of H(p_t)
+    pitch_c: torch.Tensor | None = None     # (B, Tmax+1, K) cumsum of p_t
 
     def __post_init__(self) -> None:
         _check_one_device(
@@ -152,10 +168,12 @@ class Evidence:
         """Row ``b`` as its own batch of one -- for the single-track paths (Viterbi,
         decode) that would otherwise index every field by hand."""
         t = self.lengths[b]
+        cut = lambda x, k=1: None if x is None else x[b : b + 1, : t + k]
         return Evidence(
             self.onset_logit[b : b + 1, :t], self.voiced_c[b : b + 1, : t + 1],
             self.rest_c[b : b + 1, : t + 1], self.jump_c[b : b + 1, : t + 1],
             [t], [self.frame_times[b]], [self.contours[b]],
+            cut(self.path_c), cut(self.entropy_c), cut(self.pitch_c),
         )
 
     # --- span accessors: the index conventions, in one place --------------------
@@ -179,6 +197,64 @@ class Evidence:
         is what *starts* this note, so charging the span for it would penalise every
         correctly-placed boundary."""
         return self.jump_c[b, j] - self.jump_c[b, i + 1]
+
+    def _zeros_like_span(self, b, i, j) -> torch.Tensor:
+        """A zero of whatever shape a span accessor would have returned.
+
+        The pitch accessors below return this when the model has no pitch head, so a
+        scorer's ``unary`` stays branch-free and a term it cannot evaluate contributes
+        nothing rather than raising. That keeps one scorer able to decode both a
+        pitch-bearing and a pitch-less checkpoint -- the alternative is a scorer that
+        inspects the evidence, which puts a capability check in the hot loop."""
+        return torch.zeros_like(self.voiced_c[b, j] - self.voiced_c[b, i])
+
+    def path_length(self, b, i, j) -> torch.Tensor:
+        """How far the pitch distribution *travelled* strictly inside ``[i, j)``.
+
+        A sum of per-frame moves, so it is large for a step change and also for
+        vibrato that returns where it started -- it measures distance covered, not
+        whether the span holds one pitch. ``pitch_spread`` is the peer that answers
+        the latter. Interior-only, on the same reasoning as ``interior_jumps``."""
+        if self.path_c is None:
+            return self._zeros_like_span(b, i, j)
+        return self.path_c[b, j] - self.path_c[b, i + 1]
+
+    def mean_entropy(self, b, i, j) -> torch.Tensor:
+        """Average per-frame pitch entropy over ``[i, j)`` -- the span's *aleatoric*
+        uncertainty, i.e. how unsure each frame is on its own."""
+        if self.entropy_c is None:
+            return self._zeros_like_span(b, i, j)
+        return (self.entropy_c[b, j] - self.entropy_c[b, i]) / (j - i)
+
+    def pitch_mean(self, b, i, j) -> torch.Tensor:
+        """The span's mean pitch distribution ``(..., K)``.
+
+        The mean of the softmaxes, not the softmax of mean logits: this is a *mixture*,
+        which is what "the span's pitch content" means, and a mixture preserves the two
+        modes of a span straddling a pitch change. A geometric mean would suppress
+        exactly the structure the spread feature exists to detect."""
+        if self.pitch_c is None:
+            raise ValueError("no pitch evidence: this Evidence carries no pitch head")
+        d = (j - i) if isinstance(j - i, int) else (j - i).unsqueeze(-1)
+        return (self.pitch_c[b, j] - self.pitch_c[b, i]) / d
+
+    def pitch_spread(self, b, i, j) -> torch.Tensor:
+        """Generalised Jensen-Shannon divergence of the span's frames.
+
+        ``H(mean) - mean(H)``: total uncertainty about the span's pitch minus the
+        average per-frame uncertainty, so what is left is uncertainty caused purely by
+        the frames *disagreeing with each other*. Zero exactly when every frame carries
+        the same distribution, and ``exp`` of it is the effective number of distinct
+        pitches in the span -- ``log 2`` for a clean two-note straddle.
+
+        Invariant to how confident the head is: a span where every frame is equally
+        unsure scores 0, because ``mean(H)`` rises with ``H(mean)``. That is what
+        separates *a pitch change* from *a hard-to-hear note*, which a frame-to-frame
+        distance cannot do."""
+        if self.pitch_c is None:
+            return self._zeros_like_span(b, i, j)
+        p = self.pitch_mean(b, i, j).clamp_min(1e-9)
+        return -(p * p.log()).sum(-1) - self.mean_entropy(b, i, j)
 
 
 def pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
@@ -242,10 +318,37 @@ def voiced_logcumsum(
     return Vc, Uc
 
 
+def pitch_cumsums(
+    logits: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-bin pitch logits ``(T, K)`` -> ``(path_c, entropy_c, pitch_c)`` prefix sums.
+
+    Every quantity here has to be additive over frames, because a span reads it as an
+    O(1) difference and there are O(T * dmax) spans. That is the constraint, and it is
+    why the two features are shaped as they are rather than as some arbitrary function
+    of the span's frames.
+
+    ``path`` uses the Bhattacharyya coefficient rather than a dot product: ``BC`` is 1
+    for any two *identical* distributions however diffuse, while ``<p, q>`` falls with
+    spread, so a dot product would report a quiet passage the head is unsure about as
+    constant pitch movement. The first frame has no predecessor and contributes 0."""
+    p = torch.softmax(logits, dim=-1)
+    sq = p.sqrt()
+    bc = (sq[1:] * sq[:-1]).sum(-1)                       # (T-1,)
+    path = torch.cat([bc.new_zeros(1), 1.0 - bc])         # (T,)
+    entropy = -(p.clamp_min(1e-9) * p.clamp_min(1e-9).log()).sum(-1)   # (T,)
+    zero_row = p.new_zeros(1, p.shape[-1])
+    return (
+        torch.cat([path.new_zeros(1), torch.cumsum(path, 0)]),
+        torch.cat([entropy.new_zeros(1), torch.cumsum(entropy, 0)]),
+        torch.cat([zero_row, torch.cumsum(p, 0)]),
+    )
+
+
 def _track_tensors(
     cues: Cues | TensorCues, stride: int, device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
-    """One track's ``(onset_logit, voiced_c, rest_c, jump_c, frame_times)``."""
+) -> tuple:
+    """One track's per-frame tensors, pitch cumsums included when it has a pitch head."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
     # Stride first, place second: the slice is cheap on the source device and only the
     # decimated grid crosses the bus.
@@ -257,7 +360,9 @@ def _track_tensors(
     # is the field that would otherwise strand the DP across two devices.
     jump = _on(pitch_jumps(cues.contour, frame_times), device)
     Jc = torch.cat([jump.new_zeros(1), torch.cumsum(jump, 0)])
-    return onset_logit, Vc, Uc, Jc, frame_times
+    logits = getattr(cues, "pitch_logits", None)
+    pitch = None if logits is None else pitch_cumsums(_on(logits, device)[::stride])
+    return onset_logit, Vc, Uc, Jc, frame_times, pitch
 
 
 def build_evidence(
@@ -287,13 +392,31 @@ def build_evidence(
     Vc = onset.new_zeros(B, Tmax + 1)
     Uc = onset.new_zeros(B, Tmax + 1)
     Jc = onset.new_zeros(B, Tmax + 1)
-    for b, (o, v, u, jc, _) in enumerate(built):
+    has_pitch = built[0][5] is not None
+    if has_pitch and any(t[5] is None for t in built):
+        raise ValueError(
+            "batch mixes tracks with and without pitch logits; every track in a batch "
+            "must come from the same model, or the span features silently read zeros "
+            "for some rows and real evidence for others"
+        )
+    K = built[0][5][2].shape[-1] if has_pitch else 0
+    Pc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
+    Hc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
+    Dc = onset.new_zeros(B, Tmax + 1, K) if has_pitch else None
+
+    for b, (o, v, u, jc, _, pitch) in enumerate(built):
         t = lengths[b]
         onset[b, :t] = o
         Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
         Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
         Jc[b, : t + 1], Jc[b, t + 1 :] = jc, jc[-1]
+        if pitch is not None:
+            pc, hc, dc = pitch
+            Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
+            Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
+            Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
+
     return Evidence(
         onset, Vc, Uc, Jc, lengths,
-        [t[4] for t in built], [c.contour for c in batch],
+        [t[4] for t in built], [c.contour for c in batch], Pc, Hc, Dc,
     )

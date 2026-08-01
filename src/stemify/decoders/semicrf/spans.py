@@ -109,7 +109,13 @@ class LinearSpanScorer(SpanScorer):
         self.w_on = nn.Parameter(torch.tensor(1.0))
         self.w_v = nn.Parameter(torch.tensor(1.0))
         self.w_u = nn.Parameter(torch.tensor(1.0))
-        self.w_pitch = nn.Parameter(torch.tensor(0.0))  # per interior pitch-change
+        self.w_pitch = nn.Parameter(torch.tensor(0.0))  # per interior pyin jump
+        # The two learned-pitch features. Zero-init so a run that adds them starts from
+        # the model that did not have them, and they are read as evidence only if the
+        # optimiser finds them useful -- and so that a checkpoint with no pitch head,
+        # whose evidence returns zeros here, is scored by an unchanged model.
+        self.w_path = nn.Parameter(torch.tensor(0.0))    # distribution travelled
+        self.w_spread = nn.Parameter(torch.tensor(0.0))  # frames disagreeing
         self.b_note = nn.Parameter(torch.tensor(0.0))
         self.b_rest = nn.Parameter(torch.tensor(0.0))
         self.dur = nn.Parameter(torch.zeros(len(dur_edges_s) + 1))
@@ -133,10 +139,16 @@ class LinearSpanScorer(SpanScorer):
         return torch.stack([self.trans[NOTE], self.trans[REST], self.init])
 
     def unary(self, ev, grid, b, i, j) -> torch.Tensor:
+        # `path` and `spread` answer different questions and are both kept: a path
+        # length is large for vibrato that returns where it started, a spread is not,
+        # and a spread is what says "this span holds two pitches". Supplying both and
+        # letting the weights settle is what a CRF is for.
         note = (
             self.w_on * ev.onset_at(b, i)
             + self.w_v * ev.voiced_mass(b, i, j)
             + self.w_pitch * ev.interior_jumps(b, i, j)
+            + self.w_path * ev.path_length(b, i, j)
+            + self.w_spread * ev.pitch_spread(b, i, j)
             + self.b_note
             + self.dur[grid.dur_bucket[j - i]]
         )
