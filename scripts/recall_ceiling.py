@@ -1,13 +1,20 @@
 """Which reference notes never make it into the candidate set?
 
-Candidate recall sits at ~0.90 and will not move: it is the same across 37 vs 1015
-training tracks, unweighted vs ``pos_weight=5``, and decode threshold 0.05 vs 0.7.
-Three independent axes, so the missing tenth is structural. This asks *what* it is.
+Written when candidate recall appeared pinned near 0.90 -- unmoved by 37 vs 1015
+training tracks, by unweighted vs ``pos_weight=5``, and by decode threshold 0.05 vs
+0.7. Three independent axes leaving it fixed says the missing notes are structural
+rather than a matter of tuning, so the useful question is *what* the structure is.
+
+The answer turned out to be mostly the pitch source rather than the encoder, and the
+learned pitch head then moved the ceiling this script was built to explain (see
+docs/experiments.md). The decomposition below is still how you would ask the question
+again -- of whatever the current ceiling is -- so read the numbers it prints, not any
+number quoted here.
 
 The question is decision-relevant, not idle. A note verifier (rung 3) only ever
-*deletes* candidates, so every reference note absent from ``group()``'s output caps it
--- at ~0.87 strict F1 no matter how good the verifier gets. Whether that is worth
-building depends on whether the missing notes are:
+*deletes* candidates, so every reference note absent from ``group()``'s output is a
+hard cap on what one could ever be worth. Whether it is worth building depends on
+whether the missing notes are:
 
   - cheap    -- a decoder constant (MIN_NOTE_S, MIN_ONSET_GAP_S) throws them away, and
                 a one-line change recovers them

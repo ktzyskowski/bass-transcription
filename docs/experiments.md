@@ -663,8 +663,76 @@ Held-out test, `separated`, strict note F1, over one day:
 | + pitch-split fix | 0.8172 |
 | + learned pitch head | 0.8509 |
 | + re-audited decoder constants | **0.8638** |
+| + mix channel (`rung1-bichannel-pitch`, next section) | **0.8849** |
 
-**+12.2 points**, none of it from a bigger model or more data.
+**+14.3 points**, none of it from a bigger model or more data.
+
+## Rung 1 revisited: the mix channel, once pitch is not the bottleneck — 2026-07-31
+
+`rung1-bichannel-pitch` — one variable from `rung4-pitch`: `--sources
+bichannel-clean,bichannel-separated` instead of `clean,separated`. Same 8 epochs, same
+batch 32, same `train_batches` (10347), no class weights, learned pitch head in both.
+
+### The headline
+
+`pitch_ab.py` on the trained 2-channel checkpoint, held-out **test**:
+
+| condition | split | pitch | recall | prec | strict F1 |
+|---|---|---|---|---|---|
+| bichannel-separated | validation | pyin | 0.9175 | 0.9377 | 0.8291 |
+| bichannel-separated | validation | **learned** | 0.9469 | 0.9240 | **0.8953** |
+| bichannel-separated | **test** | pyin | 0.8955 | 0.9338 | 0.8162 |
+| bichannel-separated | **test** | **learned** | 0.9617 | 0.9175 | **0.8849** |
+| bichannel-clean | test | pyin | 0.9917 | 0.9906 | 0.9538 |
+| bichannel-clean | test | learned | 0.9952 | 0.9750 | 0.9533 |
+
+Against `rung4-pitch` (1-channel, learned pitch) on the same split:
+
+| | recall | prec | test F1 |
+|---|---|---|---|
+| `rung4-pitch` (1ch) | 0.9386 | 0.9058 | 0.8638 |
+| `rung1-bichannel-pitch` (2ch) | 0.9617 | 0.9175 | **0.8849** |
+| Δ | +0.0231 | +0.0117 | **+0.0211** |
+
+**Both sides move.** The mix channel is not trading precision for recall the way the
+pyin-era bichannel runs did.
+
+### This overturns rung 1's "DONE — no"
+
+Bichannel was recorded as a null twice, and the reasoning each time was that its cue
+advantage (onset AP +4.3, later +11.3) failed to convert into notes. That was a true
+observation with a wrong conclusion attached. The gain was real and was being *absorbed
+downstream*: the extra notes a mix channel recovers are the quiet, separation-damaged
+ones, which are exactly the notes pyin pitched worst, so every note it recovered arrived
+with a pitch error and scored as a false positive. Removing pyin removed the sink.
+
+The no-training screen predicted +1.33 on test and explicitly flagged itself as a lower
+bound, because its pitch head came from a 1-channel checkpoint and had never seen a mix
+channel. The trained model gives +2.11, which is consistent with that flag: a shared
+trunk lets the pitch head use the mix channel too.
+
+### Mechanism check
+
+The gain is where the mechanism says it should be. On **clean**, 2ch scores 0.9533
+against 1ch's 0.9613 — flat to slightly down, no mix channel needed when the bass stem
+is undamaged. The entire +2.11 sits on `separated`. Validation `note/*` per epoch tells
+the same story from the other direction: `bichannel-clean` starts at 0.9781 and ends at
+0.9848 (the 1-channel run's range), while `bichannel-separated` starts at **0.8850**,
+above the 1-channel run's best-ever 0.8222 at any epoch.
+
+The pitch gap on test separated narrows 0.0981 → 0.0542 with the learned contour, the
+same size of move the 1-channel run showed (0.090 → 0.058).
+
+### Caveats
+
+- **The checkpoint is not the best epoch on the metric we care about.** Early stopping
+  monitors inline val loss, which is computed on *clean* windows only; it picked epoch
+  5. `note/bichannel-separated/f1` was still climbing at epoch 7 (0.8952 → 0.8984). The
+  quoted 0.8849 is therefore from a checkpoint that is ~0.3 points short of where the
+  run ended on validation. Worth fixing the selection criterion before reading small
+  deltas off this pipeline; 8 epochs also looks short of convergence.
+- Single run per arm, no seed variance. A ~2 point gap on 40 test tracks is larger than
+  the decoder-constant deltas that were treated as boundary-riding, but it is one draw.
 
 ## Future experiments
 

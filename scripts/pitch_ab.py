@@ -4,15 +4,22 @@ The cleanest A/B available: the model is frozen, both arms share the same onset 
 voicing curves from the same forward pass, and the *only* difference is where the pitch
 contour came from. Any change in note F1 is attributable to the pitch source alone.
 
-Why it should help, and where: pyin runs at hop 512 (23.2 ms, twice the CQT's frame
-period) and its transition lags a real onset by a median 23 ms -- 37.5 ms on separated
-audio, where it fails to reach a note's pitch at all on 12.5% of pitch changes against
-1.1% on clean. So the head should win by more on `separated` than on `clean`, and if it
-loses on clean that is the trade to weigh rather than a reason to discard it.
+Why it should help, and where: pyin runs at hop 512, twice the CQT's frame period, and
+its pitch transition lags a real onset -- worse on separated audio, where it more often
+never reaches the note's pitch at all. So the head should win by more on `separated`
+than on `clean`, and if it loses on clean that is the trade to weigh rather than a
+reason to discard it.
 
-Pitch-blind F1 is reported beside strict F1 because it is the control: the two arms
-share a segmentation, so pitch-blind should be *identical* between them. If it moves,
-something other than pitch changed and the comparison is not what it claims to be.
+Pitch-blind F1 is reported beside strict F1 to separate *placement* from *pitch*: it
+scores the same notes with the pitch tolerance relaxed away, so the difference between
+the two columns is what pitch alone costs.
+
+It is **not** a control that should come out equal between arms, which is what this
+docstring used to claim. Switching the contour also switches the grid `group_contour`
+segments on (23.2 ms to 11.6 ms) and changes how the voicing mask resamples, so
+placement genuinely moves too. What the two arms compare is the learned pitch source as
+a package -- accuracy plus grid resolution -- which is the right thing to measure but a
+wider claim than "only the pitch changed".
 """
 
 import argparse

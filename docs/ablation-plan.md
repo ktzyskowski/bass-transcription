@@ -89,7 +89,7 @@ protocol. Run at 200 tracks unless the result is close, then confirm at full cor
 | # | rung | arms | question | status |
 |---|---|---|---|---|
 | 0 | **baseline** | 1ch, onset+voicing, `group()` | the reference on the pinned protocol | **DONE** — `rung0-mono`, separated **0.7451** |
-| 1 | mix channel | 1ch vs 2ch | does bichannel help at scale? | **DONE — no.** 0.7431 vs 0.7451; AP +4.3 does not convert |
+| 1 | mix channel | 1ch vs 2ch | does bichannel help at scale? | **DONE — yes, once pitch is fixed.** `rung1-bichannel-pitch`, separated **0.8849** test (+2.1 over `rung4-pitch`). Overturns the earlier "no" (0.7431 vs 0.7451), which was measured while pyin absorbed the gain |
 | 2 | recall weighting | `pos_weight` 1 vs 5 | does candidate recall exceed 0.90? | **DONE — barely.** 0.878 -> 0.903; ceiling holds |
 | 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | **weakened** — headroom fell from ~+12 to ~+3 once the decoder fix and pitch head landed; it cannot raise recall at all |
 | 4 | pitch head | pyin vs learned | does the 1/3 pitch bucket shrink? | **DONE — the big one.** `rung4-pitch`, separated **0.8638** test (+5.0 over pyin on the same checkpoint). Recall 0.876 → 0.939: the "structural" ceiling *was* pyin |
@@ -99,8 +99,15 @@ protocol. Run at 200 tracks unless the result is close, then confirm at full cor
 source or the decoder, never on encoder capacity: bichannel's cue gain would not convert
 through a broken `group()`, recall weighting hit a ceiling that was pyin, and the pitch
 head cleared both. Before adding a rung that grows the model, check the number is not
-already being thrown away downstream — that is where every point of the day's +12.2
+already being thrown away downstream — that is where every point of the day's +14.3
 came from.
+
+**A rung marked DONE is only done against the pipeline it ran on.** Rung 1 was closed as
+a null and reopened as +2.1 with no change to the arm itself — only to what sat
+downstream of it. Two rungs are now suspect on the same grounds and should be re-run
+before being cited: rung 2 (`pos_weight`, whose ceiling was pyin's) and rung 5
+(semi-CRF, whose span features were fed a pyin contour whose lag is the thing that made
+them look uninformative).
 
 **Rungs 0-2 ran 2026-07-30 overnight** (see `docs/experiments.md`). Rungs 1 and 2 are
 both nulls, and between them they relocate the problem: the mix channel improves the
