@@ -26,36 +26,43 @@ def viterbi(
 ) -> list[tuple[int, int, int]]:
     """The single highest-scoring segmentation of track 0 of ``ev``.
 
-    ``int(argmax[lab])`` is a device-to-host sync twice per step -- ~14k on a 5-minute
-    track -- which is why a CUDA decode measures 4x *slower* than CPU here. See
-    ``docs/gpu-throughput-plan.md``; the fix is a tensor backpointer table read out once
-    at the end, not a device change.
+    The backpointers accumulate as **one device tensor**, read back after the scan
+    rather than element by element inside it: converting an argmax to a Python ``int``
+    mid-loop is a device-to-host sync, and a sync drains the queue. A ``(T+1, 2)``
+    int64 table buys one transfer in place of O(T) of them, which is the whole reason
+    it is not a list of dicts.
+
+    The traceback stays a sequential Python loop because it is inherently one -- each
+    step's segment start decides where the next lookup lands -- but it runs once per
+    *segment*, not per frame, over CPU-resident data.
     """
     T = ev.lengths[0]
     if T == 0:
         return []
     window = initial_window(ev.onset_logit, 1, grid.dmax)
     last = window[:, -1]
-    back: list[dict | None] = [None]
+    back = ev.onset_logit.new_zeros((T + 1, 2), dtype=torch.long)
     for j in range(1, T + 1):
         term = step_terms(scorer, ev, grid, window, j)      # (1, dmax, 3, 2)
         val, arg = term.reshape(-1, 2).max(dim=0)           # (2,), (2,)
+        back[j] = arg
         # NEG rather than -inf: START is unreachable after position 0, and a finite
         # sentinel cannot produce a NaN when it meets the potentials added to it.
         last = torch.cat([val, val.new_full((1,), NEG)]).unsqueeze(0)
         window = push(window, last)
-        # `term` flattens (dmax, 3=prev), so an argmax index splits as
-        # (window offset, prev label) -- and the offset maps back to a frame through
-        # the *same* clamped start table the recurrence scored against.
-        starts = candidate_starts(grid, j, ev.device)
-        back.append(
-            {lab: (int(starts[int(arg[lab]) // 3]), int(arg[lab]) % 3)
-             for lab in (NOTE, REST)}
-        )
+
     label = int(torch.stack([last[0, NOTE], last[0, REST]]).argmax())
+    back = back.cpu()                                       # the one transfer
+    cpu = torch.device("cpu")
     j, segs = T, []
     while j > 0:
-        i, prev = back[j][label]
+        # `term` flattened (dmax, 3=prev), so an argmax index splits as
+        # (window offset, previous label) -- and the offset maps back to a frame
+        # through the *same* clamped start table the recurrence scored against,
+        # rather than through a second copy of that arithmetic.
+        arg = int(back[j, label])
+        i = int(candidate_starts(grid, j, cpu)[arg // 3])
+        prev = arg % 3
         segs.append((label, i, j))
         j, label = i, prev
         if label == START:
