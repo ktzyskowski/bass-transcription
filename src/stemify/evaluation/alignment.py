@@ -27,7 +27,7 @@ def align(reference: Contour, estimate: Contour) -> tuple[np.ndarray, np.ndarray
     """Resample ``estimate`` onto the reference grid.
 
     Returns ``(true, pred)``: two equal-length Hz arrays with 0.0 for unvoiced,
-    which is exactly the contract ``FrameMetric.calculate`` expects.
+    which is exactly the contract ``FrameMetric.compute`` expects.
     """
     if len(estimate) == 0:
         return reference.freqs, np.zeros_like(reference.freqs)

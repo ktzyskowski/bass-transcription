@@ -1,4 +1,4 @@
-"""The frame strategy: per-frame BCE over fixed windows, grouped by the heuristic.
+"""The frame strategy: per-frame BCE over fixed windows, grouped by the greedy decoder.
 
 The paradigm behind every result in ``docs/experiments.md`` outside the semi-CRF
 section. Windows are cheap and plentiful, so this is the path with the gradient steps.

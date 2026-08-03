@@ -9,9 +9,9 @@ data type both sides of a stage exchange; keeping it here lets ``encoders`` and
 
 The evidence is deliberately *soft* -- per-frame probabilities (a learned onset
 curve, a voicing curve) or a DSP envelope, not thresholded onsets or a voiced mask.
-That is the whole reason a decoder can be more than greedy: ``HeuristicDecoder``
+That is the whole reason a decoder can be more than greedy: ``GreedyDecoder``
 peak-picks and thresholds these into discrete cues, but ``SemiCRFDecoder`` consumes
-the raw probabilities, which is how it recovers sub-threshold onsets the heuristic
+the raw probabilities, which is how it recovers sub-threshold onsets the greedy decoder
 would throw away.
 
 ``onset``/``voicing``/``pitch_logits`` are per-frame on the ``frame_times`` grid (the

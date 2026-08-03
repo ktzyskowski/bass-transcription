@@ -15,15 +15,15 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.models.heads import pitch_ce
 from stemify.training.semicrf.tracks import target_windows
 
 N_BINS, HOP_S, T = 12, 0.0116, 20
 
 
-def _example(midi: float = 45.0) -> TrackExample:
-    return TrackExample(
+def _example(midi: float = 45.0) -> CachedItem:
+    return CachedItem(
         "t0",
         np.zeros((N_BINS, T), dtype=np.float32),
         {"pitch": np.full(T, midi, dtype=np.float32)},
@@ -57,7 +57,7 @@ def test_a_missing_head_names_itself():
     # The dataset must be built with the heads it will serve; failing here beats
     # serving a silently absent target.
     with pytest.raises(KeyError, match="pitch"):
-        target_windows(TrackExample("t", np.zeros((N_BINS, T)), {}, np.arange(T)),
+        target_windows(CachedItem("t", np.zeros((N_BINS, T)), {}, np.arange(T)),
                        ["pitch"], start=0, width=4)
 
 

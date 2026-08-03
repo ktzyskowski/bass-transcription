@@ -13,7 +13,7 @@ emits its per-track counts in ``arrays["per_item_counts"]`` from its one match, 
 the harness projects the ranking off that (see ``evaluation.note``).
 
 Pure over the note lists -- no dataset, no model -- so how the estimates were produced
-(a whole ``Segmenter`` offline, a checkpoint's encoder+decoder in training) stays with
+(a whole ``Transcriber`` offline, a checkpoint's encoder+decoder in training) stays with
 the caller.
 """
 
@@ -43,4 +43,4 @@ def score_notes(
     metrics: Sequence[NoteMetric] = DEFAULT_NOTE_METRICS,
 ) -> list[MetricResult]:
     """Each metric's result over the whole set of per-track (reference, estimate) lists."""
-    return [m.calculate(list(references), list(estimates)) for m in metrics]
+    return [m.compute(list(references), list(estimates)) for m in metrics]

@@ -32,7 +32,7 @@ from stemify.atomic import atomic_write
 from stemify.decoders.base import Decoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.models.cuenet import CueNet
-from stemify.segmenter import Segmenter
+from stemify.transcriber import Transcriber
 from stemify.training.base import Recipe
 from stemify.training.recipes import RECIPES
 
@@ -138,13 +138,13 @@ class Checkpoint:
     def encoder(self, **kwargs: Any) -> LearnedEncoder:
         return LearnedEncoder(self.model(), **kwargs)
 
-    def transcriber(self, **kwargs: Any) -> Segmenter:
+    def transcriber(self, **kwargs: Any) -> Transcriber:
         """Audio -> notes, exactly as this run would deploy.
 
         The seam that training-time validation and the eval CLI must share: two
         implementations of this is what let them disagree.
         """
-        return Segmenter(self.encoder(**kwargs), self.decoder())
+        return Transcriber(self.encoder(**kwargs), self.decoder())
 
 
 def load_cuenet(checkpoint: Path) -> CueNet:

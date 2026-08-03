@@ -15,7 +15,7 @@ import argparse
 import pytest
 import torch
 
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.evaluation.cli import build_decoder
 
@@ -63,4 +63,4 @@ def test_a_frame_checkpoint_scored_as_semicrf_is_refused(tmp_path):
 
 
 def test_heuristic_still_needs_no_checkpoint():
-    assert isinstance(build_decoder(_args(decoder="heuristic")), HeuristicDecoder)
+    assert isinstance(build_decoder(_args(decoder="heuristic")), GreedyDecoder)

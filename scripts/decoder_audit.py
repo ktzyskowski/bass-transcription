@@ -22,14 +22,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stemify.cache import Cache
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.fragmentation import Fragmentation
 from stemify.metrics.note.prf import prf_rates
 from stemify.training.conditions import CONDITIONS, canonical
-from stemify.training.validation import OnsetValidator
+from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"
 CACHE_DIR = "data/cache"
@@ -60,7 +60,7 @@ def score(refs, ests) -> Scored:
         s = len(matched_pairs(ref, est))
         stp, sfp, sfn = stp + s, sfp + len(est) - s, sfn + len(ref) - s
     blind, strict = prf_rates(tp, fp, fn), prf_rates(stp, sfp, sfn)
-    frag = Fragmentation().calculate(refs, ests).scalars
+    frag = Fragmentation().compute(refs, ests).scalars
     return Scored(
         blind["recall"], blind["precision"], blind["f1"], strict["f1"],
         int(frag["fragmentation"]), int(frag["interior_offpitch"]),
@@ -78,7 +78,7 @@ class Bench:
     def __init__(self, ckpt: Path, tag: str, split: str, limit: int) -> None:
         condition = CONDITIONS[canonical(tag)]
         dataset = condition.dataset(ROOT, split, limit)
-        validator = OnsetValidator(dataset, condition, cache=Cache(CACHE_DIR))
+        validator = CheckpointValidator(dataset, condition, cache=Cache(CACHE_DIR))
         encoder = LearnedEncoder(load_cuenet(ckpt))
         self.cues = [
             encoder.encode_features(ex.contour, ex.load_features())
@@ -87,7 +87,7 @@ class Bench:
         self.refs = [ex.notes for ex in validator.examples]
 
     def run(self, **kwargs) -> Scored:
-        decoder = HeuristicDecoder(**kwargs)
+        decoder = GreedyDecoder(**kwargs)
         return score(self.refs, [decoder.decode(c) for c in self.cues])
 
 

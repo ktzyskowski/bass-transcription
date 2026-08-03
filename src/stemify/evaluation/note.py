@@ -1,15 +1,15 @@
-"""Note-level evaluation: bind a dataset and a ``Segmenter``, and score notes.
+"""Note-level evaluation: bind a dataset and a ``Transcriber``, and score notes.
 
     NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
-                   Segmenter(ClassicalEncoder(), HeuristicDecoder())).run()
+                   Transcriber(ClassicalEncoder(), GreedyDecoder())).run()
 
 The cues-level harness (``CuesEvaluation``) scores the encoder's per-frame evidence.
 This asks "did you find the right notes" -- the metric a tab is actually graded on,
 and the one a bass-transcription collaborator's F1 numbers use.
 
-It scores the exact object deployment ships: a ``Segmenter(encoder, decoder)``. The
-DSP floor is ``Segmenter(ClassicalEncoder(), HeuristicDecoder())``; a trained model is
-``Segmenter(LearnedEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
+It scores the exact object deployment ships: a ``Transcriber(encoder, decoder)``. The
+DSP floor is ``Transcriber(ClassicalEncoder(), GreedyDecoder())``; a trained model is
+``Transcriber(LearnedEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
 one object and cannot drift, and there is no separate "learned baseline" class. (A
 note-native transcriber that emits notes without a contour would plug in the same
 way once it exposes ``segment(sources) -> notes``.)
@@ -37,7 +37,7 @@ from stemify.metrics import (
     score_notes,
 )
 from stemify.notes import NoteEvent
-from stemify.segmenter import Segmenter
+from stemify.transcriber import Transcriber
 from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
 
@@ -129,7 +129,7 @@ class NoteReport(Report):
 
 
 class NoteEvaluation:
-    """Bind a dataset and a ``Segmenter``; ``run()`` scores its notes.
+    """Bind a dataset and a ``Transcriber``; ``run()`` scores its notes.
 
     ``transform`` preprocesses the audio before the encoder hears it (separation,
     principally); the reference notes are ground truth and untouched by it, so only
@@ -139,7 +139,7 @@ class NoteEvaluation:
     def __init__(
         self,
         dataset: Dataset,
-        transcriber: Segmenter,
+        transcriber: Transcriber,
         metrics: Iterable[NoteMetric] = DEFAULT_NOTE_METRICS,
         transform: AudioTransform | None = None,
         progress: bool = True,
@@ -152,7 +152,7 @@ class NoteEvaluation:
 
     def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
         path = self.transform.apply(item.audio())
-        return self.transcriber.segment(Sources(bass=path))
+        return self.transcriber.transcribe(Sources(bass=path))
 
     def run(self) -> NoteReport:
         items = list(self.dataset)

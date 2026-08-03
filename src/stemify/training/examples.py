@@ -5,7 +5,7 @@ windowing that serves batches (``frame/dataset.py``). Two pieces, split so each 
 testable and the expensive one (the CQT) is cached once:
 
   - ``build_example`` turns one track's features + references into a full-track
-    (features, targets) ``TrackExample``. Pure given the arrays, so a synthetic
+    (features, targets) ``CachedItem``. Pure given the arrays, so a synthetic
     contour and a few notes exercise the target alignment without touching disk.
   - ``prepare_examples`` caches each track's CQT (via ``Cache.ensure_features``) and layers
     the requested heads' targets on top. Self-healing: a cached example missing a
@@ -26,7 +26,7 @@ from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset, EvalItem
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample, write_npz
+from stemify.serde import CachedItem, write_npz
 from stemify.training.labels import onset_targets, pitch_targets, voicing_targets
 from stemify.transforms import AudioTransform
 
@@ -39,7 +39,7 @@ def build_example(
     notes: Sequence[NoteEvent],
     heads: Iterable[str],
     onset_tolerance_frames: int = 1,
-) -> TrackExample:
+) -> CachedItem:
     """Assemble the targets each requested head needs, on ``frame_times``.
 
     ``reference`` is the *gated* reference contour (voicing + pitch); ``notes``
@@ -60,7 +60,7 @@ def build_example(
         voiced = reference.freqs > 0
         midi[voiced] = librosa.hz_to_midi(reference.freqs[voiced])
         targets["pitch"] = pitch_targets(reference.times, midi, frame_times)
-    return TrackExample(name, features, targets, frame_times)
+    return CachedItem(name, features, targets, frame_times)
 
 
 def prepare_examples(

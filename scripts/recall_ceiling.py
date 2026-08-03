@@ -41,12 +41,12 @@ from pathlib import Path
 import numpy as np
 
 from stemify.cache import Cache
-from stemify.decoders.heuristic import (
+from stemify.decoders.greedy import (
     MIN_NOTE_S,
     MIN_ONSET_GAP_S,
     ONSET_THRESHOLD,
     VOICING_THRESHOLD,
-    HeuristicDecoder,
+    GreedyDecoder,
     onset_times_from_probs,
 )
 from stemify.encoders.learned import LearnedEncoder
@@ -56,7 +56,7 @@ from stemify.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
 from stemify.notes import NoteEvent
 from stemify.serde import features_npy
 from stemify.training.conditions import CONDITIONS, canonical
-from stemify.training.validation import OnsetValidator, ValExample
+from stemify.training.validation import CheckpointValidator, ValItem
 
 ROOT = "data/raw/slakh2100"
 CACHE_DIR = "data/cache"
@@ -140,7 +140,7 @@ def _energy_db(features: np.ndarray, frame_times: np.ndarray, note: NoteEvent) -
 
 
 def profile_track(
-    ex: ValExample,
+    ex: ValItem,
     cues,
     est: list[NoteEvent],
     track: int,
@@ -228,14 +228,14 @@ def collect(tag: str, ckpt: Path, limit: int, threshold: float) -> list[RefNote]
     dataset = condition.dataset(ROOT, "validation", limit)
     names = [item.name for item in dataset]
 
-    validator = OnsetValidator(dataset, condition, cache=cache)
+    validator = CheckpointValidator(dataset, condition, cache=cache)
     clean = clean_features(limit, cache)
     missing = [n for n in names if n not in clean]
     if missing:
         raise ValueError(f"no clean stem for {len(missing)} track(s): {missing[:5]}")
 
     encoder = LearnedEncoder(load_cuenet(ckpt))
-    decoder = HeuristicDecoder(onset_threshold=threshold)
+    decoder = GreedyDecoder(onset_threshold=threshold)
 
     rows: list[RefNote] = []
     for t, (name, ex) in enumerate(zip(names, validator.examples, strict=True)):

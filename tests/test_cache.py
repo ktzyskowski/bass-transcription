@@ -14,7 +14,7 @@ import numpy as np
 from stemify.cache import Cache, content_key
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.sources import Sources
 from stemify.transforms import AudioTransform, Identity
 
@@ -111,7 +111,7 @@ def test_ensure_features_computes_once_then_skips(tmp_path, monkeypatch):
     second = cache.ensure_features([_CountingItem(wav)], Identity())
     assert calls["n"] == 1  # hit: no CQT recompute
     assert first == second
-    loaded = TrackExample.load(first[0])
+    loaded = CachedItem.load(first[0])
     assert loaded.targets == {}  # target-less: features only
     assert loaded.features.shape == (4, 10)
 

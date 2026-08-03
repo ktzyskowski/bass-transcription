@@ -28,17 +28,15 @@ from pathlib import Path
 import numpy as np
 
 from stemify.cache import Cache
-from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.notes import NoteEvent
-from stemify.pitch import PitchEstimator
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.training.conditions import Condition
 from stemify.training.examples import ensure_targets
 
 
 @dataclass(frozen=True)
-class TrackInputs:
+class TrainItem:
     """Everything a structured objective needs for one track, as paths and values.
 
     Holds feature *paths* rather than arrays so a full-scale set never sits in RAM and
@@ -47,22 +45,19 @@ class TrackInputs:
     """
 
     features: tuple[Path, ...]   # cached CQT per input channel; [0] is the bass
-    # A DSP contour over channel 0, or None when nothing needs one. No DP potential
-    # reads it -- see ``track_inputs``.
-    contour: Contour | None
     notes: list[NoteEvent]       # reference notes, always the clean stem's truth
 
-    def open(self, mmap: bool = True) -> tuple[TrackExample, ...]:
+    def open(self, mmap: bool = True) -> tuple[CachedItem, ...]:
         """This track's cached examples, one per channel.
 
         ``mmap`` keeps the features on disk so a window is paged in per read and the
         OS page cache is shared across workers; pass ``False`` to materialise.
         """
-        return tuple(TrackExample.load(p, mmap=mmap) for p in self.features)
+        return tuple(CachedItem.load(p, mmap=mmap) for p in self.features)
 
 
 def channel_window(
-    examples: tuple[TrackExample, ...], start: int, width: int
+    examples: tuple[CachedItem, ...], start: int, width: int
 ) -> np.ndarray:
     """``(C, n_bins, width)`` of stacked channel features, zero-padded off the ends.
 
@@ -81,7 +76,7 @@ def channel_window(
 
 
 def target_windows(
-    example: TrackExample, heads: Sequence[str], start: int, width: int
+    example: CachedItem, heads: Sequence[str], start: int, width: int
 ) -> dict[str, np.ndarray]:
     """``{head: (width,)}`` of per-frame targets, **NaN-padded** off the track's ends.
 
@@ -101,7 +96,7 @@ def target_windows(
             raise KeyError(
                 f"{example.name!r} has no cached {head!r} target (has "
                 f"{sorted(example.targets)}). The dataset must be built with the heads "
-                "it will serve, so `track_inputs` can back-fill them."
+                "it will serve, so `train_items` can back-fill them."
             )
         y = np.full(width, np.nan, dtype=np.float32)
         if lo < hi:
@@ -110,27 +105,25 @@ def target_windows(
     return out
 
 
-def track_inputs(
+def train_items(
     dataset: SlakhLikeDataset,
     condition: Condition,
     cache: Cache,
-    estimator: PitchEstimator | None = None,
     heads: Sequence[str] = (),
-) -> list[TrackInputs]:
+) -> list[TrainItem]:
     """Resolve and cache every track's inputs for one condition, in dataset order.
 
-    The CQT of each channel is ensured through ``Condition.channel_paths`` (one
+    The CQT of each channel is ensured through ``Condition.channel_paths`` -- one
     ``ensure_features`` sweep per channel, so a second channel is typically a pure
-    cache hit from whichever run already built that condition), and the contour comes
-    from channel 0 only -- the context channels are never pitch-tracked.
+    cache hit from whichever run already built that condition.
 
-    ``estimator`` is *injected*, and passing ``None`` means **no contour at all**
-    rather than "default to pyin". No DP potential reads a contour: the scan scores
-    onset, voicing, duration, transitions, and the pitch head's own path/spread. So
-    running pyin over the corpus to train a semi-CRF buys nothing but the wall time,
-    and the default is off. Supply an estimator only when something downstream needs a
-    pitch track -- the voicing fallback for a model with no voicing head, or naming
-    pitches at decode.
+    **No contour.** There was a ``contour`` field here and an ``estimator`` parameter
+    to fill it, defaulting to ``None`` on the reasoning that no DP potential reads one.
+    That reasoning held: no caller ever passed an estimator, so the field was written
+    ``None`` on every item and read by nothing. The scan scores onset, voicing,
+    duration, transitions and the pitch head's own path/spread; a pitch track is an
+    inference-time concern, and running pyin over the corpus to train a semi-CRF would
+    buy nothing but the wall time.
 
     ``heads`` are the per-frame targets an *auxiliary* loss needs; the structured NLL
     itself reads notes, not frame labels, so the default is none. They are back-filled
@@ -141,13 +134,6 @@ def track_inputs(
     per_track = condition.channel_paths(dataset, cache)
     ensure_targets(dataset, [paths[0] for paths in per_track], heads)
     return [
-        TrackInputs(
-            features=paths,
-            contour=(
-                None if estimator is None
-                else cache.contour(estimator, condition.primary.audio(item))
-            ),
-            notes=item.reference_notes(),
-        )
+        TrainItem(features=paths, notes=item.reference_notes())
         for item, paths in zip(dataset, per_track, strict=True)
     ]

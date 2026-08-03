@@ -33,10 +33,10 @@ from stemify.contour import Contour
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.sources import Sources
 from stemify.training.conditions import CONDITIONS
-from stemify.training.semicrf.tracks import track_inputs
+from stemify.training.semicrf.tracks import train_items
 from stemify.training.semicrf.dataset import Chunk, ChunkDataset, collate
 from stemify.training.semicrf.loss import SemiCRFLoss
 
@@ -105,7 +105,7 @@ def track(tmp_path):
     Path(item.audio()).write_bytes(b"")
     rng = np.random.default_rng(0)
     feats = rng.standard_normal((N_BINS, N_CQT)).astype(np.float32)
-    TrackExample(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
+    CachedItem(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
         cache.feature_path(item.audio())
     )
     return [item], cache, feats
@@ -139,7 +139,7 @@ def _whole_track_nll(model, cache, items, feats) -> float:
 def _chunked_nll(model, cache, items, right: int) -> float:
     """The sum of per-chunk telescoping losses over the same track."""
     dataset = ChunkDataset(
-        track_inputs(items, CONDITIONS["clean"], cache),
+        train_items(items, CONDITIONS["clean"], cache),
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=right,
     )
@@ -172,7 +172,7 @@ def test_a_second_epoch_gives_the_same_losses(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkDataset(
-        track_inputs(items, CONDITIONS["clean"], cache),
+        train_items(items, CONDITIONS["clean"], cache),
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
@@ -194,7 +194,7 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkDataset(
-        track_inputs(items, CONDITIONS["clean"], cache),
+        train_items(items, CONDITIONS["clean"], cache),
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
@@ -216,7 +216,7 @@ def test_epoch_batches_survives_a_streaming_loader(track):
     items, cache, _ = track
     streaming = DataLoader(
         ChunkDataset(
-            track_inputs(items, CONDITIONS["clean"], cache),
+            train_items(items, CONDITIONS["clean"], cache),
             chunk_frames=CHUNK, dmax=DMAX,
             stride=STRIDE, batch_size=1,
         ),

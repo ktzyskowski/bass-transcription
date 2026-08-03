@@ -1,11 +1,11 @@
-"""Serve fixed-length training windows over cached ``TrackExample``s.
+"""Serve fixed-length training windows over cached ``CachedItem``s.
 
 The batch-serving layer: preparation and caching of the per-track examples lives
 in ``examples.py``; this only slices them into the fixed-length windows the model
 trains on (the temporal stack needs a few seconds of context and a batch needs a
 fixed length). Windows are read straight off the memmapped feature sidecar, so a
 full-scale set never sits in RAM -- but see ``_examples`` for the part of a
-``TrackExample`` that *is* resident, and why the open-track cache is bounded.
+``CachedItem`` that *is* resident, and why the open-track cache is bounded.
 """
 
 from collections.abc import Iterable, Sequence
@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 
 # How many tracks' resident state one dataset keeps open. Sized to be negligible per
 # worker rather than to hit some ratio -- see ``_examples`` for why a larger cache
@@ -26,7 +26,7 @@ CACHE_TRACKS = 64
 
 
 class FrameWindowDataset(Dataset[Any]):
-    """Fixed-length windows over cached ``TrackExample``s.
+    """Fixed-length windows over cached ``CachedItem``s.
 
     Windows are enumerated up front (deterministic), so training order is a
     shuffle of a stable set rather than a moving target. A track shorter than one
@@ -74,12 +74,12 @@ class FrameWindowDataset(Dataset[Any]):
             else:
                 for start in range(0, n_frames - window_frames + 1, hop_frames):
                     self._index.append((ei, start))
-        self._cache: dict[int, tuple[TrackExample, ...]] = {}
+        self._cache: dict[int, tuple[CachedItem, ...]] = {}
 
     def __len__(self) -> int:
         return len(self._index)
 
-    def _examples(self, ei: int) -> tuple[TrackExample, ...]:
+    def _examples(self, ei: int) -> tuple[CachedItem, ...]:
         # Features are memmapped, so they cost page cache the OS shares across
         # workers. Targets and frame_times are *not*: they are read resident out of
         # the npz, and every worker is a fork with its own copy.
@@ -91,7 +91,7 @@ class FrameWindowDataset(Dataset[Any]):
         # the cache only ever spares a repeat open of a small file.
         cached = self._cache.get(ei)
         if cached is None:
-            cached = tuple(TrackExample.load(p, mmap=True) for p in self.tracks[ei])
+            cached = tuple(CachedItem.load(p, mmap=True) for p in self.tracks[ei])
             if len(self._cache) >= CACHE_TRACKS:
                 self._cache.pop(next(iter(self._cache)))  # FIFO; dicts keep order
             self._cache[ei] = cached

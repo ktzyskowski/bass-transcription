@@ -50,7 +50,7 @@ class PRFResult(MetricResult):
 class PRF(NoteMetric):
     name = "note-prf"
 
-    def calculate(
+    def compute(
         self,
         references: list[list[NoteEvent]],
         estimates: list[list[NoteEvent]],

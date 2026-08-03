@@ -1,7 +1,7 @@
 """The semi-CRF decoder, split into testable units.
 
 A learned, global note decoder over per-frame ``Cues`` (contrast the greedy
-``HeuristicDecoder``). The package composes:
+``GreedyDecoder``). The package composes:
 
   - ``constants`` -- grid stride, segment labels, duration edges.
   - ``evidence`` -- ``TensorCues`` and ``Cues|TensorCues -> Evidence``: the per-frame

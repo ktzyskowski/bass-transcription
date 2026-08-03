@@ -1,4 +1,4 @@
-"""``HeuristicDecoder``: the greedy decode (no learning).
+"""``GreedyDecoder``: the greedy decode (no learning).
 
 Turns per-frame ``Cues`` into notes by splitting the pitch contour at a rest (an
 unvoiced run) and at an onset (a re-articulation the contour alone cannot show),
@@ -12,7 +12,7 @@ A *pitch change* used to be a third splitting cue, and is now off by default -- 
 
 The pure core is ``group_contour`` -- no audio, no thresholds, taking onset *times*
 and a voiced mask directly -- so a boundary case is testable with a synthetic
-contour and hand-picked cues. ``HeuristicDecoder.decode`` is the ``Decoder`` wrapper:
+contour and hand-picked cues. ``GreedyDecoder.decode`` is the ``Decoder`` wrapper:
 it peak-picks the onset curve and thresholds the voicing curve out of the ``Cues``,
 then groups. That thresholding is exactly what a ``SemiCRFDecoder`` does *not* do --
 it keeps the soft probabilities -- which is why the two are siblings.
@@ -232,7 +232,7 @@ def _merge_same_pitch(
     return merged
 
 
-class HeuristicDecoder(Decoder):
+class GreedyDecoder(Decoder):
     """Greedy decode: peak-pick onsets, threshold voicing, split + merge."""
 
     name = "heuristic"

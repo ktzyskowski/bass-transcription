@@ -5,7 +5,7 @@ is the encoder's per-frame output: an onset curve, a voicing curve, and a pitch
 contour. Scoring it -- decoder-independent -- is the encoder altitude of the pipeline.
 This module is the *pure* core: it takes, per track, the already-aligned
 ``(prediction, truth)`` pair for each channel and pools frames across tracks (the
-``FrameMetric`` contract: concatenation is lossless, so one ``calculate`` over the
+``FrameMetric`` contract: concatenation is lossless, so one ``compute`` over the
 pool is frame-weighted by construction).
 
 It lives in ``metrics`` rather than ``evaluation`` on purpose: both the offline
@@ -35,7 +35,7 @@ Pair = tuple[np.ndarray, np.ndarray]
 
 
 @dataclass(frozen=True)
-class ReferenceAlignedCues:
+class AlignedPairs:
     """One track's aligned ``(prediction, truth)`` pairs, ready to pool and score.
 
     ``onset`` is always present. ``voicing`` is ``None`` for an encoder with no
@@ -54,7 +54,7 @@ def _pool(pairs: list[Pair]) -> Pair:
     return preds, truths
 
 
-def score_cues(tracks: Sequence[ReferenceAlignedCues]) -> list[MetricResult]:
+def score_cues(tracks: Sequence[AlignedPairs]) -> list[MetricResult]:
     """Score whichever channels every track supplies, pooled across tracks.
 
     Pure given ``tracks`` -- no encoder, no dataset, no audio -- so the offline harness
@@ -66,7 +66,7 @@ def score_cues(tracks: Sequence[ReferenceAlignedCues]) -> list[MetricResult]:
     results: list[MetricResult] = []
 
     onset_pred, onset_true = _pool([t.onset for t in tracks])
-    results.append(OnsetPR().calculate(onset_true, onset_pred))
+    results.append(OnsetPR().compute(onset_true, onset_pred))
 
     # Filter-then-count rather than `all(... is not None)` then re-read: the two
     # express the same "every track carries it" rule, but this one leaves the list
@@ -75,11 +75,11 @@ def score_cues(tracks: Sequence[ReferenceAlignedCues]) -> list[MetricResult]:
     voicings = [t.voicing for t in tracks if t.voicing is not None]
     if len(voicings) == len(tracks):
         voi_pred, voi_true = _pool(voicings)
-        results.append(VoicingAUROC().calculate(voi_true, voi_pred))
+        results.append(VoicingAUROC().compute(voi_true, voi_pred))
 
     pitches = [t.pitch for t in tracks if t.pitch is not None]
     if len(pitches) == len(tracks):
         pitch_est, pitch_ref = _pool(pitches)
-        results.append(PitchAccuracy().calculate(pitch_ref, pitch_est))
+        results.append(PitchAccuracy().compute(pitch_ref, pitch_est))
 
     return results

@@ -1,7 +1,7 @@
 """Cached validation for the async validator: note-level and cues-level.
 
 The async eval is dominated by pyin, but pyin's pitch contour is fixed across
-checkpoints -- only the onset/voicing model changes. ``OnsetValidator`` runs pyin
+checkpoints -- only the onset/voicing model changes. ``CheckpointValidator`` runs pyin
 (and the CQT) over the val tracks *once* at construction and holds the results, so
 each subsequent score is just a model forward and the scoring -- seconds, not minutes.
 That is what makes async validation every few epochs cheap enough to leave on.
@@ -25,7 +25,7 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset
 from stemify.features import FrameFeatures, extract_features, stack_channels
-from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues, score_notes
+from stemify.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.notes import NoteEvent
 from stemify.pitch import PyinPitch
 from stemify.serde import features_npy
@@ -44,7 +44,7 @@ EncodeFn = Callable[[Contour, FrameFeatures], Cues]
 
 
 @dataclass
-class ValExample:
+class ValItem:
     """One val track, everything fixed across checkpoints precomputed.
 
     FrameFeatures are held either in memory (``features``, e.g. tests or the no-cache
@@ -65,7 +65,7 @@ class ValExample:
     def load_features(self) -> FrameFeatures:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
         read is transient -- freed after each score -- so memory stays flat over the
-        run. Each ``feature_paths`` entry is a TrackExample npz; the CQT is its .npy
+        run. Each ``feature_paths`` entry is a CachedItem npz; the CQT is its .npy
         sidecar. Several are stacked into the model's channel axis, matching how the
         training loader assembles a window."""
         if self.features is not None:
@@ -79,7 +79,7 @@ class ValExample:
 
 def score_examples(
     segment: SegmentFn,
-    examples: Sequence[ValExample],
+    examples: Sequence[ValItem],
 ) -> dict[str, float]:
     """Score a segmentation function over precomputed val examples: for each, hand
     its contour + cached CQT to ``segment`` and compare the notes it returns to the
@@ -87,7 +87,7 @@ def score_examples(
 
     The validator owns no segmentation logic -- it just calls the function it was
     given (typically a decoder over a checkpoint's ``LearnedEncoder.encode_features``,
-    the same encoder/decoder pair deployment composes into a ``Segmenter``), so how
+    the same encoder/decoder pair deployment composes into a ``Transcriber``), so how
     notes are made lives entirely there and eval can't drift from deploy. Pure given
     ``examples`` and ``segment``."""
     refs: list[list[NoteEvent]] = []
@@ -124,7 +124,7 @@ def score_examples(
 
 def score_cues_examples(
     encode: EncodeFn,
-    examples: Sequence[ValExample],
+    examples: Sequence[ValItem],
 ) -> list[MetricResult]:
     """Cues-level (encoder) quality over precomputed val examples: onset-curve and
     voicing-head, both threshold-free, in one model pass per track.
@@ -138,7 +138,7 @@ def score_cues_examples(
     ``score_examples`` this takes a callable, not a model, so the validator stays
     model-agnostic; the shared ``metrics.frame.scoring.score_cues`` keeps it from drifting from
     the offline harness."""
-    tracks: list[ReferenceAlignedCues] = []
+    tracks: list[AlignedPairs] = []
     for ex in examples:
         cues = encode(ex.contour, ex.load_features())
         onset_true = onset_targets(
@@ -147,11 +147,11 @@ def score_cues_examples(
         voicing = None
         if cues.voicing is not None and ex.voicing_target is not None:
             voicing = (cues.voicing, ex.voicing_target)
-        tracks.append(ReferenceAlignedCues(onset=(cues.onset, onset_true), voicing=voicing))
+        tracks.append(AlignedPairs(onset=(cues.onset, onset_true), voicing=voicing))
     return score_cues(tracks)
 
 
-class OnsetValidator:
+class CheckpointValidator:
     """Precompute pyin contours + CQT + reference notes once; score models cheaply."""
 
     def __init__(
@@ -183,7 +183,7 @@ class OnsetValidator:
             # that condition. Ordered per track, channel 0 first.
             per_track = condition.channel_paths(dataset, cache)
 
-        self.examples: list[ValExample] = []
+        self.examples: list[ValItem] = []
         for i, item in enumerate(dataset):
             # The contour describes channel 0: it is the audio being transcribed,
             # and the context channels are never pitch-tracked.
@@ -212,7 +212,7 @@ class OnsetValidator:
                 fpaths = ()
                 contour = estimator.estimate(primary)
             self.examples.append(
-                ValExample(
+                ValItem(
                     frame_times=frame_times,
                     contour=contour,
                     notes=item.reference_notes(),

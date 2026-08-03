@@ -69,8 +69,8 @@ harness scores." Medium effort, low risk. Depends on nothing; pairs naturally wi
 
 ### #1 — Unify the cache  ✅ DONE (A: 885cecc; B + `Cache`)
 **A:** `stemify/atomic.py` (shared `atomic_write`) + `stemify/serde.py` (formats;
-`TrackExample` moved here) + `cache.py` as pure policy. Fixed the non-atomic
-`TrackExample.save` corruption bug.
+`CachedItem` moved here) + `cache.py` as pure policy. Fixed the non-atomic
+`CachedItem.save` corruption bug.
 
 **B:** features are content-addressed on `(features.SIGNATURE, resolved_audio_path)`,
 matching `contour`/`separation`; the `cache_dir/<split>/<tag>` partitioning is gone.
@@ -81,7 +81,7 @@ a stem-tag special case.
 
 **The `Cache(root)` object earned its keep** (the conditional this item left open). It
 removed 9 cache-path parameters across 7 signatures — `SequenceDataset`,
-`OnsetValidator` and `build_validators` each took two — and moved layout out of
+`CheckpointValidator` and `build_validators` each took two — and moved layout out of
 `train.py`, which had been hand-building five subdirectories. It lives at
 **`stemify/cache.py`**, not under `training/`: the eval harness runs the same
 transforms over the same corpora and was recomputing pyin and the CQT every launch
@@ -94,7 +94,7 @@ keeps the dependency one-way (`cache` imports `transforms`, never the reverse) s
 light audio path never pulls the cache in.
 
 Two things fixed in passing: the targets backfill in `examples.py` wrote its npz
-non-atomically (the same corruption class A fixed for `TrackExample.save`), and
+non-atomically (the same corruption class A fixed for `CachedItem.save`), and
 `Identity.cache_path` inherited a digest path naming a `.flac` that is never written —
 harmless while only `apply` used it, wrong once it doubles as the resolved-audio key.
 
@@ -107,7 +107,7 @@ Original design notes:
 - **The transforms/Demucs cache** (`DemucsSeparator` writes FLAC with its own
   atomic-write) is a *third* cache outside `cache.py`.
 - **Atomic write** is implemented twice (`cached_f0`, DemucsSeparator) and *not* used by
-  `TrackExample.save`.
+  `CachedItem.save`.
 
 **Action:** a single `atomic_savez`/`atomic_write` primitive + one documented keying
 convention, adopted by all three. This is where a small stateful `Cache(root)` object
@@ -155,8 +155,8 @@ smell: `build_example`'s per-head `if "onset"/"voicing"/"pitch"` chain. Replace 
 priority, small.
 
 ### Eval-harness redesign; delete `segmentation/`  ✅ DONE (cf7ceeb)
-Note-eval now scores a `Segmenter` directly -- **no `LearnedBaseline` class**; the
-trained model *is* a `Segmenter(LearnedEncoder(ckpt), decoder)`. `segmentation/`
+Note-eval now scores a `Transcriber` directly -- **no `LearnedBaseline` class**; the
+trained model *is* a `Transcriber(LearnedEncoder(ckpt), decoder)`. `segmentation/`
 deleted; coverage migrated to `tests/decoders/test_group_contour.py`. Dropped the
 `Transcriber` Protocol / native adapter (no baseline implements `predict_notes` --
 would be dead code; add when one does). Frame harness + `baselines/` left as the

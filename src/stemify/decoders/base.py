@@ -6,7 +6,7 @@ into notes. "Decoding" is the literature's term for turning frame-level emission
 into a discrete sequence (Viterbi, CTC, greedy decoding); greedy-vs-global is the
 standard dichotomy, and it is exactly the two implementations here:
 
-  - ``HeuristicDecoder`` -- greedy. Peak-pick the onset curve, threshold the voicing
+  - ``GreedyDecoder`` -- greedy. Peak-pick the onset curve, threshold the voicing
     curve, split the contour at every cue (rest, pitch change, onset), then a merge
     pass rejoins same-pitch fragments a spurious cue split. The merge is a *repair*
     for the greedy pass's local mistakes.
@@ -16,7 +16,7 @@ standard dichotomy, and it is exactly the two implementations here:
 
 Decoders never invent pitch -- it comes from ``cues.contour``. They are siblings
 under one interface so the same ``Cues`` can be decoded either way, and so the
-trainable ``SemiCRFDecoder`` can slot in where the heuristic sits.
+trainable ``SemiCRFDecoder`` can slot in where the greedy one sits.
 """
 
 from abc import ABC, abstractmethod
@@ -45,7 +45,7 @@ class Decoder(ABC):
         that has to be removed later.
 
         Raising here instead would push the branch onto every caller, and would demand
-        an implementation from ``HeuristicDecoder``, where there is nothing to gain:
+        an implementation from ``GreedyDecoder``, where there is nothing to gain:
         it is numpy and scipy, with no per-call launch overhead to amortise. The
         decoder that *does* gain is the semi-CRF, whose DP is launch-bound and runs at
         a few hundred elements per step -- so batching it is worth roughly the batch

@@ -47,7 +47,7 @@ from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.features import SIGNATURE as CQT_SIGNATURE
 from stemify.features import extract_features
 from stemify.pitch import PitchEstimator
-from stemify.serde import TrackExample, load_contour, save_contour
+from stemify.serde import CachedItem, load_contour, save_contour
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
@@ -123,7 +123,7 @@ class Cache:
         transform: AudioTransform | None = None,
         role: str = "bass",
     ) -> list[Path]:
-        """Compute and cache each track's CQT as a target-less ``TrackExample``;
+        """Compute and cache each track's CQT as a target-less ``CachedItem``;
         return the cache paths in dataset order.
 
         The primitive both training paths build on: the frame path layers per-frame
@@ -150,7 +150,7 @@ class Cache:
             path = self.feature_path(transform.cache_path(source))
             if not path.exists():
                 feats = extract_features(transform.apply(source))
-                TrackExample(item.name, feats.values, {}, feats.frame_times).save(path)
+                CachedItem(item.name, feats.values, {}, feats.frame_times).save(path)
                 computed += 1
             paths.append(path)
             # Otherwise silent for hours; a heartbeat so a long separation+CQT pass is

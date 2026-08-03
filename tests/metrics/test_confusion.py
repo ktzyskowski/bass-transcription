@@ -19,7 +19,7 @@ N_CLASSES = MIDI_MAX - MIDI_MIN + 1  # 45
 
 
 def result(true, pred):
-    return PitchConfusion().calculate(
+    return PitchConfusion().compute(
         np.array(true, dtype=float), np.array(pred, dtype=float)
     )
 
@@ -76,4 +76,4 @@ def test_matrix_axes_are_fixed_size():
 
 def test_misaligned_arrays_are_rejected():
     with pytest.raises(ValueError):
-        PitchConfusion().calculate(np.array([A2, A2]), np.array([A2]))
+        PitchConfusion().compute(np.array([A2, A2]), np.array([A2]))

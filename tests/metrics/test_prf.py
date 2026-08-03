@@ -14,7 +14,7 @@ from stemify.metrics.note.prf import PRF
 def test_single_track(note):
     refs = [[note(0.0, 1.0, 40), note(1.0, 2.0, 45)]]
     ests = [[note(0.0, 1.0, 40), note(1.0, 2.0, 45), note(3.0, 3.5, 50)]]  # +1 phantom
-    s = PRF().calculate(refs, ests).scalars
+    s = PRF().compute(refs, ests).scalars
     assert (s["tp"], s["fp"], s["fn"]) == (2, 1, 0)
     assert s["precision"] == 2 / 3
     assert s["recall"] == 1.0
@@ -24,7 +24,7 @@ def test_single_track(note):
 def test_pooling_sums_counts_across_tracks(note):
     refs = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50)]]
     ests = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50), note(2.0, 2.5, 55)]]
-    s = PRF().calculate(refs, ests).scalars
+    s = PRF().compute(refs, ests).scalars
     assert (s["tp"], s["fp"], s["fn"]) == (2, 1, 0)
 
 
@@ -33,7 +33,7 @@ def test_per_track_counts_are_emitted_and_sum_to_the_pooled_totals(note):
     # be in input order and sum (column-wise) to the pooled tp/fp/fn.
     refs = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50)]]
     ests = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50), note(2.0, 2.5, 55)]]
-    result = PRF().calculate(refs, ests)
+    result = PRF().compute(refs, ests)
     per_item = result.arrays["per_item_counts"]
     assert per_item.shape == (2, 3)
     assert list(per_item[0]) == [1, 0, 0]   # track 0: one true positive
@@ -43,7 +43,7 @@ def test_per_track_counts_are_emitted_and_sum_to_the_pooled_totals(note):
 
 
 def test_empty_dataset_has_no_per_track_rows():
-    assert PRF().calculate([], []).arrays["per_item_counts"].shape == (0, 3)
+    assert PRF().compute([], []).arrays["per_item_counts"].shape == (0, 3)
 
 
 def test_pooling_is_count_weighted_not_track_averaged(note):
@@ -55,7 +55,7 @@ def test_pooling_is_count_weighted_not_track_averaged(note):
     a_est = list(a_ref)
     b_ref = [note(0.0, 1.0, 50)]
     b_est = [note(5.0, 5.5, 55)]  # wrong note, real one missed
-    s = PRF().calculate([a_ref, b_ref], [a_est, b_est]).scalars
+    s = PRF().compute([a_ref, b_ref], [a_est, b_est]).scalars
     assert (s["tp"], s["fp"], s["fn"]) == (3, 1, 1)
     assert s["precision"] == 0.75
     assert s["recall"] == 0.75
@@ -63,18 +63,18 @@ def test_pooling_is_count_weighted_not_track_averaged(note):
 
 
 def test_empty_dataset_is_zero_not_crash():
-    s = PRF().calculate([], []).scalars
+    s = PRF().compute([], []).scalars
     assert (s["tp"], s["fp"], s["fn"]) == (0, 0, 0)
     assert (s["precision"], s["recall"], s["f1"]) == (0.0, 0.0, 0.0)
 
 
 def test_all_phantoms_zero_precision(note):
-    s = PRF().calculate([[]], [[note(0.0, 1.0, 40)]]).scalars
+    s = PRF().compute([[]], [[note(0.0, 1.0, 40)]]).scalars
     assert (s["tp"], s["fp"], s["fn"]) == (0, 1, 0)
     assert s["precision"] == 0.0
 
 
 def test_result_name_and_render(note):
-    result = PRF().calculate([[note(0.0, 1.0, 40)]], [[note(0.0, 1.0, 40)]])
+    result = PRF().compute([[note(0.0, 1.0, 40)]], [[note(0.0, 1.0, 40)]])
     assert result.name == "note-prf"
     assert "F1" in result.render()

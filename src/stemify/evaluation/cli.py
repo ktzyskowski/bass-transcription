@@ -11,7 +11,7 @@
 This module is only argument parsing. The work is:
 
     CuesEvaluation(dataset, encoder).run() -> CuesReport    (--level cues)
-    NoteEvaluation(dataset, Segmenter(encoder, decoder)).run() -> NoteReport  (--level note)
+    NoteEvaluation(dataset, Transcriber(encoder, decoder)).run() -> NoteReport  (--level note)
 
 Both levels score the same encoder -- ``pyin`` is the DSP floor (``ClassicalEncoder``),
 ``learned`` a trained ``CueNet`` (``LearnedEncoder``, needs ``--checkpoint``).
@@ -28,14 +28,14 @@ from stemify.data.base import Dataset
 from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
-from stemify.decoders.heuristic import DSP_PITCH_SPLIT_SEMITONES, HeuristicDecoder
+from stemify.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
 from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.encoders.base import Encoder
 from stemify.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
-from stemify.segmenter import Segmenter
+from stemify.transcriber import Transcriber
 from stemify.training.checkpoint import Checkpoint, load_cuenet
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
@@ -44,7 +44,7 @@ ENCODERS = ("pyin", "learned")
 # Decoders available to the note harness. The heuristic is the DSP floor; semicrf is
 # the learned global decoder, whose potentials must be restored from the checkpoint --
 # see ``build_decoder``.
-DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
+DECODERS = {"heuristic": GreedyDecoder, "semicrf": SemiCRFDecoder}
 
 
 def build_encoder(args: argparse.Namespace) -> Encoder:
@@ -72,7 +72,7 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
     DSP floor has to stay the floor it always was, or every comparison against it
     silently improves. For a ``LearnedEncoder`` the same rule overrides a ~7 ms-accurate
     onset with a ~58 ms-late pitch transition, which is why it defaults off; see
-    ``heuristic.PITCH_SPLIT_SEMITONES``.
+    ``greedy.PITCH_SPLIT_SEMITONES``.
 
     The semicrf path does not have that setting, but it has a harder requirement: its
     potentials *are* the model. A default-constructed ``SemiCRFDecoder`` has ``w_on=1``
@@ -83,8 +83,8 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
     """
     if args.decoder == "heuristic":
         if args.encoder == "pyin":
-            return HeuristicDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
-        return HeuristicDecoder()
+            return GreedyDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
+        return GreedyDecoder()
 
     if args.checkpoint is None:
         raise ValueError(
@@ -196,7 +196,7 @@ def main() -> None:
         # below here asks only for what `Report` promises (`render`, `write_json`).
         report: Report
         if args.level == "note":
-            transcriber = Segmenter(encoder, build_decoder(args))
+            transcriber = Transcriber(encoder, build_decoder(args))
             report = NoteEvaluation(dataset, transcriber, transform=transform).run()
         else:
             report = CuesEvaluation(dataset, encoder, transform=transform).run()

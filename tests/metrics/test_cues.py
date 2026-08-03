@@ -6,7 +6,7 @@ offline harness and the async validator both call, so this pins it once.
 
 import numpy as np
 
-from stemify.metrics import ReferenceAlignedCues, score_cues
+from stemify.metrics import AlignedPairs, score_cues
 
 
 def _names(results):
@@ -21,7 +21,7 @@ def _perfect_onset():
 def test_all_three_channels_score_when_supplied():
     pred_true = np.array([0, 0, 1, 1, 0, 0], dtype=float)
     hz = np.array([0, 110.0, 110.0, 110.0, 0, 0])
-    track = ReferenceAlignedCues(
+    track = AlignedPairs(
         onset=_perfect_onset(),
         voicing=(pred_true.copy(), pred_true),
         pitch=(hz.copy(), hz),
@@ -34,14 +34,14 @@ def test_all_three_channels_score_when_supplied():
 
 
 def test_voicing_omitted_without_a_head():
-    results = score_cues([ReferenceAlignedCues(onset=_perfect_onset())])
+    results = score_cues([AlignedPairs(onset=_perfect_onset())])
     assert "voicing_auroc" not in _names(results)
     assert "onset_pr" in _names(results)
 
 
 def test_pitch_omitted_without_a_reference_contour():
     v = np.array([0, 1, 1, 0, 0, 0], dtype=float)
-    results = score_cues([ReferenceAlignedCues(onset=_perfect_onset(), voicing=(v.copy(), v))])
+    results = score_cues([AlignedPairs(onset=_perfect_onset(), voicing=(v.copy(), v))])
     assert "pitch-accuracy" not in _names(results)
     assert {"onset_pr", "voicing_auroc"} <= _names(results)
 
@@ -50,8 +50,8 @@ def test_channel_scored_only_when_every_track_supplies_it():
     # One track has voicing, another does not -> voicing is not pooled (never mixes
     # present and absent into one silently-partial score).
     v = np.array([0, 1, 1, 0, 0, 0], dtype=float)
-    with_v = ReferenceAlignedCues(onset=_perfect_onset(), voicing=(v.copy(), v))
-    without_v = ReferenceAlignedCues(onset=_perfect_onset())
+    with_v = AlignedPairs(onset=_perfect_onset(), voicing=(v.copy(), v))
+    without_v = AlignedPairs(onset=_perfect_onset())
     assert "voicing_auroc" not in _names(score_cues([with_v, without_v]))
 
 

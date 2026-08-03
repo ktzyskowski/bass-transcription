@@ -1,6 +1,6 @@
 """Cached validation scoring: given precomputed examples and a model, does it
 produce sane note-level metrics. Uses a fake onset model and synthetic examples,
-so no pyin or audio -- the OnsetValidator's own pyin caching is I/O, tested by
+so no pyin or audio -- the CheckpointValidator's own pyin caching is I/O, tested by
 the smoke run, not here.
 """
 
@@ -9,11 +9,11 @@ import torch
 from torch import nn
 
 from stemify.contour import Contour
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.notes import NoteEvent
 from stemify.training.validation import (
-    ValExample,
+    ValItem,
     score_cues_examples,
     score_examples,
 )
@@ -22,10 +22,10 @@ N_BINS = 8
 
 
 def _segment(model):
-    """The segment step the validator scores: the LearnedEncoder + HeuristicDecoder
+    """The segment step the validator scores: the LearnedEncoder + GreedyDecoder
     pair deployment composes, fed cached (contour, features) -- the same path."""
     encoder = LearnedEncoder(model, device="cpu")
-    decoder = HeuristicDecoder()
+    decoder = GreedyDecoder()
 
     def segment(contour, features):
         return decoder.decode(encoder.encode_features(contour, features))
@@ -79,7 +79,7 @@ def _example(n_frames, hop, held_pitch, onset_frames):
     features = np.random.rand(N_BINS, n_frames).astype(np.float32)  # (n_bins, T) CQT
     notes = [NoteEvent(onset=frame_times[f], offset=frame_times[f] + 0.2,
                        midi_pitch=held_pitch) for f in onset_frames]
-    ex = ValExample(frame_times=frame_times, contour=contour, notes=notes,
+    ex = ValItem(frame_times=frame_times, contour=contour, notes=notes,
                     features=features)
     return ex, frame_times
 

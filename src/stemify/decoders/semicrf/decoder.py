@@ -1,10 +1,10 @@
 """``SemiCRFDecoder``: the ``Decoder`` façade wiring scorer + evidence + DP.
 
-Where ``HeuristicDecoder`` greedily peak-picks the onset curve and thresholds the
+Where ``GreedyDecoder`` greedily peak-picks the onset curve and thresholds the
 voicing curve, the semi-Markov CRF decodes the *whole* track at once: it finds the
 single highest-scoring segmentation of the frame grid into ``note`` and ``rest`` spans.
 There is no merge pass -- a learned duration potential makes fragmentation globally
-costly, so the over-segmentation the heuristic repairs after the fact is instead priced
+costly, so the over-segmentation the greedy decoder repairs after the fact is instead priced
 into the objective and never produced.
 
 Two faces over the same recurrence:
@@ -16,7 +16,7 @@ Two faces over the same recurrence:
     gradient reaches the encoder; with a numpy ``Cues`` it is an inference-only score.
 
 Pitch is never invented: it is read from the contour after decoding, exactly as the
-heuristic does. See ``docs/semi-crf.md``, which carries the theory and a ledger of
+greedy decoder does. See ``docs/semi-crf.md``, which carries the theory and a ledger of
 where this implementation departs from it.
 """
 

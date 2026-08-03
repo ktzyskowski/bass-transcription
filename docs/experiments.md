@@ -345,7 +345,7 @@ the bichannel result below is invisible without it.
 
 Feed the encoder two stacked CQTs: the bass to transcribe in channel 0, the mixture it
 came from in channel 1. 37 train tracks / 19 val tracks, 10 epochs, frame BCE +
-`HeuristicDecoder`, best-F1 epoch reported. Each pair is on an **identical track set**
+`GreedyDecoder`, best-F1 epoch reported. Each pair is on an **identical track set**
 (see "the control that was nearly missed" below).
 
 | condition | ch | F1 | P | R | FP | frag | rest | offpitch | onset AP |
@@ -419,7 +419,7 @@ so the residual is dominated by *spurious notes*, not missed ones and not pitch.
 
 **And the decoder, not the emissions, is what wastes the bichannel gain.** Onset AP
 rose 11.3 points; pitch-blind note F1 rose **0.24** points. Sweeping
-`HeuristicDecoder.onset_threshold` across 0.1–0.7 moves demucs pitch-blind F1 by less
+`GreedyDecoder.onset_threshold` across 0.1–0.7 moves demucs pitch-blind F1 by less
 than 0.005, with the 0.5 default already at optimum — so this is not a miscalibrated
 threshold. Peak-pick + voicing-threshold + min-gap grouping simply cannot convert a
 better-ordered onset curve into better notes.
@@ -770,7 +770,7 @@ compose rather than compete, and any of them can be run on top of the others. Wh
 differs is the error mass each can reach:
 
 - **The semi-CRF changes only how cues become notes.** Pitch is read off the pyin
-  contour by `HeuristicDecoder` and `SemiCRFDecoder` alike; the CRF never invents it.
+  contour by `GreedyDecoder` and `SemiCRFDecoder` alike; the CRF never invents it.
   So its reachable mass is the over-segmentation bucket alone — and per the error
   decomposition above, the residual after tcn-v2 is *over-segmentation **plus** pyin
   pitch/octave errors*. It is powerless on the second half. Config A's measured upside

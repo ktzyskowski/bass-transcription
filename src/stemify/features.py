@@ -41,7 +41,7 @@ HOP_LENGTH = 256  # ~11.6 ms per frame at 22.05 kHz
 # -- ``group_contour`` works on whichever grid the contour arrived on, so a note
 # boundary from a pyin contour is quantised to 23.2 ms against a 50 ms match tolerance.
 # That interaction is what made the pitch-split cue a liability (see
-# decoders/heuristic.PITCH_SPLIT_SEMITONES); the learned pitch head removes it by
+# decoders/greedy.PITCH_SPLIT_SEMITONES); the learned pitch head removes it by
 # landing the contour on *this* grid.
 TOP_DB = 80.0     # dB floor for the log-magnitude conversion
 

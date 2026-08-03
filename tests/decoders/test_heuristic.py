@@ -1,4 +1,4 @@
-"""HeuristicDecoder / group_contour -- the greedy decode core, no audio.
+"""GreedyDecoder / group_contour -- the greedy decode core, no audio.
 
 group_contour is exercised with synthetic contours and hand-picked cues; the decoder
 is exercised through Cues (a per-frame onset curve + optional voicing curve), so the
@@ -9,7 +9,7 @@ import numpy as np
 
 from stemify.contour import Contour
 from stemify.cues import Cues
-from stemify.decoders.heuristic import HeuristicDecoder, group_contour
+from stemify.decoders.greedy import GreedyDecoder, group_contour
 
 T = 100
 TIMES = np.arange(T) * 0.01  # 10 ms grid, 1 s
@@ -33,7 +33,7 @@ def test_decoder_peak_picks_the_onset_curve():
     onset = np.zeros(T, dtype=np.float32)
     onset[50] = 1.0  # a single onset spike -> one same-pitch split
     cues = Cues(contour=_held(), onset=onset, frame_times=TIMES, voicing=None)
-    notes = HeuristicDecoder(merge_gap_s=None).decode(cues)
+    notes = GreedyDecoder(merge_gap_s=None).decode(cues)
     assert len(notes) == 2
     assert abs(notes[1].onset - 0.5) < 0.02  # the split lands at the spike
 
@@ -47,7 +47,7 @@ def test_decoder_thresholds_the_voicing_curve_into_rests():
         contour=_held(), onset=np.zeros(T, dtype=np.float32),
         frame_times=TIMES, voicing=voicing,
     )
-    assert len(HeuristicDecoder(merge_gap_s=None).decode(cues)) == 2
+    assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 2
 
 
 def test_decoder_without_voicing_falls_back_to_contour():
@@ -58,4 +58,4 @@ def test_decoder_without_voicing_falls_back_to_contour():
         contour=Contour(times=TIMES, freqs=freqs),
         onset=np.zeros(T, dtype=np.float32), frame_times=TIMES, voicing=None,
     )
-    assert len(HeuristicDecoder(merge_gap_s=None).decode(cues)) == 2
+    assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 2

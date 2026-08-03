@@ -14,13 +14,13 @@ import argparse
 from pathlib import Path
 
 from stemify.cache import Cache
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
 from stemify.training.conditions import CONDITIONS
-from stemify.training.validation import OnsetValidator
+from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"
 IGNORE_PITCH = 1e6  # cents: any pitch matches, so matching is onset-only
@@ -40,14 +40,14 @@ def main() -> None:
     p.add_argument("--splits", default="validation,test")
     args = p.parse_args()
 
-    decoder = HeuristicDecoder()
+    decoder = GreedyDecoder()
     print(f"{'arm':<12} {'condition':<21} {'split':<11} {'recall':>8} {'prec':>7} "
           f"{'blind F1':>9} {'strict F1':>10} {'pitch gap':>10}")
     for name, tag in ARMS:
         condition = CONDITIONS[tag]
         encoder = LearnedEncoder(load_cuenet(Path(f"data/checkpoints/{name}.pt")))
         for split in args.splits.split(","):
-            v = OnsetValidator(
+            v = CheckpointValidator(
                 condition.dataset(ROOT, split, args.limit), condition, cache=Cache("data/cache")
             )
             tp = fp = fn = stp = sfp = sfn = 0

@@ -1,8 +1,8 @@
-"""``FrameRecipe``: per-frame BCE over fixed windows, grouped by the heuristic.
+"""``FrameRecipe``: per-frame BCE over fixed windows, grouped by the greedy decoder.
 
 The paradigm that produced tcn-v1/tcn-v2 and every result in ``docs/experiments.md``
 outside the semi-CRF section. Windows are cheap and plentiful, so this is the path
-with the gradient steps; the cue->note step is the greedy ``HeuristicDecoder``.
+with the gradient steps; the cue->note step is the greedy ``GreedyDecoder``.
 """
 
 from collections.abc import Mapping, Sequence
@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
@@ -36,7 +36,7 @@ HOP_FRAMES = 128
 
 
 class FrameRecipe(Recipe):
-    """Per-frame BCE over fixed windows; the heuristic groups cues into notes."""
+    """Per-frame BCE over fixed windows; ``GreedyDecoder`` groups cues into notes."""
 
     name = "frame"
 
@@ -197,4 +197,4 @@ class FrameRecipe(Recipe):
         return self._loader(tracks, config, shuffle=False)
 
     def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
-        return HeuristicDecoder()
+        return GreedyDecoder()

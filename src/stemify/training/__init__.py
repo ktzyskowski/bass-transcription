@@ -18,6 +18,6 @@ joint multi-task. Voicing follows once the reference voicing gate is validated
 against MDB's annotations; pitch only if it beats pyin, which today it does not.
 
 Every head is evaluated by the existing note-level harness: a learned head drops
-in as a ``Segmenter`` and is scored by ``PRF`` and ``Fragmentation`` against the
-same DSP floor the heuristic set.
+in as a ``Transcriber`` and is scored by ``PRF`` and ``Fragmentation`` against the
+same DSP floor the greedy decoder set.
 """

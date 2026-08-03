@@ -3,7 +3,7 @@
 Exercised without audio by passing hand-picked onsets/voiced masks, so the boundary
 logic (split at rest/pitch-change/onset), the same-pitch merge repair, and the
 peak-pick are tested in isolation. Migrated from the old ``segmentation`` tests when
-the grouping moved into ``decoders.heuristic``; the merge cases use a generous gap
+the grouping moved into ``decoders.greedy``; the merge cases use a generous gap
 (0.05 s) so they assert the *logic*, not a float boundary.
 """
 
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from stemify.contour import Contour
-from stemify.decoders.heuristic import (
+from stemify.decoders.greedy import (
     DSP_PITCH_SPLIT_SEMITONES,
     MERGE_GAP_S,
     PITCH_SPLIT_SEMITONES,

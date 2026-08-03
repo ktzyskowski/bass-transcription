@@ -15,14 +15,14 @@ import sys
 from pathlib import Path
 
 from stemify.cache import Cache
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.metrics.note.fragmentation import Fragmentation
 from stemify.metrics.note.prf import PRF
 from stemify.metrics.note.scoring import score_notes
 from stemify.training.conditions import CONDITIONS
-from stemify.training.validation import OnsetValidator
+from stemify.training.validation import CheckpointValidator
 
 ROOT = "/home/ktzys/dev/tabgen/stemify-ml/data/raw/slakh2100"
 CACHE = Cache("/home/ktzys/dev/tabgen/stemify-ml/data/cache")
@@ -32,10 +32,10 @@ print(f"{'condition':12} {'F1':>8} {'F1 no-pitch':>12} {'gain':>8} {'pitch share
 for tag, ckpt in [a.split("=") for a in sys.argv[1:]]:
     condition = CONDITIONS[tag]
     model = load_cuenet(Path(ckpt))
-    validator = OnsetValidator(
+    validator = CheckpointValidator(
         condition.dataset(ROOT, "validation", 20), condition, cache=CACHE
     )
-    encoder, decoder = LearnedEncoder(model, device="cpu"), HeuristicDecoder()
+    encoder, decoder = LearnedEncoder(model, device="cpu"), GreedyDecoder()
 
     refs, ests = [], []
     for ex in validator.examples:

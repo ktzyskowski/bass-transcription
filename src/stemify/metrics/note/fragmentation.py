@@ -44,7 +44,7 @@ class FragmentationResult(MetricResult):
 class Fragmentation(NoteMetric):
     name = "fragmentation"
 
-    def calculate(
+    def compute(
         self,
         references: list[list[NoteEvent]],
         estimates: list[list[NoteEvent]],

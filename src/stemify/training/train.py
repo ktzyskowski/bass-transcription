@@ -18,7 +18,7 @@ separation; ``separated`` runs demucs over the train set first, cached.
 Validation runs on every deployment condition of the model's own channel width
 (``--val-sources``), not just clean stems. Cheap per-frame val loss drives early
 stopping inline, while ``AsyncValidationCallback`` scores each checkpoint through the
-real ``LearnedEncoder`` + ``HeuristicDecoder`` pair -- one ``OnsetValidator`` per
+real ``LearnedEncoder`` + ``GreedyDecoder`` pair -- one ``CheckpointValidator`` per
 condition, each caching its contours so a score is a model forward rather than a pyin
 re-run. From that one forward it logs both altitudes to MLflow --
 ``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap, voicing_auroc}``
@@ -42,7 +42,7 @@ from torch.utils.data import DataLoader
 from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.decoders.base import Decoder
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.features import FrameFeatures
 from stemify.notes import NoteEvent
@@ -59,7 +59,7 @@ from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.semicrf.recipe import PITCH_WEIGHT
 from stemify.training.trainer import Trainer
-from stemify.training.validation import OnsetValidator
+from stemify.training.validation import CheckpointValidator
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +114,8 @@ def build_validators(
     val_limit: int,
     conditions: list[str],
     cache: Cache | None = None,
-) -> dict[str, OnsetValidator]:
-    """One ``OnsetValidator`` per condition, keyed by tag. A condition names the
+) -> dict[str, CheckpointValidator]:
+    """One ``CheckpointValidator`` per condition, keyed by tag. A condition names the
     channels the model reads -- exactly what a validator has to reproduce -- so the
     same ``CONDITIONS`` table that defines the *training* conditions defines the
     validation ones.
@@ -134,7 +134,7 @@ def build_validators(
     file ever -- but see ``docs/refactor-plan.md`` before concluding a pool is
     pointless on a given machine."""
     return {
-        tag: OnsetValidator(
+        tag: CheckpointValidator(
             CONDITIONS[tag].dataset(root, "validation", val_limit),
             CONDITIONS[tag],
             cache=cache,
@@ -144,7 +144,7 @@ def build_validators(
 
 
 def _eval_fn(
-    validators: dict[str, OnsetValidator],
+    validators: dict[str, CheckpointValidator],
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,
     build_decoder: Callable[[Mapping[str, Any]], Decoder] | None = None,
@@ -164,10 +164,10 @@ def _eval_fn(
     checkpoint's scores survive as a diffable artifact, not only as metric points.
 
     ``build_decoder(state) -> Decoder`` is the seam the objective varies: the frame
-    heads are grouped by the ``HeuristicDecoder``, while a semi-CRF run must be scored
-    through the potentials in its own snapshot. Defaulting it to the heuristic keeps
+    heads are grouped by the ``GreedyDecoder``, while a semi-CRF run must be scored
+    through the potentials in its own snapshot. Defaulting it to the greedy decoder keeps
     the frame path unchanged, but hardcoding it would mean a semi-CRF run silently
-    reported the *heuristic's* note F1 over its learned cues -- plausible numbers for
+    reported the *greedy decoder's* note F1 over its learned cues -- plausible numbers for
     a model nobody trained.
 
     ``build_model`` is **required and keyword-only**, and is always
@@ -179,7 +179,7 @@ def _eval_fn(
     knows what this run builds, so it is the only thing allowed to build it."""
     if build_decoder is None:
         def build_decoder(_state: Mapping[str, Any]) -> Decoder:
-            return HeuristicDecoder()
+            return GreedyDecoder()
 
     def eval_fn(state: Mapping[str, Any], epoch: int) -> Mapping[str, float]:
         model = build_model()  # the recipe's encoder
@@ -189,7 +189,7 @@ def _eval_fn(
         # potentials that snapshot actually trained -- not a fresh set.
         model.load_state_dict(dict(state["model"]))
         # Wrap the checkpoint once (CPU, off the training device) as the encoder/decoder
-        # pair deployment composes into a Segmenter. The decoder scores notes over the
+        # pair deployment composes into a Transcriber. The decoder scores notes over the
         # encoder's cues; the encoder alone scores its own cues -- one forward, both.
         encoder = LearnedEncoder(model, device="cpu")
         decoder = build_decoder(state)
@@ -334,7 +334,7 @@ def train(
             report_dir=cache_dir / "val_reports",
             log_artifact=lambda p, _e: mlflow.log_artifact(p, artifact_path="validation"),
             # Without these a semi-CRF run would be scored as a freshly-initialised
-            # HeuristicDecoder over its learned cues: plausible numbers, wrong model.
+            # GreedyDecoder over its learned cues: plausible numbers, wrong model.
             build_decoder=recipe.decoder_from,
             build_model=recipe.build_model,
         )
@@ -395,7 +395,7 @@ def main() -> None:
                     help="log a smoothed train loss to MLflow every N steps (0 = off)")
     ap.add_argument("--objective", default="frame", choices=sorted(RECIPES),
                     help="training objective: 'frame' is per-frame BCE over fixed "
-                         "windows grouped by the heuristic; 'semicrf' trains the "
+                         "windows grouped by the greedy decoder; 'semicrf' trains the "
                          "segmental decoder jointly with the encoder, over ordered "
                          "chunks of a track carrying the alpha window between them")
     ap.add_argument("--init-from", type=Path,

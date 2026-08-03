@@ -9,7 +9,7 @@ artifact is a serde here, not a change to the cache.
 Every write goes through ``atomic_write``, so an interrupted save never leaves a
 truncated file that the next run trusts as a cache hit.
 
-``TrackExample`` lives here rather than beside the cache because it *is* a persistence
+``CachedItem`` lives here rather than beside the cache because it *is* a persistence
 container -- its whole reason to exist is the on-disk split-layout below -- so it
 belongs with its format, unlike ``Contour``/``NoteEvent``/``Cues`` which are values
 that happen to be persisted.
@@ -39,7 +39,7 @@ def write_npz(dest: Path, *, compressed: bool, **arrays: npt.ArrayLike) -> None:
 
     Same reason as _write_npy: a handle stops np.savez appending '.npz'.
 
-    ``ArrayLike`` rather than ``ndarray``: ``TrackExample.save`` passes its ``name``
+    ``ArrayLike`` rather than ``ndarray``: ``CachedItem.save`` passes its ``name``
     through here as a ``str``, which ``np.savez`` stores as a 0-d array and ``load``
     reads back with ``str(z["name"])``. That has always worked; the annotation simply
     did not describe it."""
@@ -54,7 +54,7 @@ def write_npz(dest: Path, *, compressed: bool, **arrays: npt.ArrayLike) -> None:
 
 
 def features_npy(npz_path: Path) -> Path:
-    """Sidecar path holding a TrackExample's features as a bare, uncompressed .npy.
+    """Sidecar path holding a CachedItem's features as a bare, uncompressed .npy.
 
     Features live *outside* the compressed npz so a training window can be sliced
     straight off disk via ``mmap_mode='r'`` -- only the ~100 KB actually read pages
@@ -65,7 +65,7 @@ def features_npy(npz_path: Path) -> Path:
 
 
 @dataclass
-class TrackExample:
+class CachedItem:
     """One track's features and per-frame targets, all on ``frame_times``.
 
     ``features`` may be a read-only memmap (``load(mmap=True)``), so slicing a
@@ -91,7 +91,7 @@ class TrackExample:
         )
 
     @classmethod
-    def load(cls, path: Path, mmap: bool = False) -> "TrackExample":
+    def load(cls, path: Path, mmap: bool = False) -> "CachedItem":
         z = np.load(path, allow_pickle=False)
         targets = {
             k[len("target_"):]: z[k] for k in z.files if k.startswith("target_")

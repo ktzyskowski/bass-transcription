@@ -30,7 +30,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.training.semicrf.tracks import (
-    TrackInputs, channel_window, target_windows,
+    TrainItem, channel_window, target_windows,
 )
 
 # Segmentation of one chunk in *window-local* DP indices: (label, start, end).
@@ -133,7 +133,7 @@ class _Track:
     ``exp(NEG - max) == 0``."""
 
     def __init__(
-        self, track: TrackInputs, chunk: int, dmax: int, stride: int, right: int,
+        self, track: TrainItem, chunk: int, dmax: int, stride: int, right: int,
         heads: Sequence[str] = (),
     ) -> None:
         self._examples = track.open(mmap=True)
@@ -189,7 +189,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
 
     **Domain randomisation.** ``items`` may come from several input conditions at once,
     and nothing below this line knows which condition a track came from -- a
-    ``TrackInputs`` is feature paths plus notes, and ``resolve()`` guarantees every
+    ``TrainItem`` is feature paths plus notes, and ``resolve()`` guarantees every
     condition in a run has the same channel width, so the windows stack identically.
     Building the item list is therefore the recipe's job, not this class's; it used to
     take a ``(dataset, condition, cache)`` triple and resolve one condition itself,
@@ -198,7 +198,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
 
     def __init__(
         self,
-        items: Sequence[TrackInputs],
+        items: Sequence[TrainItem],
         *,
         chunk_frames: int,
         dmax: int,
@@ -239,7 +239,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         # edge needs no such margin -- dmax of real context already covers it.
         self.right_context = right_context
 
-    def _shard(self) -> tuple[list[TrackInputs], int]:
+    def _shard(self) -> tuple[list[TrainItem], int]:
         """This worker's tracks, and the id its first stream takes."""
         info = get_worker_info()
         if info is None:

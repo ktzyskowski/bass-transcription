@@ -25,12 +25,12 @@ from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.training.config import TrainConfig
 from stemify.training.frame.dataset import FrameBatch
 from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.semicrf.dataset import ChunkDataset
-from stemify.training.semicrf.tracks import TrackInputs
+from stemify.training.semicrf.tracks import TrainItem
 from stemify.training.trainer import Trainer
 
 N_BINS, HOP_S = 12, 0.0116
@@ -95,17 +95,16 @@ def test_a_non_empty_loader_still_averages_normally():
 # --------------------------------------------------------------------------- #
 # ChunkDataset: the precise diagnosis, where the emptiness originates          #
 # --------------------------------------------------------------------------- #
-def _item(tmp: Path, name: str) -> TrackInputs:
+def _item(tmp: Path, name: str) -> TrainItem:
     path = tmp / f"{name}.npz"
-    TrackExample(
+    CachedItem(
         name,
         np.zeros((N_BINS, N_CQT), dtype=np.float32),
         {},
         np.arange(N_CQT) * HOP_S,
     ).save(path)
-    return TrackInputs(
+    return TrainItem(
         features=(path,),
-        contour=None,
         notes=[NoteEvent(onset=0.1, offset=0.4, midi_pitch=40.0)],
     )
 

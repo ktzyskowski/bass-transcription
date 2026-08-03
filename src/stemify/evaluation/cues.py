@@ -2,7 +2,7 @@
 
     CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ClassicalEncoder()).run()
 
-``NoteEvaluation`` scores a whole ``Segmenter`` -- "did you find the right notes".
+``NoteEvaluation`` scores a whole ``Transcriber`` -- "did you find the right notes".
 This scores the *encoder* alone: given the per-frame ``Cues`` it produces, how good
 is the evidence a decoder has to work with? It is the altitude below the notes, and
 it maps onto the three channels of a ``Cues``:
@@ -36,13 +36,13 @@ from stemify.data.base import Dataset, EvalItem
 from stemify.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
-from stemify.metrics import MetricResult, ReferenceAlignedCues, score_cues
+from stemify.metrics import MetricResult, AlignedPairs, score_cues
 from stemify.sources import Sources
 from stemify.training.labels import onset_targets, voicing_targets
 from stemify.transforms import AudioTransform, Identity
 
 
-def reference_aligned_cues(cues: Cues, item: EvalItem) -> ReferenceAlignedCues:
+def aligned_pairs(cues: Cues, item: EvalItem) -> AlignedPairs:
     """The aligned per-channel pairs for one track: what ``score_cues`` scores.
 
     Onset target is impulses on the frame grid at the reference onsets; voicing target
@@ -59,7 +59,7 @@ def reference_aligned_cues(cues: Cues, item: EvalItem) -> ReferenceAlignedCues:
         voi_true = voicing_targets(reference.times, reference.voiced, cues.frame_times)
         voicing = (cues.voicing, voi_true)
     ref_hz, est_hz = align(reference, cues.contour)
-    return ReferenceAlignedCues(
+    return AlignedPairs(
         onset=(cues.onset, onset_true),
         voicing=voicing,
         pitch=(est_hz, ref_hz),
@@ -131,14 +131,14 @@ class CuesEvaluation:
         self.transform = transform if transform is not None else Identity()
         self.progress = progress
 
-    def _channels(self, item: EvalItem) -> ReferenceAlignedCues:
+    def _channels(self, item: EvalItem) -> AlignedPairs:
         path = self.transform.apply(item.audio())
         cues = self.encoder.encode(Sources(bass=path))
-        return reference_aligned_cues(cues, item)
+        return aligned_pairs(cues, item)
 
     def run(self) -> CuesReport:
         items = list(self.dataset)
-        tracks: list[ReferenceAlignedCues] = []
+        tracks: list[AlignedPairs] = []
         for i, item in enumerate(items, 1):
             tracks.append(self._channels(item))
             if self.progress:

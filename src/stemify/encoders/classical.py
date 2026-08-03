@@ -3,9 +3,9 @@
 Pitch from pyin, onsets from spectral flux, no voicing head -- the baseline a
 learned encoder must beat. The onset channel of the ``Cues`` it returns is a
 per-frame indicator (a spike at each flux-detected onset, on the contour grid),
-which the ``HeuristicDecoder`` peak-picks back to onset times; voicing is left
+which the ``GreedyDecoder`` peak-picks back to onset times; voicing is left
 ``None`` so the decoder falls back to the contour's own ``freqs > 0``. Expressed in
-the new pipeline the old DSP floor is ``Segmenter(ClassicalEncoder(), HeuristicDecoder())``.
+the new pipeline the old DSP floor is ``Transcriber(ClassicalEncoder(), GreedyDecoder())``.
 """
 
 from pathlib import Path

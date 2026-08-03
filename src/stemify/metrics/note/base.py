@@ -101,7 +101,7 @@ def count_matches(
 class NoteMetric(ABC):
     """Scores a dataset of (reference, estimate) note lists into one result.
 
-    One abstract method, ``calculate``, taking the whole dataset as parallel
+    One abstract method, ``compute``, taking the whole dataset as parallel
     lists of per-track note lists (see the module docstring for why the input is
     nested rather than flat). Both tolerances are held on the instance so every
     note metric in a run agrees on what "the same note" means.
@@ -118,7 +118,7 @@ class NoteMetric(ABC):
         self.pitch_tolerance = pitch_tolerance
 
     @abstractmethod
-    def calculate(
+    def compute(
         self,
         references: list[list[NoteEvent]],
         estimates: list[list[NoteEvent]],

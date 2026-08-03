@@ -31,7 +31,7 @@ class VoicingAUROC(FrameMetric):
 
     name = "voicing_auroc"
 
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
         self._check(true, pred)
         labels = true.astype(bool)
         # AUROC is undefined without both classes present (all-voiced or all-rest).

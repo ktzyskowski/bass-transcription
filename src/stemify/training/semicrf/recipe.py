@@ -33,7 +33,7 @@ from stemify.training.frame.recipe import FrameRecipe
 from stemify.training.semicrf import dataset as chunked_ds
 from stemify.training.semicrf.dataset import ChunkBatch
 from stemify.training.semicrf.loss import SemiCRFLoss
-from stemify.training.semicrf.tracks import TrackInputs, track_inputs
+from stemify.training.semicrf.tracks import TrainItem, train_items
 
 # Chunk length in DP frames. ~4.5 s at the decimated hop -- comfortably longer than
 # dmax (115 frames, 4 s), so most spans are scored entirely inside one chunk and only
@@ -224,16 +224,16 @@ class SemiCRFRecipe(Recipe):
         a single keyspace and no collision, and the interleaving it warned about is
         precisely what domain randomisation is.
 
-        Nothing below ``track_inputs`` knows a track's condition -- a ``TrackInputs`` is
+        Nothing below ``train_items`` knows a track's condition -- a ``TrainItem`` is
         feature paths plus notes -- and ``resolve()`` has already rejected a mixed-width
         set, so the windows stack identically. The frame path has always trained on the
         union this way; the structured objective was the odd one out, which made any
         comparison against a frame baseline vary two things at once.
         """
         dmax, right = self._geometry
-        items: list[TrackInputs] = []
+        items: list[TrainItem] = []
         for c in conditions:
-            items += track_inputs(
+            items += train_items(
                 c.dataset(root, split, limit), c, cache, heads=self.aux_heads
             )
         return chunked_ds.ChunkDataset(

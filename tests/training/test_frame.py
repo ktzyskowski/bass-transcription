@@ -13,7 +13,7 @@ import torch
 from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.sources import Sources
 from stemify.training.examples import build_example
 from stemify.training.frame.dataset import FrameWindowDataset, collate
@@ -39,7 +39,7 @@ def test_build_example_aligns_onset_and_voicing():
 
 
 def _save_example(tmp_path, name, features, target):
-    ex = TrackExample(
+    ex = CachedItem(
         name, features.astype(np.float32), {"onset": target.astype(np.float32)},
         np.arange(features.shape[1]) * 0.0116,
     )
@@ -128,7 +128,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     audio.write_text("x")
     cache = Cache(tmp_path / "cache")
     ft = np.arange(8) * 0.0116
-    TrackExample(
+    CachedItem(
         "trk", np.random.rand(5, 8).astype(np.float32),
         {"onset": np.zeros(8, np.float32)}, ft,
     ).save(cache.feature_path(audio))
@@ -158,7 +158,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     # Requesting a head the cache lacks backfills it from the reference alone.
     prepare_examples([_Item()], ["onset", "voicing"], cache, Identity())
 
-    loaded = TrackExample.load(path)
+    loaded = CachedItem.load(path)
     assert "voicing" in loaded.targets                          # added
     assert "onset" in loaded.targets                            # kept
     assert loaded.targets["voicing"][:4].all()                 # voiced first half
@@ -292,7 +292,7 @@ def test_frame_params_report_the_knobs_the_recipe_owns():
 
 
 def test_open_track_cache_is_bounded(tmp_path):
-    # Features are memmapped, but each TrackExample's targets and frame_times are
+    # Features are memmapped, but each CachedItem's targets and frame_times are
     # resident and every DataLoader worker is a fork with its own copy. Unbounded,
     # a worker converges on the whole corpus: a 2-channel pitch run OOM'd a 15 GB
     # host after one epoch. Nothing here checks speed -- only that it stops growing.

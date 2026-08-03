@@ -26,9 +26,9 @@ import pytest
 
 from stemify.contour import Contour
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.training.semicrf.dataset import ChunkDataset
-from stemify.training.semicrf.tracks import TrackInputs
+from stemify.training.semicrf.tracks import TrainItem
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE, CHUNK, DMAX = 3, 40, 30
@@ -47,20 +47,20 @@ def _notes() -> list[NoteEvent]:
     ]
 
 
-def _item(tmp: Path, name: str, marker: float) -> TrackInputs:
+def _item(tmp: Path, name: str, marker: float) -> TrainItem:
     """One cached track whose every feature value is ``marker``."""
     path = tmp / f"{name}.npz"
-    TrackExample(
+    CachedItem(
         name,
         np.full((N_BINS, N_CQT), marker, dtype=np.float32),
         {},
         np.arange(N_CQT) * HOP_S,
     ).save(path)
-    return TrackInputs(features=(path,), contour=None, notes=_notes())
+    return TrainItem(features=(path,), notes=_notes())
 
 
 @pytest.fixture
-def items(tmp_path: Path) -> list[TrackInputs]:
+def items(tmp_path: Path) -> list[TrainItem]:
     """Sixteen tracks: the first eight 'clean', the last eight 'separated'.
 
     Grouped rather than interleaved on purpose -- this is exactly the order

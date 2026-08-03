@@ -23,7 +23,7 @@ A3 = 220.0  # MIDI 57, one octave above A2
 
 
 def scores(true, pred):
-    return PitchAccuracy().calculate(
+    return PitchAccuracy().compute(
         np.array(true, dtype=float), np.array(pred, dtype=float)
     ).scalars
 
@@ -79,9 +79,9 @@ def test_all_rest_reference_has_no_voiced_frames():
 
 def test_misaligned_arrays_are_rejected():
     with pytest.raises(ValueError):
-        PitchAccuracy().calculate(np.array([A2, A2]), np.array([A2]))
+        PitchAccuracy().compute(np.array([A2, A2]), np.array([A2]))
 
 
 def test_two_dimensional_input_is_rejected():
     with pytest.raises(ValueError):
-        PitchAccuracy().calculate(np.array([[A2]]), np.array([[A2]]))
+        PitchAccuracy().compute(np.array([[A2]]), np.array([[A2]]))

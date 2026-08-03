@@ -87,7 +87,7 @@ class PitchConfusion(FrameMetric):
         self.midi_min = midi_min
         self.midi_max = midi_max
 
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> ConfusionResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> ConfusionResult:
         self._check(true, pred)
 
         # Scored over reference-voiced frames only, matching RPA/RCA.

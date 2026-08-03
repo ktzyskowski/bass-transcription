@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from stemify.contour import Contour
-from stemify.decoders.heuristic import HeuristicDecoder, onset_times_from_probs
+from stemify.decoders.greedy import GreedyDecoder, onset_times_from_probs
 from stemify.encoders.learned import LearnedEncoder
 from stemify.features import SAMPLE_RATE, FrameFeatures
 from stemify.sources import Sources
@@ -73,7 +73,7 @@ def test_encode_features_voicing_head_places_rests():
         contour, features
     )
     assert cues.voicing is not None
-    notes = HeuristicDecoder(merge_gap_s=None).decode(cues)
+    notes = GreedyDecoder(merge_gap_s=None).decode(cues)
     assert len(notes) == 1
     assert notes[0].offset < features.frame_times[n // 2] + 0.05
 
@@ -85,7 +85,7 @@ def test_encode_features_without_voicing_falls_back_to_contour():
         contour, features
     )
     assert cues.voicing is None  # onset-only model
-    assert len(HeuristicDecoder(merge_gap_s=None).decode(cues)) == 1
+    assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 1
 
 
 def test_encode_from_audio_peaks_the_onset_curve(tmp_path):

@@ -6,7 +6,7 @@ already done all of that (see ``stemify.evaluation.cues``). That is the whole po
 the split: metrics stay stateless and comparable, and alignment is implemented once
 rather than once per metric.
 
-The contract for ``calculate(true, pred)``:
+The contract for ``compute(true, pred)``:
 
   - both arrays are 1-D, the same length, and share a common time grid
   - values are frequencies in Hz, with **0.0 meaning unvoiced**
@@ -15,7 +15,7 @@ The contract for ``calculate(true, pred)``:
     it
 
 Aggregation across a dataset is *not* a frame metric's concern. ``CuesEvaluation``
-pools frames from every track into one pair of arrays and calls ``calculate``
+pools frames from every track into one pair of arrays and calls ``compute``
 once, which makes results frame-weighted by construction. There is
 deliberately no ``combine`` step to get wrong -- which is exactly where the
 note-level family diverges: ``NoteMetric`` (``metrics.note``) *cannot* pool its
@@ -36,7 +36,7 @@ class FrameMetric(ABC):
     name: str
 
     @abstractmethod
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
         """Score aligned reference vs. estimate. See the module docstring for the
         contract both arrays must satisfy."""
 

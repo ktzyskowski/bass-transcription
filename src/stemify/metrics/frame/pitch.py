@@ -80,7 +80,7 @@ class PitchAccuracy(FrameMetric):
         # though its pitch class is right. Real basses do sit flat.
         self.cent_tolerance = cent_tolerance
 
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> PitchAccuracyResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> PitchAccuracyResult:
         self._check(true, pred)
 
         ref_freq, ref_voicing = mir_eval.melody.freq_to_voicing(true)

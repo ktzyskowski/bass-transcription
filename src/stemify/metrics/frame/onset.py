@@ -36,7 +36,7 @@ class OnsetPR(FrameMetric):
 
     name = "onset_pr"
 
-    def calculate(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
         self._check(true, pred)
         labels = true.astype(bool)
         # Average precision is undefined without a positive frame (a track, or a

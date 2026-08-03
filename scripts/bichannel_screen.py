@@ -31,7 +31,7 @@ import torch
 
 from stemify.cache import Cache
 from stemify.cues import Cues
-from stemify.decoders.heuristic import HeuristicDecoder
+from stemify.decoders.greedy import GreedyDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD
 from stemify.training.checkpoint import load_cuenet
@@ -39,7 +39,7 @@ from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
 from stemify.models.heads import decode_contour
 from stemify.training.conditions import CONDITIONS, canonical
-from stemify.training.validation import OnsetValidator
+from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"
 IGNORE_PITCH = 1e6  # cents: any pitch matches, so matching is onset-only
@@ -84,7 +84,7 @@ def main() -> None:
     pitch_model = load_cuenet(args.pitch_checkpoint).eval()
     if "pitch" not in getattr(pitch_model, "frequency_heads", {}):
         raise SystemExit(f"{args.pitch_checkpoint} has no pitch head")
-    decoder, cache = HeuristicDecoder(), Cache("data/cache")
+    decoder, cache = GreedyDecoder(), Cache("data/cache")
 
     print(f"\npitch source: {args.pitch_checkpoint.stem} (held constant across arms)\n")
     print(f"{'arm':<14} {'split':<11} {'pitch':<9} {'recall':>8} {'prec':>7} "
@@ -93,7 +93,7 @@ def main() -> None:
         condition = CONDITIONS[canonical(tag)]
         cue_model = load_cuenet(Path(f"data/checkpoints/{name}.pt"))
         for split in args.splits.split(","):
-            v = OnsetValidator(
+            v = CheckpointValidator(
                 condition.dataset(ROOT, split, args.limit), condition, cache=cache
             )
             # "pyin" reproduces the already-recorded baseline on the same track set;

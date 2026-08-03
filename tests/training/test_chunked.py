@@ -22,10 +22,10 @@ from stemify.decoders.semicrf.evidence import build_evidence
 from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.decoders.semicrf.spans import Grid
 from stemify.notes import NoteEvent
-from stemify.serde import TrackExample
+from stemify.serde import CachedItem
 from stemify.sources import Sources
 from stemify.training.semicrf.dataset import ChunkDataset, collate
-from stemify.training.semicrf.tracks import channel_window, track_inputs
+from stemify.training.semicrf.tracks import channel_window, train_items
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
@@ -65,7 +65,7 @@ class _FakeDataset(list):
             item = _Item(f"t{k}", n, tmp)
             Path(item.audio()).write_bytes(b"")
             feats = rng.standard_normal((N_BINS, n)).astype(np.float32)
-            TrackExample(
+            CachedItem(
                 item.name, feats, {}, np.arange(n) * HOP_S
             ).save(cache.feature_path(item.audio()))
             self.append(item)
@@ -91,7 +91,7 @@ def cache(tmp_path):
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
     ds = _FakeDataset(tmp_path, cache, lengths)
     return ChunkDataset(
-        track_inputs(ds, CONDITIONS["clean"], cache),
+        train_items(ds, CONDITIONS["clean"], cache),
         chunk_frames=chunk, dmax=dmax, stride=STRIDE,
         batch_size=batch_size, right_context=right,
     )
@@ -127,7 +127,7 @@ def test_channel_window_stacks_channels_in_order_and_pads_with_zeros():
     # the channel the labels describe, and nothing downstream re-derives that.
     n = 10
     examples = tuple(
-        TrackExample(f"c{v}", np.full((N_BINS, n), float(v)), {}, np.arange(n) * HOP_S)
+        CachedItem(f"c{v}", np.full((N_BINS, n), float(v)), {}, np.arange(n) * HOP_S)
         for v in (1, 2)
     )
     window = channel_window(examples, 0, n)

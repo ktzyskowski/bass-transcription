@@ -21,7 +21,7 @@ from stemify.metrics.frame import (
     PitchAccuracy,
     PitchAccuracyResult,
     PitchConfusion,
-    ReferenceAlignedCues,
+    AlignedPairs,
     VoicingAUROC,
     score_cues,
 )
@@ -48,7 +48,7 @@ __all__ = [
     "ConfusionResult",
     "OnsetPR",
     "VoicingAUROC",
-    "ReferenceAlignedCues",
+    "AlignedPairs",
     "score_cues",
     "PRF",
     "PRFResult",

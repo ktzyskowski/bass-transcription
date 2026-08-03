@@ -10,7 +10,7 @@ from stemify.metrics.note.fragmentation import Fragmentation
 
 
 def frag(refs, ests):
-    return Fragmentation().calculate(refs, ests).scalars
+    return Fragmentation().compute(refs, ests).scalars
 
 
 def test_fragments_of_a_held_note(note):
@@ -73,7 +73,7 @@ def test_buckets_sum_to_false_positives(note):
 
 
 def test_result_name_and_render(note):
-    result = Fragmentation().calculate(
+    result = Fragmentation().compute(
         [[note(0.0, 2.0, 40)]], [[note(0.0, 0.5, 40), note(0.6, 1.0, 40)]]
     )
     assert result.name == "fragmentation"
