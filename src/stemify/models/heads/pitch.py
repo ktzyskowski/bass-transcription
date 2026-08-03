@@ -28,6 +28,7 @@ the failure mode a single regressed pitch value cannot even express.
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from stemify.contour import Contour
 from stemify.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
@@ -109,6 +110,46 @@ def two_hot(midi: torch.Tensor, n_bins: int = N_BINS) -> torch.Tensor:
     return target * voiced.unsqueeze(-1)
 
 
+def pitch_ce(logits: torch.Tensor, midi: torch.Tensor) -> torch.Tensor:
+    """Cross-entropy over the CQT bin axis against the two-hot code, voiced frames only.
+
+    ``logits`` is ``(B, T, n_bins)``; ``midi`` is ``(B, T)`` continuous MIDI with NaN
+    where the bass is silent.
+
+    Lives beside the head rather than in a strategy package. It was in
+    ``training.frame.loss``, which made it unreachable from the semi-CRF's auxiliary
+    term without one strategy importing another's internals. This module already owns
+    the head's encoding (``two_hot``, which this calls), its decoding (``decode_bins``)
+    and its construction (``pitch_head``); its loss is the fourth thing about the same
+    head, and it is a pure function of logits and targets, so nothing about ``models``
+    depending on nothing is given up.
+
+    **Why cross-entropy and not per-bin BCE.** The two-hot target is a proper
+    distribution -- its rows sum to 1 -- so the axis is a choice among bins, not
+    ``n_bins`` independent yes/no questions. Treating it as the latter is not merely a
+    different parameterisation, it puts the term on the wrong *scale*: 216 independent
+    sigmoids start near ``216 * ln 2 ~ 150``, against ``ln 216 ~ 5.4`` for a choice
+    among 216 options. Summed BCE therefore arrives ~400x the binary heads on a shared
+    trunk, which no loss weight should have to correct. This is the same reason
+    DreamerV3 scores its two-hot critic and reward heads with categorical cross-entropy:
+    get the functional form right and fixed coefficients work across scales.
+
+    Unvoiced frames are dropped rather than trained toward some "no pitch" target.
+    Where the bass sounds is the voicing head's question, and supervising this head on
+    it too would have the two compete over a shared trunk to answer the same thing.
+    """
+    voiced = ~torch.isnan(midi)
+    if not bool(voiced.any()):
+        # Nothing to learn from this batch, but the term must stay in the graph or the
+        # optimiser sees a different set of parameters depending on the batch drawn.
+        return logits.sum() * 0.0
+    # Soft-target cross-entropy: -sum_b target[b] * log q[b]. F.cross_entropy accepts
+    # probability targets too, but only with the class axis at dim 1 -- spelling it out
+    # keeps the bin axis last, matching two_hot and the head's own output.
+    per_frame = -(two_hot(midi) * F.log_softmax(logits, dim=-1)).sum(-1)
+    return (per_frame * voiced).sum() / voiced.sum()
+
+
 def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     """Per-bin logits ``(T, n_bins)`` -> frequency in Hz per frame ``(T,)``.
 
@@ -120,7 +161,7 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
 
     Softmax, not per-bin sigmoid: it has to invert the distribution the head is
     *trained* under, and that is a choice among bins (see
-    ``training.frame.loss.pitch_ce``).
+    ``pitch_ce`` below).
     """
     if logits.size == 0:
         return np.zeros(0)

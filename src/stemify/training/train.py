@@ -45,9 +45,7 @@ from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.features import FrameFeatures
-from stemify.models.heads import onset_head, voicing_head
 from stemify.notes import NoteEvent
-from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
@@ -59,6 +57,7 @@ from stemify.training.callbacks import (
 from stemify.training.conditions import CONDITIONS, canonical
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES, Recipe
+from stemify.training.semicrf.recipe import PITCH_WEIGHT
 from stemify.training.trainer import Trainer
 from stemify.training.validation import OnsetValidator
 
@@ -110,14 +109,6 @@ def _epoch_batches(loader: DataLoader[Any]) -> int | str:
         return "streaming"
 
 
-def build_model(in_channels: int = 1) -> CueNet:
-    backbone = TCN(in_channels=in_channels)
-    return CueNet(
-        backbone,
-        {"onset": onset_head(backbone.hidden), "voicing": voicing_head(backbone.hidden)},
-    )
-
-
 def build_validators(
     root: str,
     val_limit: int,
@@ -157,7 +148,8 @@ def _eval_fn(
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,
     build_decoder: Callable[[Mapping[str, Any]], Decoder] | None = None,
-    build_model: Callable[[], CueNet] = build_model,
+    *,
+    build_model: Callable[[], CueNet],
 ) -> Callable[[Mapping[str, Any], int], Mapping[str, float]]:
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
     score it through each cached validator (off the training device). Every metric is
@@ -176,7 +168,15 @@ def _eval_fn(
     through the potentials in its own snapshot. Defaulting it to the heuristic keeps
     the frame path unchanged, but hardcoding it would mean a semi-CRF run silently
     reported the *heuristic's* note F1 over its learned cues -- plausible numbers for
-    a model nobody trained."""
+    a model nobody trained.
+
+    ``build_model`` is **required and keyword-only**, and is always
+    ``recipe.build_model``. It used to default to a module-level ``build_model`` here
+    that built a TCN with onset and voicing heads and no pitch branch -- a second,
+    weaker implementation of what the recipe already knows. Nothing took the default,
+    but anything that did would have validated a model missing the head the run was
+    training, and reported its scores as the run's. The recipe is the only thing that
+    knows what this run builds, so it is the only thing allowed to build it."""
     if build_decoder is None:
         def build_decoder(_state: Mapping[str, Any]) -> Decoder:
             return HeuristicDecoder()
@@ -418,6 +418,11 @@ def main() -> None:
                     help="train the learned pitch branch alongside onset/voicing, "
                          "so the encoder produces the contour instead of pyin. Adds a "
                          "per-frame MIDI target to each cached example.")
+    ap.add_argument("--pitch-weight", type=float, default=None,
+                    help="semicrf + --pitch only: weight on the auxiliary pitch "
+                         "cross-entropy in 'NLL + w * pitch_ce'. Defaults to "
+                         f"{PITCH_WEIGHT}, which is a starting point rather than a "
+                         "tuned value -- the two terms are on unrelated scales.")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
     args = ap.parse_args()
@@ -429,26 +434,35 @@ def main() -> None:
     # --pos-weight is a frame-strategy setting and is refused elsewhere rather than
     # ignored: the semi-CRF's objective takes no class weights, so while this lived on
     # TrainConfig the flag was accepted and quietly did nothing.
-    strategy_kwargs: dict[str, Any] = {}
+    #
+    # --pitch used to be refused here too, because nothing supervised the head's
+    # *values*: the span features read how far the distribution moves and how much its
+    # frames disagree, neither of which says whether it is right. `SemiCRFRecipe` now
+    # declares pitch as an auxiliary head and `SemiCRFLoss` adds
+    # `pitch_weight * pitch_ce` over each chunk's own frames, so the head trains on a
+    # real signal and the flag means what it does on the frame path.
+    strategy_kwargs: dict[str, Any] = {"pitch": args.pitch}
     if args.objective == "frame":
-        strategy_kwargs = {
-            "pitch": args.pitch,
-            "pos_weight": _parse_pos_weight(args.pos_weight),
-        }
-    else:
-        unsupported = [
-            flag for flag, given in
-            (("--pitch", args.pitch), ("--pos-weight", bool(args.pos_weight)))
-            if given
-        ]
-        if unsupported:
+        strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
+        if args.pitch_weight is not None:
             raise SystemExit(
-                f"{', '.join(unsupported)} applies to --objective frame, not "
-                f"{args.objective!r}. --pos-weight because a structured NLL takes no "
-                "class weights; --pitch because nothing here supervises the head's "
-                "*values* yet -- the span features read how far the distribution moves, "
-                "never whether it is right, so the head would train on no signal at all."
+                "--pitch-weight applies to --objective semicrf, not 'frame'. The frame "
+                "objective sums its head terms unweighted; there is no NLL to balance "
+                "the pitch term against."
             )
+    else:
+        if args.pos_weight:
+            raise SystemExit(
+                "--pos-weight applies to --objective frame, not "
+                f"{args.objective!r}: a structured NLL takes no class weights."
+            )
+        if args.pitch_weight is not None:
+            if not args.pitch:
+                raise SystemExit(
+                    "--pitch-weight only means something with --pitch: it scales the "
+                    "auxiliary pitch term, and without the head there is no such term."
+                )
+            strategy_kwargs["pitch_weight"] = args.pitch_weight
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,

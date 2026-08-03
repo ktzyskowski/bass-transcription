@@ -7,8 +7,9 @@ Everything one strategy needs, in one package:
 
   - ``recipe``  -- ``FrameRecipe``: the model, the loss, the loaders, the decoder a
     checkpoint is scored through
-  - ``loss``    -- ``FrameBCELoss``, class-weighted BCE for the binary heads plus
-    ``pitch_ce`` over the two-hot CQT-bin code
+  - ``loss``    -- ``FrameBCELoss``, class-weighted BCE for the binary heads, plus
+    ``models.heads.pitch_ce`` over the two-hot CQT-bin code (that term lives with the
+    head it scores, because the semi-CRF's auxiliary term needs it too)
   - ``dataset`` -- ``FrameWindowDataset`` + ``collate``, the batch shape it consumes
 
 These three were previously in ``recipes/``, ``losses/`` and ``datasets/``, one file
@@ -18,7 +19,7 @@ objective over it, and the recipe binding them -- so they now live together, and
 """
 
 from stemify.training.frame.dataset import FrameBatch, FrameWindowDataset, collate
-from stemify.training.frame.loss import FrameBCELoss, pitch_ce
+from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.frame.recipe import FrameRecipe
 
 __all__ = [
@@ -27,5 +28,4 @@ __all__ = [
     "FrameBatch",
     "FrameWindowDataset",
     "collate",
-    "pitch_ce",
 ]

@@ -16,7 +16,7 @@ import pytest
 import torch
 
 from stemify.serde import TrackExample
-from stemify.training.frame.loss import pitch_ce
+from stemify.models.heads import pitch_ce
 from stemify.training.semicrf.tracks import target_windows
 
 N_BINS, HOP_S, T = 12, 0.0116, 20

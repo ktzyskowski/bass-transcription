@@ -39,6 +39,13 @@ from stemify.training.semicrf.loss import SemiCRFLoss
 # a boundary-crossing minority relies on the carry.
 CHUNK_FRAMES = 128
 
+# Weight on the auxiliary pitch cross-entropy in `NLL + w * pitch_ce`. 1.0 is a
+# starting point, not a tuned value: `pitch_ce` opens near ln(216) ~ 5.4 while the
+# per-chunk NLL is on a scale set by the track and the potentials, so the two are not
+# guaranteed comparable and this is the first knob to sweep. Recorded in `config` so a
+# checkpoint says which value produced it.
+PITCH_WEIGHT = 1.0
+
 
 class SemiCRFRecipe(Recipe):
     """The structured NLL: encoder and segmental decoder, trained jointly.
@@ -54,6 +61,7 @@ class SemiCRFRecipe(Recipe):
         conditions: Sequence[str] | None = None,
         decoder: SemiCRFDecoder | None = None,
         pitch: bool = False,
+        pitch_weight: float = PITCH_WEIGHT,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -64,6 +72,7 @@ class SemiCRFRecipe(Recipe):
         super().__init__(conditions)
         self.decoder = decoder or SemiCRFDecoder()
         self.pitch = pitch
+        self.pitch_weight = pitch_weight
 
     @property
     def heads(self) -> list[str]:
@@ -105,6 +114,7 @@ class SemiCRFRecipe(Recipe):
         return {
             **super().config,
             "pitch": self.pitch,
+            "pitch_weight": self.pitch_weight,
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
@@ -140,6 +150,7 @@ class SemiCRFRecipe(Recipe):
             conditions=config_str_list(config, "conditions"),
             decoder=decoder,
             pitch=config_field(config, "pitch", bool, False),
+            pitch_weight=config_field(config, "pitch_weight", float, PITCH_WEIGHT),
         )
 
     @property
@@ -156,7 +167,11 @@ class SemiCRFRecipe(Recipe):
 
     @property
     def params(self) -> dict[str, object]:
-        return {"pitch": self.pitch, "chunk_frames": CHUNK_FRAMES}
+        return {
+            "pitch": self.pitch,
+            "chunk_frames": CHUNK_FRAMES,
+            "pitch_weight": self.pitch_weight,
+        }
 
     def build_model(self) -> CueNet:
         # Same encoder; only the objective differs.
@@ -165,7 +180,9 @@ class SemiCRFRecipe(Recipe):
         ).build_model()
 
     def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:
-        return SemiCRFLoss(self.decoder)
+        return SemiCRFLoss(
+            self.decoder, aux_heads=self.aux_heads, aux_weight=self.pitch_weight
+        )
 
     @property
     def _geometry(self) -> tuple[int, int]:

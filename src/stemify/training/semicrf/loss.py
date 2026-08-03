@@ -28,13 +28,14 @@ so a fresh pass over the loader (a new epoch, or the val loader) rebuilds every 
 before reading it, and no epoch resumes from the last one's state.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import torch
 from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.window import initial_window
+from stemify.models.heads import pitch_ce
 from stemify.training.base import Loss
 from stemify.training.semicrf.dataset import ChunkBatch
 
@@ -42,13 +43,40 @@ from stemify.training.semicrf.dataset import ChunkBatch
 class SemiCRFLoss(Loss[ChunkBatch]):
     """The semi-CRF NLL over ordered chunks, carrying alpha between them."""
 
-    def __init__(self, decoder: SemiCRFDecoder, detach_carry: bool = True) -> None:
+    def __init__(
+        self,
+        decoder: SemiCRFDecoder,
+        detach_carry: bool = True,
+        aux_heads: Sequence[str] = (),
+        aux_weight: float = 1.0,
+    ) -> None:
         """``detach_carry=False`` stops truncating: the alpha window is passed to the
         next chunk with its graph intact, which reproduces whole-track backprop and
         whole-track activation memory. Only sensible for short tracks -- it is why the
-        padded whole-track path was removed rather than kept as a second module."""
+        padded whole-track path was removed rather than kept as a second module.
+
+        ``aux_heads`` are heads the NLL cannot supervise and an auxiliary per-frame
+        term must. Today that is ``pitch`` alone: the span features read how far the
+        distribution *moves* across a span and how much its frames disagree, both of
+        which are invariant to what pitch it actually names -- so nothing in the
+        structured objective constrains the head's *values*, and without this term the
+        head would train on no signal at all.
+
+        Declared rather than inferred from what the batch happens to carry. "Score it
+        if a pitch target turns up" is the same shape as the bug where ``Cues`` lacked
+        ``pitch_logits`` and the span features silently read zero: the failure is a
+        term quietly not applied, which no loss curve shows.
+        """
         self.decoder = decoder
         self.detach_carry = detach_carry
+        self.aux_heads = tuple(aux_heads)
+        self.aux_weight = aux_weight
+        unsupported = [h for h in self.aux_heads if h != "pitch"]
+        if unsupported:
+            raise NotImplementedError(
+                f"no auxiliary term for head(s) {unsupported}; only 'pitch' has one "
+                "(see models.heads.pitch_ce)"
+            )
         # stream id -> (alpha window, cumulative A) at that stream's current position.
         # Resumption state; a gradient path only when detach_carry is False.
         self._carry: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -143,6 +171,51 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         for b, stream in enumerate(batch.streams):
             self._carry[stream] = (carried_window[b], carried_A[b])
 
-        scalar = float(nll.item())
-        return nll, {"nll": scalar, "total": scalar}
+        total = nll
+        metrics = {"nll": float(nll.item())}
+        for head in self.aux_heads:
+            term = self._aux_term(head, pitch, batch, device)
+            total = total + self.aux_weight * term
+            metrics[head] = float(term.item())
+        metrics["total"] = float(total.item())
+        return total, metrics
+
+    def _aux_term(
+        self,
+        head: str,
+        pitch: torch.Tensor | None,
+        batch: ChunkBatch,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """The per-frame auxiliary loss for one head, over the chunk's *own* frames.
+
+        **Why the slice.** The window is ``dmax + chunk + right`` DP frames wide: the
+        leading ``context`` is the previous chunk's audio, present so a span reaching
+        back across the boundary can read its cues, and the trailing ``right`` is the
+        next chunk's, present so the encoder's receptive field does not see zero-padding
+        at the edge. Both are scored again as part of *their own* chunk. Scoring the
+        whole window would therefore train roughly two thirds of every frame twice per
+        epoch, at a weight that depends on where a track's chunk boundaries happened to
+        fall -- which is a data-dependent reweighting, not a regulariser.
+
+        NaN padding past a track's end needs no handling here: ``target_windows`` writes
+        NaN there and ``pitch_ce`` masks on it.
+        """
+        if pitch is None:
+            raise ValueError(
+                f"auxiliary head {head!r} was requested but the model has no pitch "
+                "branch, so there are no logits to score. The recipe builds the head "
+                "from the same `pitch` flag that adds it here -- a checkpoint or recipe "
+                "config where the two disagree is the cause."
+            )
+        if head not in batch.y:
+            raise KeyError(
+                f"auxiliary head {head!r} was requested but the batch carries no such "
+                f"target (has {sorted(batch.y)}). `SemiCRFRecipe.aux_heads` drives both "
+                "what the dataset caches and what this scores; they have drifted."
+            )
+        stride = self.decoder.stride
+        lo = batch.context * stride
+        hi = pitch.shape[1] - batch.right * stride
+        return pitch_ce(pitch[:, lo:hi], batch.y[head][:, lo:hi].to(device))
 

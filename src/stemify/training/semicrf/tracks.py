@@ -88,7 +88,7 @@ def target_windows(
     The target peer of ``channel_window``, and deliberately *not* zero-padded like it.
     Zero is a meaningless feature value but a meaningful *label*: MIDI 0 for pitch, "no
     onset" for a binary head. Every loss that reads these masks on ``isnan`` (see
-    ``frame.loss.pitch_ce``), so NaN means "no label here" and a padded frame
+    ``models.heads.pitch_ce``), so NaN means "no label here" and a padded frame
     contributes nothing to the gradient. Pad with zeros instead and a chunk running off
     a track's end trains the pitch head toward MIDI 0 at every edge -- while the loss
     falls, because that is a confident answer to a question nobody asked.

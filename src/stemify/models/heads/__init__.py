@@ -25,6 +25,7 @@ from stemify.models.heads.pitch import (
     FrequencyHead,
     decode_bins,
     decode_contour,
+    pitch_ce,
     pitch_head,
     two_hot,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "decode_bins",
     "decode_contour",
     "onset_head",
+    "pitch_ce",
     "pitch_head",
     "two_hot",
     "voicing_head",
