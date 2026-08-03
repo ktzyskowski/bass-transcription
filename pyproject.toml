@@ -21,6 +21,16 @@ dependencies = [
     "torchaudio>=2.11.0",
 ]
 
+# The two entry points, declared rather than left to be discovered. Both modules stay
+# in the package -- they are not CLI wrappers (`train.py` is ~460 lines of which
+# `main()` is the last fifth, and eight callers import from `evaluation.cli`), so
+# moving them to `scripts/` would put library code somewhere unimportable, untestable
+# and outside mypy's `files` scope. A console entry point gives the visibility without
+# any of that.
+[project.scripts]
+stemify-train = "stemify.training.train:main"
+stemify-eval = "stemify.evaluation.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

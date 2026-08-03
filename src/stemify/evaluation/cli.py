@@ -1,9 +1,12 @@
 """Command-line entry point for evaluating a model on a dataset.
 
-    uv run python -m stemify.evaluation.cli --encoder pyin --dataset slakh --level cues
-    uv run python -m stemify.evaluation.cli --encoder pyin --dataset slakh --level note
-    uv run python -m stemify.evaluation.cli --encoder learned --checkpoint m.pt \
+    uv run stemify-eval --encoder pyin --dataset slakh --level cues
+    uv run stemify-eval --encoder pyin --dataset slakh --level note
+    uv run stemify-eval --encoder learned --checkpoint m.pt \
         --dataset slakh --level note --decoder semicrf
+
+(``python -m stemify.evaluation.cli`` still works; the console script is declared in
+``pyproject.toml`` so the entry point is discoverable without reading this file.)
 
 This module is only argument parsing. The work is:
 
@@ -32,9 +35,8 @@ from stemify.encoders.base import Encoder
 from stemify.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
-from stemify.models.cuenet import CueNet
 from stemify.segmenter import Segmenter
-from stemify.training.checkpoint import Checkpoint
+from stemify.training.checkpoint import Checkpoint, load_cuenet
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 ENCODERS = ("pyin", "learned")
@@ -43,18 +45,6 @@ ENCODERS = ("pyin", "learned")
 # the learned global decoder, whose potentials must be restored from the checkpoint --
 # see ``build_decoder``.
 DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
-
-
-def load_tagger(checkpoint: Path) -> CueNet:
-    """The trained ``CueNet`` a checkpoint holds.
-
-    Kept as a name because eight callers across ``scripts/`` use it, but it no longer
-    rebuilds anything itself: it used to re-derive the architecture from ``heads`` and
-    ``in_channels``, which is a second implementation of what the training recipe
-    already knows. ``Checkpoint`` records the recipe instead, so the model comes back
-    the way it was built rather than the way a reader guessed.
-    """
-    return Checkpoint.load(checkpoint).model()
 
 
 def build_encoder(args: argparse.Namespace) -> Encoder:
@@ -70,7 +60,7 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
         raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
     from stemify.encoders.learned import LearnedEncoder
 
-    return LearnedEncoder(load_tagger(args.checkpoint), device="cpu")
+    return LearnedEncoder(load_cuenet(args.checkpoint), device="cpu")
 
 
 def build_decoder(args: argparse.Namespace) -> Decoder:

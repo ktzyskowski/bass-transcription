@@ -34,7 +34,7 @@ from stemify.cues import Cues
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.learned import LearnedEncoder
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD
-from stemify.evaluation.cli import load_tagger
+from stemify.training.checkpoint import load_cuenet
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
 from stemify.models.heads import decode_contour
@@ -81,7 +81,7 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=40)
     args = p.parse_args()
 
-    pitch_model = load_tagger(args.pitch_checkpoint).eval()
+    pitch_model = load_cuenet(args.pitch_checkpoint).eval()
     if "pitch" not in getattr(pitch_model, "frequency_heads", {}):
         raise SystemExit(f"{args.pitch_checkpoint} has no pitch head")
     decoder, cache = HeuristicDecoder(), Cache("data/cache")
@@ -91,7 +91,7 @@ def main() -> None:
           f"{'blind F1':>9} {'strict F1':>10}")
     for arm, name, tag in ARMS:
         condition = CONDITIONS[canonical(tag)]
-        cue_model = load_tagger(Path(f"data/checkpoints/{name}.pt"))
+        cue_model = load_cuenet(Path(f"data/checkpoints/{name}.pt"))
         for split in args.splits.split(","):
             v = OnsetValidator(
                 condition.dataset(ROOT, split, args.limit), condition, cache=cache

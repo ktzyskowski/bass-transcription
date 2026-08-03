@@ -28,7 +28,7 @@ from pathlib import Path
 from stemify.cache import Cache
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.encoders.learned import LearnedEncoder
-from stemify.evaluation.cli import load_tagger
+from stemify.training.checkpoint import load_cuenet
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
 from stemify.training.conditions import CONDITIONS, canonical
@@ -46,7 +46,7 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=40)
     args = p.parse_args()
 
-    model = load_tagger(args.checkpoint)
+    model = load_cuenet(args.checkpoint)
     decoder = HeuristicDecoder()
     cache = Cache("data/cache")
 

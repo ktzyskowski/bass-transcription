@@ -1,8 +1,11 @@
 """Train the frame heads on Slakh, scored by note-level F1.
 
-    uv run python -m stemify.training.train --root data/raw/slakh2100 \
+    uv run stemify-train --root data/raw/slakh2100 \
         --cache-dir data/cache --tracking-uri file:./mlruns \
         --sources clean,separated --pitch
+
+(``python -m stemify.training.train`` still works; the console script is declared in
+``pyproject.toml`` so the entry point is discoverable without reading this file.)
 
 Trains onset and voicing, plus a learned pitch contour with ``--pitch``, which replaces
 pyin as the pitch source (see docs/experiments.md for what that is worth).

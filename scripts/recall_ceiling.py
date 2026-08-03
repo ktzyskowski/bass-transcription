@@ -50,7 +50,7 @@ from stemify.decoders.heuristic import (
     onset_times_from_probs,
 )
 from stemify.encoders.learned import LearnedEncoder
-from stemify.evaluation.cli import load_tagger
+from stemify.training.checkpoint import load_cuenet
 from stemify.features import BINS_PER_SEMITONE, midi_to_bin
 from stemify.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
 from stemify.notes import NoteEvent
@@ -234,7 +234,7 @@ def collect(tag: str, ckpt: Path, limit: int, threshold: float) -> list[RefNote]
     if missing:
         raise ValueError(f"no clean stem for {len(missing)} track(s): {missing[:5]}")
 
-    encoder = LearnedEncoder(load_tagger(ckpt))
+    encoder = LearnedEncoder(load_cuenet(ckpt))
     decoder = HeuristicDecoder(onset_threshold=threshold)
 
     rows: list[RefNote] = []

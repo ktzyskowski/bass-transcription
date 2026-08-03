@@ -145,3 +145,20 @@ class Checkpoint:
         implementations of this is what let them disagree.
         """
         return Segmenter(self.encoder(**kwargs), self.decoder())
+
+
+def load_cuenet(checkpoint: Path) -> CueNet:
+    """The trained ``CueNet`` a checkpoint file holds.
+
+    Was ``evaluation.cli.load_tagger``: a library function living in a CLI module,
+    which six scripts imported -- so reaching for a checkpoint loader meant importing
+    argument parsing. It sits here instead, next to the ``Checkpoint`` it delegates to.
+
+    Renamed with the class. It stopped returning a ``FrameTagger`` when that became
+    ``CueNet``, and it stopped rebuilding anything itself before that: it used to
+    re-derive the architecture from ``heads`` and ``in_channels``, a second
+    implementation of what the training recipe already knows. ``Checkpoint`` records
+    the recipe, so the model comes back the way it was built rather than the way a
+    reader guessed.
+    """
+    return Checkpoint.load(checkpoint).model()
