@@ -1,7 +1,7 @@
 """Drop the Slakh stems this project will never read, before paying to store them.
 
-    uv run python -m stemify.data.prune_slakh /data/slakh2100 --dry-run
-    uv run python -m stemify.data.prune_slakh /data/slakh2100
+    uv run python scripts/prune_slakh.py /data/slakh2100 --dry-run
+    uv run python scripts/prune_slakh.py /data/slakh2100
 
 A Slakh track carries ~10 rendered stems. The bass pipeline reads exactly one of
 them plus the mix, so uploading the rest to S3 is paying rent on audio nothing
@@ -14,6 +14,12 @@ describes instruments the bass model may later be conditioned on.
 This is destructive and one-way -- re-obtaining a pruned stem means
 re-downloading the 104 GB tarball. It defaults to a dry run for that reason, and
 refuses to touch a tree it cannot parse as Slakh.
+
+Lives in ``scripts/`` rather than in ``stemify.data``: it is corpus preparation, run
+once per copy of the dataset, and nothing imports it -- it is a leaf *consumer* of
+``stemify.data.slakh``, not part of what the package does. The two CLIs that stayed in
+the package (``stemify-train``, ``stemify-eval``) did so because they carry library
+code other modules import; this carries none.
 """
 
 import argparse

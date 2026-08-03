@@ -214,7 +214,7 @@ def test_parse_pos_weight_rejects_unknown_heads():
     # through the loss, and never set by anything.
     import pytest
 
-    from stemify.training.train import _parse_pos_weight
+    from stemify.training.cli import _parse_pos_weight
 
     assert _parse_pos_weight("") == {}
     assert _parse_pos_weight("onset=5") == {"onset": 5.0}

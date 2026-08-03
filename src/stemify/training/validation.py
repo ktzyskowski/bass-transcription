@@ -14,13 +14,19 @@ examples) that delegate to the shared ``metrics`` scorers -- ``score_notes`` and
 and both are tested with synthetic inputs and a fake model, no audio.
 """
 
-from collections.abc import Callable, Sequence
+import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from stemify.cache import Cache
+from stemify.decoders.base import Decoder
+from stemify.decoders.greedy import GreedyDecoder
+from stemify.encoders.learned import LearnedEncoder
+from stemify.models.cuenet import CueNet
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.data.base import Dataset
@@ -227,3 +233,135 @@ class CheckpointValidator:
 
     def score_cues(self, encode: EncodeFn) -> list[MetricResult]:
         return score_cues_examples(encode, self.examples)
+
+
+# --------------------------------------------------------------------------- #
+# Wiring a run's validation: the validators, and the eval_fn the callback runs.
+#
+# These were in `training/train.py`, which is where they grew -- but they are this
+# module's concern, not the entry point's: they construct the CheckpointValidators
+# above and compose them into the per-epoch scoring function
+# `AsyncValidationCallback` calls. Keeping them beside the machinery they drive
+# means a change to what validation measures lands in one file.
+# --------------------------------------------------------------------------- #
+
+# score_examples' metric keys -> the short leaf name under note/<condition>/, so
+# MLflow groups them: note/clean/f1, note/separated/recall, ... one per metric.
+_NOTE_KEY = {
+    "note_f1": "f1", "note_precision": "precision",
+    "note_recall": "recall", "fragmentation": "fragmentation",
+    # The remaining false-positive buckets pass through under their own names
+    # (fp, fp_rest, fp_interior_offpitch) -- see ``score_examples``.
+}
+
+
+def build_validators(
+    root: str,
+    val_limit: int,
+    conditions: list[str],
+    cache: Cache | None = None,
+) -> dict[str, CheckpointValidator]:
+    """One ``CheckpointValidator`` per condition, keyed by tag. A condition names the
+    channels the model reads -- exactly what a validator has to reproduce -- so the
+    same ``CONDITIONS`` table that defines the *training* conditions defines the
+    validation ones.
+
+    Every condition shares the one ``cache``: contours and CQTs are keyed on each
+    condition's *resolved* audio path, so they cannot collide and no per-tag
+    subdirectory is needed. pyin then runs once per file ever rather than at every
+    launch -- what makes a large val set affordable. The demucs condition separates
+    its val audio through the (cached) DemucsSeparator at construction.
+
+    The per-track loop is serial, and whether that costs anything **depends on the
+    numeric backend**. On macOS/Accelerate pyin's FFTs already spread across cores and
+    a process pool only oversubscribes; on Linux/OpenBLAS (scipy's pocketfft is
+    single-threaded unless handed ``workers``) it pins one core and a pool measures
+    ~4.9x. Serial is the right default because the cache means this is paid once per
+    file ever -- but see ``docs/refactor-plan.md`` before concluding a pool is
+    pointless on a given machine."""
+    return {
+        tag: CheckpointValidator(
+            CONDITIONS[tag].dataset(root, "validation", val_limit),
+            CONDITIONS[tag],
+            cache=cache,
+        )
+        for tag in conditions
+    }
+
+
+def _eval_fn(
+    validators: dict[str, CheckpointValidator],
+    report_dir: Path | None = None,
+    log_artifact: Callable[[Path, int], None] | None = None,
+    build_decoder: Callable[[Mapping[str, Any]], Decoder] | None = None,
+    *,
+    build_model: Callable[[], CueNet],
+) -> Callable[[Mapping[str, Any], int], Mapping[str, float]]:
+    """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
+    score it through each cached validator (off the training device). Every metric is
+    namespaced ``<level>/<condition>/<key>`` so MLflow charts one series per condition
+    and the robustness gap between stem and demucs is visible.
+
+    Each checkpoint is scored at both altitudes from the *same* model pass per track:
+    note-level (the decoder over the encoder's cues) and cues-level (the encoder's
+    onset/voicing head quality, via ``metrics.cues.score_cues`` -- the same core the
+    offline ``CuesEvaluation`` uses). If ``report_dir``/``log_artifact`` are given, the
+    full breakdown is also written as a per-epoch JSON and attached to the run, so a
+    checkpoint's scores survive as a diffable artifact, not only as metric points.
+
+    ``build_decoder(state) -> Decoder`` is the seam the objective varies: the frame
+    heads are grouped by the ``GreedyDecoder``, while a semi-CRF run must be scored
+    through the potentials in its own snapshot. Defaulting it to the greedy decoder keeps
+    the frame path unchanged, but hardcoding it would mean a semi-CRF run silently
+    reported the *greedy decoder's* note F1 over its learned cues -- plausible numbers for
+    a model nobody trained.
+
+    ``build_model`` is **required and keyword-only**, and is always
+    ``recipe.build_model``. It used to default to a module-level ``build_model`` here
+    that built a TCN with onset and voicing heads and no pitch branch -- a second,
+    weaker implementation of what the recipe already knows. Nothing took the default,
+    but anything that did would have validated a model missing the head the run was
+    training, and reported its scores as the run's. The recipe is the only thing that
+    knows what this run builds, so it is the only thing allowed to build it."""
+    if build_decoder is None:
+        def build_decoder(_state: Mapping[str, Any]) -> Decoder:
+            return GreedyDecoder()
+
+    def eval_fn(state: Mapping[str, Any], epoch: int) -> Mapping[str, float]:
+        model = build_model()  # the recipe's encoder
+        # `state` is a Trainer.state_cpu snapshot: the model's weights under "model"
+        # and the objective's own parameters under "loss". The decoder is built from
+        # the same snapshot, so a structured objective is scored through the
+        # potentials that snapshot actually trained -- not a fresh set.
+        model.load_state_dict(dict(state["model"]))
+        # Wrap the checkpoint once (CPU, off the training device) as the encoder/decoder
+        # pair deployment composes into a Transcriber. The decoder scores notes over the
+        # encoder's cues; the encoder alone scores its own cues -- one forward, both.
+        encoder = LearnedEncoder(model, device="cpu")
+        decoder = build_decoder(state)
+
+        def segment(contour: Contour, features: FrameFeatures) -> list[NoteEvent]:
+            return decoder.decode(encoder.encode_features(contour, features))
+
+        metrics: dict[str, float] = {}
+        report: dict[str, Any] = {"epoch": epoch, "conditions": {}}
+        for tag, validator in validators.items():
+            note = validator.score(segment)
+            for key, value in note.items():
+                metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
+            # Cues-level (encoder) quality: onset-curve AP and voicing-head AUROC,
+            # threshold-free. Empty voicing for an onset-only model.
+            cues = {r.name: r.scalars for r in validator.score_cues(encoder.encode_features)}
+            for scalars in cues.values():
+                for key, value in scalars.items():
+                    metrics[f"cues/{tag}/{key}"] = value
+            report["conditions"][tag] = {"note": note, "cues": cues}
+
+        if report_dir is not None and log_artifact is not None:
+            report_dir.mkdir(parents=True, exist_ok=True)
+            path = report_dir / f"validation_epoch{epoch:03d}.json"
+            path.write_text(json.dumps(report, indent=2))
+            log_artifact(path, epoch)
+        return metrics
+
+    return eval_fn

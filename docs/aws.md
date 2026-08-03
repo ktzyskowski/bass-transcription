@@ -32,7 +32,7 @@ will never read: a track has ~10 stems and the bass pipeline needs one of them
 plus the mix.
 
 ```sh
-uv run python -m stemify.data.prune_slakh /data/slakh2100   # keeps bass stems + mix + MIDI
+uv run python scripts/prune_slakh.py /data/slakh2100   # keeps bass stems + mix + MIDI
 aws s3 sync /data/slakh2100 s3://stemify-data/slakh2100/
 ```
 

@@ -28,7 +28,7 @@ dependencies = [
 # and outside mypy's `files` scope. A console entry point gives the visibility without
 # any of that.
 [project.scripts]
-stemify-train = "stemify.training.train:main"
+stemify-train = "stemify.training.cli:main"
 stemify-eval = "stemify.evaluation.cli:main"
 
 [build-system]
