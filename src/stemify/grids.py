@@ -31,4 +31,5 @@ def resample_mask(
     if src_times.size == 0 or frame_times.size == 0:
         return y
     nearest = _nearest_frame(np.asarray(src_times, dtype=float), frame_times)
-    return np.asarray(src_mask)[nearest].astype(np.float32)
+    resampled: np.ndarray = np.asarray(src_mask)[nearest].astype(np.float32)
+    return resampled

@@ -26,7 +26,9 @@ field as a constant (inference/decode) and a ``TensorCues`` tensor as a graph no
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import torch
@@ -34,6 +36,11 @@ import torch
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.grids import resample_mask
+
+# A span index: an int for a single span, or a tensor when the scan broadcasts a
+# whole row of candidate starts at once. Every accessor takes all three the same
+# way, which is what lets one `SpanScorer.unary` serve the scan and the gold scorer.
+Idx = torch.Tensor | int
 
 
 def _check_one_device(what: str, **fields: torch.Tensor) -> None:
@@ -162,7 +169,8 @@ class Evidence:
         """Row ``b`` as its own batch of one -- for the single-track paths (Viterbi,
         decode) that would otherwise index every field by hand."""
         t = self.lengths[b]
-        cut = lambda x, k=1: None if x is None else x[b : b + 1, : t + k]
+        def cut(x: torch.Tensor | None) -> torch.Tensor | None:
+            return None if x is None else x[b : b + 1, : t + 1]
         return Evidence(
             self.onset_logit[b : b + 1, :t], self.voiced_c[b : b + 1, : t + 1],
             self.rest_c[b : b + 1, : t + 1],
@@ -173,19 +181,19 @@ class Evidence:
 
     # --- span accessors: the index conventions, in one place --------------------
 
-    def onset_at(self, b, i) -> torch.Tensor:
+    def onset_at(self, b: Idx, i: Idx) -> torch.Tensor:
         """Onset logit at a span's first frame."""
         return self.onset_logit[b, i]
 
-    def voiced_mass(self, b, i, j) -> torch.Tensor:
+    def voiced_mass(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """``sum of log P(voiced)`` over ``[i, j)``."""
         return self.voiced_c[b, j] - self.voiced_c[b, i]
 
-    def rest_mass(self, b, i, j) -> torch.Tensor:
+    def rest_mass(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """``sum of log(1 - P(voiced))`` over ``[i, j)``."""
         return self.rest_c[b, j] - self.rest_c[b, i]
 
-    def _zeros_like_span(self, b, i, j) -> torch.Tensor:
+    def _zeros_like_span(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """A zero of whatever shape a span accessor would have returned.
 
         The pitch accessors below return this when the model has no pitch head, so a
@@ -195,7 +203,7 @@ class Evidence:
         inspects the evidence, which puts a capability check in the hot loop."""
         return torch.zeros_like(self.voiced_c[b, j] - self.voiced_c[b, i])
 
-    def path_length(self, b, i, j) -> torch.Tensor:
+    def path_length(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """How far the pitch distribution *travelled* strictly inside ``[i, j)``.
 
         A sum of per-frame moves, so it is large for a step change and also for
@@ -210,14 +218,14 @@ class Evidence:
             return self._zeros_like_span(b, i, j)
         return self.path_c[b, j] - self.path_c[b, i + 1]
 
-    def mean_entropy(self, b, i, j) -> torch.Tensor:
+    def mean_entropy(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """Average per-frame pitch entropy over ``[i, j)`` -- the span's *aleatoric*
         uncertainty, i.e. how unsure each frame is on its own."""
         if self.entropy_c is None:
             return self._zeros_like_span(b, i, j)
         return (self.entropy_c[b, j] - self.entropy_c[b, i]) / (j - i)
 
-    def pitch_mean(self, b, i, j) -> torch.Tensor:
+    def pitch_mean(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """The span's mean pitch distribution ``(..., K)``.
 
         The mean of the softmaxes, not the softmax of mean logits: this is a *mixture*,
@@ -226,10 +234,11 @@ class Evidence:
         exactly the structure the spread feature exists to detect."""
         if self.pitch_c is None:
             raise ValueError("no pitch evidence: this Evidence carries no pitch head")
-        d = (j - i) if isinstance(j - i, int) else (j - i).unsqueeze(-1)
+        span = j - i
+        d = span if isinstance(span, int) else span.unsqueeze(-1)
         return (self.pitch_c[b, j] - self.pitch_c[b, i]) / d
 
-    def pitch_spread(self, b, i, j) -> torch.Tensor:
+    def pitch_spread(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """Generalised Jensen-Shannon divergence of the span's frames.
 
         ``H(mean) - mean(H)``: total uncertainty about the span's pitch minus the
@@ -314,7 +323,13 @@ def pitch_cumsums(
 
 def _track_tensors(
     cues: Cues | TensorCues, stride: int, device: torch.device
-) -> tuple:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    np.ndarray,
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
+]:
     """One track's per-frame tensors, pitch cumsums included when it has a pitch head."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
     # Stride first, place second: the slice is cheap on the source device and only the
@@ -332,7 +347,7 @@ def _track_tensors(
 
 
 def build_evidence(
-    cues: Cues | TensorCues | list[Cues | TensorCues],
+    cues: Cues | TensorCues | Sequence[Cues | TensorCues],
     stride: int,
     device: torch.device | str | None = None,
 ) -> Evidence:
@@ -345,7 +360,11 @@ def build_evidence(
 
     Padding is grad-preserving: the per-track tensors are scattered into buffers
     allocated off the first track."""
-    batch = cues if isinstance(cues, list) else [cues]
+    # `Sequence`, not `list`: the parameter is widened so a `list[TensorCues]` from the
+    # training loop is accepted (a `list` is invariant in its element type, so it is not
+    # a `list[Cues | TensorCues]`). Dispatching on `list` while accepting `Sequence`
+    # would send a tuple of tracks down the single-track branch.
+    batch = list(cues) if isinstance(cues, Sequence) else [cues]
     if not batch:
         raise ValueError("build_evidence needs at least one track")
     device = _cues_device(batch[0]) if device is None else torch.device(device)
@@ -357,33 +376,40 @@ def build_evidence(
     onset = built[0][0].new_zeros(B, Tmax)
     Vc = onset.new_zeros(B, Tmax + 1)
     Uc = onset.new_zeros(B, Tmax + 1)
-    has_pitch = built[0][4] is not None
-    if has_pitch and any(t[4] is None for t in built):
+    # Bind the first track's pitch cumsums rather than re-indexing `built`: the
+    # buffers below exist exactly when this is non-None, and writing that as one
+    # name is what makes the coupling visible instead of implied by two `has_pitch`
+    # reads several lines apart.
+    first_pitch = built[0][4]
+    if first_pitch is not None and any(t[4] is None for t in built):
         raise ValueError(
             "batch mixes tracks with and without pitch logits; every track in a batch "
             "must come from the same model, or the span features silently read zeros "
             "for some rows and real evidence for others"
         )
-    K = built[0][4][2].shape[-1] if has_pitch else 0
-    Pc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
-    Hc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
-    Dc = onset.new_zeros(B, Tmax + 1, K) if has_pitch else None
+    Pc = Hc = Dc = None
+    if first_pitch is not None:
+        K = first_pitch[2].shape[-1]
+        Pc = onset.new_zeros(B, Tmax + 1)
+        Hc = onset.new_zeros(B, Tmax + 1)
+        Dc = onset.new_zeros(B, Tmax + 1, K)
 
     for b, (o, v, u, _, pitch) in enumerate(built):
         t = lengths[b]
         onset[b, :t] = o
         Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
         Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
-        if pitch is not None:
-            pc, hc, dc = pitch
-            Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
-            Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
-            Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
+        if pitch is None or Pc is None or Hc is None or Dc is None:
+            continue
+        pc, hc, dc = pitch
+        Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
+        Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
+        Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
 
     # A batch of contours only when every track has one: a partial list would silently
     # give some decoded notes a pyin pitch and others none.
-    contours = [c.contour for c in batch]
+    maybe = [c.contour for c in batch]
+    contours = None if any(c is None for c in maybe) else cast(list[Contour], maybe)
     return Evidence(
-        onset, Vc, Uc, lengths, [t[3] for t in built],
-        None if any(c is None for c in contours) else contours, Pc, Hc, Dc,
+        onset, Vc, Uc, lengths, [t[3] for t in built], contours, Pc, Hc, Dc,
     )

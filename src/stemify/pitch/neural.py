@@ -2,10 +2,10 @@
 
 The learned peer of ``PyinPitch``. It satisfies the same ``estimate(audio_path)``
 contract, so anywhere pyin is used it can be substituted -- including inside
-``DSPEncoder``, which pairs spectral-flux onsets with whatever pitch source it is
+``ClassicalEncoder``, which pairs spectral-flux onsets with whatever pitch source it is
 given, and in the offline harness that scores pitch quality on its own.
 
-**It is not what ``NeuralEncoder`` uses.** That encoder has already computed the CQT
+**It is not what ``LearnedEncoder`` uses.** That encoder has already computed the CQT
 and run the backbone by the time it wants a contour, so it reads the pitch logits out
 of the forward pass it just did rather than paying for both again here. This class
 exists for the callers that have a *path* and nothing else. Both routes end in
@@ -14,7 +14,7 @@ implementations that can disagree -- which is the property that makes substituti
 for the other meaningful.
 
 Torch-bearing, and so kept out of ``pitch/__init__`` for the same reason
-``encoders.neural`` is kept out of its package's: the DSP path must not pull torch in
+``encoders.learned`` is kept out of its package's: the DSP path must not pull torch in
 merely by importing a pitch source.
 """
 
@@ -27,17 +27,17 @@ from stemify.contour import Contour
 from stemify.device import best_device
 from stemify.features import extract_features
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
-from stemify.models.tagger import FrameTagger
+from stemify.models.cuenet import CueNet
 from stemify.pitch.base import PitchEstimator
 
 class NeuralPitch(PitchEstimator):
-    """A ``FrameTagger``'s pitch head as an audio-in pitch source."""
+    """A ``CueNet``'s pitch head as an audio-in pitch source."""
 
     name = "neural"
 
     def __init__(
         self,
-        model: FrameTagger,
+        model: CueNet,
         device: str | None = None,
         voicing_threshold: float = CONTOUR_VOICING_THRESHOLD,
     ) -> None:
@@ -57,14 +57,14 @@ class NeuralPitch(PitchEstimator):
         Single-channel only. A mix-conditioned model needs a second rendering that a
         lone path cannot supply, and guessing one (duplicating the bass into the mix
         channel) would quietly produce a contour from an input the model never saw in
-        training. Those callers should go through ``NeuralEncoder``, which is handed a
+        training. Those callers should go through ``LearnedEncoder``, which is handed a
         ``Sources`` and can resolve every channel.
         """
         width = getattr(self.model, "in_channels", 1)
         if width != 1:
             raise ValueError(
                 f"NeuralPitch needs a 1-channel model, got {width}. A path names one "
-                "rendering; use NeuralEncoder for a mix-conditioned checkpoint."
+                "rendering; use LearnedEncoder for a mix-conditioned checkpoint."
             )
         features = extract_features(audio_path)
         x = torch.from_numpy(np.ascontiguousarray(features.values)).float()

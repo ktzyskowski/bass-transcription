@@ -33,10 +33,10 @@ class AsyncValidationCallback(Callback):
         self.sink = sink
         self.every = every
         self._executor = executor or ThreadPoolExecutor(max_workers=1)
-        self._pending: list[Future] = []
+        self._pending: list[Future[Metrics]] = []
         self._delivery_failure: BaseException | None = None
 
-    def _deliver(self, future: Future, epoch: int) -> None:
+    def _deliver(self, future: Future[Metrics], epoch: int) -> None:
         """Hand a finished score to the sink, keeping any failure for the main thread.
 
         ``concurrent.futures`` *logs* an exception raised inside a done-callback and
@@ -66,8 +66,12 @@ class AsyncValidationCallback(Callback):
         if (logs.epoch + 1) % self.every != 0:
             return
         state = logs.snapshot()  # freeze the checkpoint on the main thread
-        future = self._executor.submit(self.eval_fn, state, logs.epoch)
-        future.add_done_callback(lambda f, e=logs.epoch: self._deliver(f, e))
+        # Bound to a local before the closure rather than pinned as a lambda default
+        # argument. Both capture *this* epoch -- `logs` is re-read next epoch, the local
+        # is not -- and the local keeps the lambda's signature inferable.
+        epoch = logs.epoch
+        future = self._executor.submit(self.eval_fn, state, epoch)
+        future.add_done_callback(lambda f: self._deliver(f, epoch))
         self._pending.append(future)
 
     def on_train_end(self, best_epoch: int) -> None:

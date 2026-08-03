@@ -195,31 +195,35 @@ def test_collate_rejects_mixed_widths(tmp_path, cache):
     a, b = list(ds)[:2]
     from stemify.training.semicrf.dataset import Chunk
 
-    wide = Chunk(
-        np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, a.contours[0], [], 30, 0,
-        0, False
-    )
-    narrow = Chunk(
-        a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0, 1, False
-    )
+    wide = Chunk(np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, [], {}, 0, False)
+    narrow = Chunk(a.features[0].numpy(), a.frame_times[0], [], {}, 1, False)
     with pytest.raises(ValueError, match="share a shape"):
-        collate([wide, narrow])
+        collate([wide, narrow], context=30, right=0)
 
 
-def test_collate_rejects_mixed_margins(tmp_path, cache):
-    # The scan runs one shared (context, right) range over every row, so a row with a
-    # different margin would have its own frames read as context, or its context
-    # scanned as chunk -- silently, since the widths still match.
-    ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
-    a = next(iter(ds))
+# There is no "collate rejects mixed margins" test any more, and its absence is the
+# point: `context`/`right` used to be copied onto every chunk and then checked for
+# agreement, which is a round trip that manufactures the invariant it guards. The
+# dataset now stamps them once on the batch, so rows cannot disagree.
+
+
+def test_collate_stacks_targets_it_has_never_heard_of(tmp_path, cache):
+    # The zero-plumbing claim: adding a head is a key in `y` and nothing else. If this
+    # needed a change to collate, the next head would need one too.
     from stemify.training.semicrf.dataset import Chunk
 
-    lhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0,
-                0, False)
-    rhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 5,
-                1, False)
-    with pytest.raises(ValueError, match=r"share \(context, right\)"):
-        collate([lhs, rhs])
+    ds = _dataset(tmp_path, cache, [600], chunk=40, dmax=30, batch_size=1)
+    a = next(iter(ds))
+    w = a.features.shape[-1]
+    rows = [
+        Chunk(a.features[0].numpy(), a.frame_times[0], [],
+              {"nonsense": np.full(w, float(i))}, i, False)
+        for i in range(2)
+    ]
+    batch = collate(rows, context=30, right=0)
+    assert set(batch.y) == {"nonsense"}
+    assert batch.y["nonsense"].shape == (2, w)
+    assert batch.y["nonsense"][1, 0] == 1.0
 
 
 def _cues(frame_times, contour):
@@ -254,6 +258,8 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
 
     carry, A = None, None
     for batch in batches:
-        e = build_evidence(_cues(batch.frame_times[0], batch.contours[0]), STRIDE)
+        # The batch carries no contour -- no potential reads one -- so the cue
+        # builder is handed the same synthetic track the whole-track pass used.
+        e = build_evidence(_cues(batch.frame_times[0], contour), STRIDE)
         A, carry = chunk_log_partition(dec.scorer, e, grid, carry, batch.context)
     assert torch.allclose(A, whole, atol=1e-3), f"{A.item()} != {whole.item()}"

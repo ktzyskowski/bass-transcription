@@ -155,7 +155,9 @@ class Note(EvalItem):
         rms = librosa.feature.rms(y=audio, frame_length=hop * 4, hop_length=hop)[0]
         times = librosa.times_like(rms, sr=sr, hop_length=hop)
         voiced = librosa.amplitude_to_db(rms, ref=np.max) > REF_FLOOR_DB
-        return Contour.constant(librosa.midi_to_hz(self.midi_pitch), times, voiced)
+        return Contour.constant(
+            float(librosa.midi_to_hz(self.midi_pitch)), times, voiced
+        )
 
 
 def parse_filename(path: Path) -> Note | None:

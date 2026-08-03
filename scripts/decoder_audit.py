@@ -23,7 +23,7 @@ from pathlib import Path
 
 from stemify.cache import Cache
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.fragmentation import Fragmentation
@@ -79,7 +79,7 @@ class Bench:
         condition = CONDITIONS[canonical(tag)]
         dataset = condition.dataset(ROOT, split, limit)
         validator = OnsetValidator(dataset, condition, cache=Cache(CACHE_DIR))
-        encoder = NeuralEncoder(load_tagger(ckpt))
+        encoder = LearnedEncoder(load_tagger(ckpt))
         self.cues = [
             encoder.encode_features(ex.contour, ex.load_features())
             for ex in validator.examples

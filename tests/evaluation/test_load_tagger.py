@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from stemify.contour import Contour
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.evaluation.cli import load_tagger
 from stemify.features import FrameFeatures
 from stemify.training.recipes import HEADS, FrameRecipe
@@ -30,7 +30,7 @@ def _encode(model, n_channels, n=24):
     """Drive the rebuilt model the way deployment does, to prove it actually runs."""
     frame_times = np.arange(n) * 0.0116
     shape = (216, n) if n_channels == 1 else (n_channels, 216, n)
-    return NeuralEncoder(model, device="cpu").encode_features(
+    return LearnedEncoder(model, device="cpu").encode_features(
         Contour(frame_times, np.full(n, 110.0)),
         FrameFeatures(np.random.rand(*shape).astype(np.float32), frame_times),
     )

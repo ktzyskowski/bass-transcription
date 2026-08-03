@@ -5,9 +5,11 @@ outside the semi-CRF section. Windows are cheap and plentiful, so this is the pa
 with the gradient steps; the cue->note step is the greedy ``HeuristicDecoder``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 from pathlib import Path
 
+import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -16,12 +18,13 @@ from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
-from stemify.models.tagger import FrameTagger
-from stemify.training.base import Loss, Recipe, _loader_kwargs
-from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
+from stemify.models.cuenet import CueNet
+from stemify.training.base import Loss, Recipe, config_field, config_str_list
+from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.training.config import TrainConfig
 from stemify.training.examples import prepare_examples
 from stemify.training.frame import dataset as frame_ds
+from stemify.training.frame.dataset import FrameBatch
 from stemify.training.frame.loss import FrameBCELoss
 
 
@@ -83,6 +86,23 @@ class FrameRecipe(Recipe):
             "pos_weight": dict(self.pos_weight),
         }
 
+    @classmethod
+    def from_config(cls, config: Mapping[str, object]) -> "FrameRecipe":
+        """Field by field -- see ``Recipe.from_config`` for why not ``**config``."""
+        weights = config.get("pos_weight") or {}
+        if not isinstance(weights, Mapping):
+            raise ValueError(
+                "recipe config field 'pos_weight' should be a mapping of "
+                f"head -> weight, got {type(weights).__name__}"
+            )
+        return cls(
+            conditions=config_str_list(config, "conditions"),
+            pitch=config_field(config, "pitch", bool, False),
+            window_frames=config_field(config, "window_frames", int, WINDOW_FRAMES),
+            hop_frames=config_field(config, "hop_frames", int, HOP_FRAMES),
+            pos_weight={str(h): float(w) for h, w in weights.items()},
+        )
+
     @property
     def params(self) -> dict[str, object]:
         """What this strategy contributes to the run's logged params."""
@@ -97,9 +117,9 @@ class FrameRecipe(Recipe):
             ) or "none",
         }
 
-    def build_model(self) -> nn.Module:
+    def build_model(self) -> CueNet:
         backbone = TCN(in_channels=self.in_channels)
-        return FrameTagger(
+        return CueNet(
             backbone,
             {
                 "onset": onset_head(backbone.hidden),
@@ -110,7 +130,7 @@ class FrameRecipe(Recipe):
             frequency_heads={"pitch": pitch_head()} if self.pitch else None,
         )
 
-    def build_loss(self) -> Loss:
+    def build_loss(self) -> Loss[FrameBatch]:
         return FrameBCELoss(self.heads, self.pos_weight)
 
     def _windows(self, tracks: list[tuple[Path, ...]]) -> frame_ds.FrameWindowDataset:
@@ -119,7 +139,12 @@ class FrameRecipe(Recipe):
         )
 
     def _tracks(
-        self, root: str, split: str, cache: Cache, condition, limit: int | None
+        self,
+        root: str,
+        split: str,
+        cache: Cache,
+        condition: Condition,
+        limit: int | None,
     ) -> list[tuple[Path, ...]]:
         """One tuple of cached CQT paths per track, ordered by input channel.
 
@@ -129,24 +154,47 @@ class FrameRecipe(Recipe):
         prepare_examples(ds, self.heads, cache, condition.primary.transform)
         return condition.channel_paths(ds, cache)
 
-    def train_loader(self, root, cache, config, limit) -> DataLoader:
+    def _loader(
+        self, tracks: list[tuple[Path, ...]], config: TrainConfig, shuffle: bool
+    ) -> DataLoader[FrameBatch]:
+        """This strategy's loader, with the settings spelled out as arguments.
+
+        These used to come from a shared ``_loader_kwargs(config)`` in ``training.base``
+        splatted in as ``**dict[str, object]``, on the reasoning that both paradigms
+        needed the same DataLoader settings. They do not: the semi-CRF's loader is
+        ``batch_size=None, num_workers=0`` because its dataset emits whole batches in
+        stream order, so it never called this and the sharing was notional. A splatted
+        ``dict[str, object]`` also erases every argument's type at the call, which is
+        how a setting can be renamed here and silently ignored by ``DataLoader``.
+
+        ``persistent_workers`` is only valid with workers, and without it the fork cost
+        is paid every epoch -- which cancels the benefit on short epochs.
+        """
+        return DataLoader(
+            self._windows(tracks),
+            batch_size=config.batch_size,
+            shuffle=shuffle,
+            num_workers=config.num_workers,
+            persistent_workers=config.num_workers > 0,
+            collate_fn=frame_ds.collate,
+        )
+
+    def train_loader(
+        self, root: str, cache: Cache, config: TrainConfig, limit: int | None
+    ) -> DataLoader[FrameBatch]:
         tracks: list[tuple[Path, ...]] = []
         for condition in self.conditions:
             tracks += self._tracks(root, "train", cache, condition, limit)
-        return DataLoader(
-            self._windows(tracks), shuffle=True,
-            collate_fn=frame_ds.collate, **_loader_kwargs(config),
-        )
+        return self._loader(tracks, config, shuffle=True)
 
-    def val_loader(self, root, cache, config, val_limit) -> DataLoader:
+    def val_loader(
+        self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
+    ) -> DataLoader[FrameBatch]:
         # Clean stems, but through the *same channel layout* the model was built
         # for -- a 2-channel model cannot be fed 1-channel val windows.
         condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
         tracks = self._tracks(root, "validation", cache, condition, val_limit)
-        return DataLoader(
-            self._windows(tracks),
-            collate_fn=frame_ds.collate, **_loader_kwargs(config),
-        )
+        return self._loader(tracks, config, shuffle=False)
 
-    def decoder_from(self, state: dict) -> Decoder:
+    def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
         return HeuristicDecoder()

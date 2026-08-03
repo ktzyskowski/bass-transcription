@@ -68,12 +68,18 @@ def score_cues(tracks: Sequence[ReferenceAlignedCues]) -> list[MetricResult]:
     onset_pred, onset_true = _pool([t.onset for t in tracks])
     results.append(OnsetPR().calculate(onset_true, onset_pred))
 
-    if all(t.voicing is not None for t in tracks):
-        voi_pred, voi_true = _pool([t.voicing for t in tracks])
+    # Filter-then-count rather than `all(... is not None)` then re-read: the two
+    # express the same "every track carries it" rule, but this one leaves the list
+    # holding the non-optional type, so the pooled call cannot be handed a None that
+    # a later edit to the guard stopped excluding.
+    voicings = [t.voicing for t in tracks if t.voicing is not None]
+    if len(voicings) == len(tracks):
+        voi_pred, voi_true = _pool(voicings)
         results.append(VoicingAUROC().calculate(voi_true, voi_pred))
 
-    if all(t.pitch is not None for t in tracks):
-        pitch_est, pitch_ref = _pool([t.pitch for t in tracks])
+    pitches = [t.pitch for t in tracks if t.pitch is not None]
+    if len(pitches) == len(tracks):
+        pitch_est, pitch_ref = _pool(pitches)
         results.append(PitchAccuracy().calculate(pitch_ref, pitch_est))
 
     return results

@@ -1,9 +1,9 @@
-"""``FrameTagger``: a backbone + named heads -> per-frame logits per head.
+"""``CueNet``: a backbone + named heads -> per-frame logits per head.
 
-The trainable core a ``NeuralEncoder`` wraps. ``heads`` may hold one entry (train
+The trainable core a ``LearnedEncoder`` wraps. ``heads`` may hold one entry (train
 onset alone) or several (joint); the backbone is shared across whatever heads are
 present. The backbone is named ``backbone``, not ``encoder`` -- it is the temporal
-network (TCN/GRU), distinct from the pipeline ``Encoder`` that turns audio into
+network (``TCN``), distinct from the pipeline ``Encoder`` that turns audio into
 ``Cues``.
 """
 
@@ -11,18 +11,23 @@ import torch
 from torch import nn
 
 from stemify.models.heads import FrameHead
+from stemify.models.networks import TCN
 
 
-class FrameTagger(nn.Module):
-    """Backbone + named heads -> {head_name: (B, T, out_dim) logits}.
+class CueNet(nn.Module):
+    """Backbone + named heads -> {head_name: (B, T, out_dim) logits}."""
 
-    Any backbone exposing ``.hidden`` and returning (B, T, hidden) works -- ``TCN``
-    or ``GRU``.
-    """
+    # ``TCN``, not ``nn.Module``. This used to accept any backbone exposing ``.hidden``
+    # and returning (B, T, hidden), which ``GRU`` also did -- but a *frequency* head
+    # taps ``frequency_and_frame``, which only the TCN defines, so that combination
+    # raised ``AttributeError`` on the first forward pass while the docstring called
+    # the two interchangeable. The GRU is gone; naming the real type here is what keeps
+    # a second backbone from re-introducing the same hole silently.
+    backbone: TCN
 
     def __init__(
         self,
-        backbone: nn.Module,
+        backbone: TCN,
         heads: dict[str, FrameHead] | None = None,
         frequency_heads: dict[str, nn.Module] | None = None,
     ):
@@ -44,10 +49,15 @@ class FrameTagger(nn.Module):
 
         Read off the backbone rather than stored, so it cannot drift from the conv
         that actually has to accept the tensor. Surfaced here because a
-        ``NeuralEncoder`` holds only the tagger and still has to know how many
+        ``LearnedEncoder`` holds only the tagger and still has to know how many
         channels to assemble from a track's ``Sources``.
+
+        A direct read, not ``getattr(..., 1)``: the backbone is a ``TCN``, which always
+        has this. The default was there for a backbone that might not, and it would
+        have answered *1* for a two-channel model -- a plausible number, and the
+        assembled input would then be the wrong width.
         """
-        return getattr(self.backbone, "in_channels", 1)
+        return self.backbone.in_channels
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         # Only pay for the frequency-resolved path when something consumes it: without

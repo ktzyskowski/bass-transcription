@@ -1,6 +1,6 @@
-"""Shape contracts for the neural model. No training -- just that each backbone
+"""Shape contracts for the neural model. No training -- just that the backbone
 collapses frequency and preserves time, and that heads project per frame, so a
-training loop can rely on (batch, time, out_dim). Both backbones are interchangeable.
+training loop can rely on (batch, time, out_dim).
 """
 
 import pytest
@@ -8,8 +8,8 @@ import torch
 
 from stemify.features import N_BINS
 from stemify.models.heads import onset_head, pitch_head, voicing_head
-from stemify.models.networks import GRU, TCN
-from stemify.models.tagger import FrameTagger
+from stemify.models.networks import TCN
+from stemify.models.cuenet import CueNet
 
 B, T = 2, 20
 
@@ -18,9 +18,8 @@ def _cqt_batch() -> torch.Tensor:
     return torch.randn(B, 1, N_BINS, T)
 
 
-@pytest.mark.parametrize("backbone_cls", [TCN, GRU])
-def test_backbone_collapses_freq_keeps_time(backbone_cls):
-    net = backbone_cls().eval()
+def test_backbone_collapses_freq_keeps_time():
+    net = TCN().eval()
     out = net(_cqt_batch())
     assert out.shape == (B, T, net.hidden)
 
@@ -33,7 +32,7 @@ def test_tcn_is_all_convolution():
 
 def test_single_head_tagger():
     net = TCN().eval()
-    model = FrameTagger(net, {"onset": onset_head(net.hidden)}).eval()
+    model = CueNet(net, {"onset": onset_head(net.hidden)}).eval()
     out = model(_cqt_batch())
     assert set(out) == {"onset"}
     assert out["onset"].shape == (B, T, 1)
@@ -43,7 +42,7 @@ def test_multi_head_shares_one_backbone():
     net = TCN()
     heads = {"onset": onset_head(net.hidden), "voicing": voicing_head(net.hidden)}
     pitch = pitch_head()
-    model = FrameTagger(net, heads, frequency_heads={"pitch": pitch}).eval()
+    model = CueNet(net, heads, frequency_heads={"pitch": pitch}).eval()
     out = model(_cqt_batch())
     assert out["onset"].shape == (B, T, 1)
     assert out["voicing"].shape == (B, T, 1)
@@ -99,9 +98,8 @@ def test_pitch_branch_is_frequency_equivariant():
 # --------------------------------------------------------------------------- #
 # input width: a mix-conditioned model reads several stacked renderings        #
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("backbone_cls", [TCN, GRU])
-def test_backbone_accepts_the_channel_count_it_was_built_for(backbone_cls):
-    net = backbone_cls(in_channels=2).eval()
+def test_backbone_accepts_the_channel_count_it_was_built_for():
+    net = TCN(in_channels=2).eval()
     out = net(torch.randn(B, 2, N_BINS, T))
     # Only the first conv widens: the temporal stack and every head are unchanged,
     # so the output contract a training loop relies on does not move.
@@ -110,14 +108,14 @@ def test_backbone_accepts_the_channel_count_it_was_built_for(backbone_cls):
 
 def test_default_stays_single_channel():
     assert TCN().in_channels == 1
-    assert FrameTagger(TCN(), {}).in_channels == 1
+    assert CueNet(TCN(), {}).in_channels == 1
 
 
 def test_tagger_reports_its_backbones_width():
     # Read off the backbone rather than stored, so it cannot drift from the conv
     # that actually has to accept the tensor.
     net = TCN(in_channels=2)
-    assert FrameTagger(net, {"onset": onset_head(net.hidden)}).in_channels == 2
+    assert CueNet(net, {"onset": onset_head(net.hidden)}).in_channels == 2
 
 
 def test_a_wider_model_rejects_a_single_channel_batch():

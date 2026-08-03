@@ -1,11 +1,11 @@
-"""``DSPEncoder``: the DSP-floor cue producer (no learning).
+"""``ClassicalEncoder``: the DSP-floor cue producer (no learning).
 
 Pitch from pyin, onsets from spectral flux, no voicing head -- the baseline a
 learned encoder must beat. The onset channel of the ``Cues`` it returns is a
 per-frame indicator (a spike at each flux-detected onset, on the contour grid),
 which the ``HeuristicDecoder`` peak-picks back to onset times; voicing is left
 ``None`` so the decoder falls back to the contour's own ``freqs > 0``. Expressed in
-the new pipeline the old DSP floor is ``Segmenter(DSPEncoder(), HeuristicDecoder())``.
+the new pipeline the old DSP floor is ``Segmenter(ClassicalEncoder(), HeuristicDecoder())``.
 """
 
 from pathlib import Path
@@ -42,13 +42,21 @@ def detect_onsets(
     later. ``delta`` is the peak-picking threshold; None uses librosa's default.
     """
     audio, _ = librosa.load(path, sr=sr, mono=True)
-    kwargs = {} if delta is None else {"delta": delta}
-    return librosa.onset.onset_detect(
-        y=audio, sr=sr, units="time", backtrack=True, **kwargs
+    # Branched rather than splatting a ``{}``-or-``{"delta": ...}`` dict. "None means
+    # librosa's own default" is the actual rule, and this states it; the dict encoded it
+    # as an absent key, and a ``**dict[str, float]`` splat is also checked against every
+    # keyword the callee has -- including ones typed ``bool`` and ``int``.
+    onsets: np.ndarray = (
+        librosa.onset.onset_detect(y=audio, sr=sr, units="time", backtrack=True)
+        if delta is None
+        else librosa.onset.onset_detect(
+            y=audio, sr=sr, units="time", backtrack=True, delta=delta
+        )
     )
+    return onsets
 
 
-class DSPEncoder(Encoder):
+class ClassicalEncoder(Encoder):
     """DSP cue producer: pyin pitch + spectral-flux onsets, no voicing head."""
 
     name = "dsp"

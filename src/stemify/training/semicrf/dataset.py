@@ -20,7 +20,7 @@ row ``b`` of one batch is not the continuation of row ``b`` of the last. The tra
 keys its carries by ``stream``; see ``loss.py`` beside this.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -32,7 +32,9 @@ from stemify.contour import Contour
 from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.training.conditions import Condition
-from stemify.training.semicrf.tracks import TrackInputs, channel_window, track_inputs
+from stemify.training.semicrf.tracks import (
+    TrackInputs, channel_window, target_windows, track_inputs,
+)
 
 # Segmentation of one chunk in *window-local* DP indices: (label, start, end).
 Segmentation = list[tuple[int, int, int]]
@@ -44,28 +46,36 @@ class Chunk:
 
     ``features`` spans ``[context_start, chunk_end + right_context)``; the DP scans
     only the chunk's own frames (``forward.chunk_log_partition(..., context=context)``)
-    and reads the rest purely as context."""
+    and reads the rest purely as context.
+
+    No contour: after the pyin span features were removed, no potential reads one, and
+    every recipe builds a voicing head -- so the scan never reaches the fallback that
+    was a contour's last use here. A pitch track is an inference-time concern now.
+    """
 
     features: np.ndarray       # (C, n_bins, window CQT frames)
     frame_times: np.ndarray    # (window CQT frames,) absolute seconds
-    contour: Contour           # the whole track's pyin contour (searchsorted per use)
     gold: Segmentation         # window-local DP indices, ends inside this chunk
-    context: int               # DP frames of left context before the chunk
-    right: int                 # DP frames of right margin the DP must not scan
+    y: dict[str, np.ndarray]   # {head: (window CQT frames,)}, NaN where off the track
     stream: int                # which stream row this continues
     reset: bool                # first chunk of a track: the carry starts fresh
 
 
 @dataclass
 class ChunkBatch:
-    """One chunk from each of ``batch_size`` streams, stacked."""
+    """One chunk from each of ``batch_size`` streams, stacked.
 
-    features: torch.Tensor        # (B, C, n_bins, window)
-    frame_times: list[np.ndarray]
-    contours: list[Contour]
+    ``y`` is the only field that grows: a new head is a key, and ``collate`` stacks it
+    without knowing the name. Everything else is fixed bookkeeping the scan needs, kept
+    as named fields precisely so that adding to it takes a decision.
+    """
+
+    features: torch.Tensor          # (B, C, n_bins, window)
+    y: dict[str, torch.Tensor]      # {head: (B, window)}, on the feature grid
     golds: list[Segmentation]
-    context: int                  # uniform across the batch
-    right: int                    # uniform across the batch
+    frame_times: list[np.ndarray]
+    context: int                    # DP frames of left context; set by the dataset
+    right: int                      # DP frames the scan must not read; ditto
     streams: list[int]
     resets: list[bool]
 
@@ -73,31 +83,34 @@ class ChunkBatch:
         return len(self.streams)
 
 
-def collate(chunks: list[Chunk]) -> ChunkBatch:
+def collate(chunks: list[Chunk], context: int, right: int) -> ChunkBatch:
     """Stack chunks into a batch. No padding: every chunk is the same width, which is
     also what lets the scan be captured as a CUDA graph.
 
-    ``context`` and ``right`` must agree across the batch as well as the width: the
-    scan runs one shared range over every row, so a row with a different margin would
-    have its own frames silently read as context (or its context scanned as chunk)."""
+    ``context`` and ``right`` are passed in rather than read off the chunks. They are
+    properties of how the *dataset* cut the track, identical for every chunk it emits,
+    and copying a constant onto each row only to check the copies still agree is a
+    round trip that invents the invariant it then guards.
+
+    ``y`` stacks by key without this knowing any of them, so a future head (string,
+    fret, velocity) costs nothing here."""
     widths = {c.features.shape for c in chunks}
     if len(widths) != 1:
         raise ValueError(f"chunks must share a shape, got {sorted(widths)}")
-    margins = {(c.context, c.right) for c in chunks}
-    if len(margins) != 1:
-        raise ValueError(
-            f"chunks in a batch must share (context, right), got {sorted(margins)}; "
-            "streams have desynchronised"
-        )
+    heads = {tuple(sorted(c.y)) for c in chunks}
+    if len(heads) != 1:
+        raise ValueError(f"chunks must carry the same targets, got {sorted(heads)}")
     features = torch.from_numpy(
         np.ascontiguousarray(np.stack([c.features for c in chunks]))
     )
-    context, right = margins.pop()
     return ChunkBatch(
         features=features,
-        frame_times=[c.frame_times for c in chunks],
-        contours=[c.contour for c in chunks],
+        y={
+            head: torch.from_numpy(np.stack([c.y[head] for c in chunks]))
+            for head in heads.pop()
+        },
         golds=[c.gold for c in chunks],
+        frame_times=[c.frame_times for c in chunks],
         context=context,
         right=right,
         streams=[c.stream for c in chunks],
@@ -124,9 +137,10 @@ class _Track:
 
     def __init__(
         self, track: TrackInputs, chunk: int, dmax: int, stride: int, right: int,
+        heads: Sequence[str] = (),
     ) -> None:
         self._examples = track.open(mmap=True)
-        self.contour = track.contour
+        self._heads = heads
         self._chunk, self._dmax, self._stride = chunk, dmax, stride
         ft = self._examples[0].frame_times
         self._n_cqt = ft.size
@@ -140,7 +154,9 @@ class _Track:
         self._gold = gold_segments(ft[::stride], track.notes, dmax)
         self.n_chunks = self._n_dp // chunk  # a ragged tail would break static shapes
 
-    def __getitem__(self, c: int) -> tuple[np.ndarray, np.ndarray, Segmentation]:
+    def __getitem__(
+        self, c: int
+    ) -> tuple[np.ndarray, np.ndarray, Segmentation, dict[str, np.ndarray]]:
         lo, hi = c * self._chunk, (c + 1) * self._chunk
         a_dp = lo - self._dmax                      # negative on a track's first chunk
         a, w = a_dp * self._stride, self._w_dp * self._stride
@@ -154,10 +170,14 @@ class _Track:
         # worst dmax earlier, so a dmax left context always covers it -- the same
         # constant the scan needs for its own candidate starts.
         gold = [(lab, i - a_dp, j - a_dp) for lab, i, j in self._gold if lo < j <= hi]
-        return window, times, gold
+        # Targets span the whole window, not just the chunk's own frames, so they stay
+        # index-aligned with the features and the model's output; the loss slices the
+        # scanned range out. Channel 0 only -- the channel the labels describe.
+        y = target_windows(self._examples[0], self._heads, a, w)
+        return window, times, gold, y
 
 
-class ChunkDataset(IterableDataset):
+class ChunkDataset(IterableDataset[ChunkBatch]):
     """Chunks of tracks over ``batch_size`` parallel streams, in track order.
 
     Streams are independent: each takes every ``n``-th track, walks it chunk by chunk,
@@ -181,8 +201,14 @@ class ChunkDataset(IterableDataset):
         stride: int,
         batch_size: int,
         right_context: int = 0,
+        heads: Sequence[str] = (),
     ) -> None:
-        self._items = track_inputs(dataset, condition, cache)
+        """``heads`` are the per-frame targets to serve beside each chunk, for the
+        auxiliary losses stacked on the NLL. Empty by default: the structured
+        objective reads notes, so a head appears here only once something scores it
+        per frame."""
+        self.heads = list(heads)
+        self._items = track_inputs(dataset, condition, cache, heads=self.heads)
         self.chunk_frames = chunk_frames
         self.dmax = dmax
         self.stride = stride
@@ -192,7 +218,7 @@ class ChunkDataset(IterableDataset):
         # edge needs no such margin -- dmax of real context already covers it.
         self.right_context = right_context
 
-    def _shard(self) -> tuple[list, int]:
+    def _shard(self) -> tuple[list[TrackInputs], int]:
         """This worker's tracks, and the id its first stream takes."""
         info = get_worker_info()
         if info is None:
@@ -212,21 +238,23 @@ class ChunkDataset(IterableDataset):
             row: list[Chunk] = []
             for b in range(self.batch_size):
                 reset = False
-                while opened[b] is None or chunk_no[b] >= opened[b].n_chunks:
-                    if opened[b] is not None:
+                # One name for the stream's current track instead of re-reading
+                # `opened[b]` four times: the loop's whole job is to leave it open, so
+                # the value that falls out of it is the one the chunk is cut from.
+                track = opened[b]
+                while track is None or chunk_no[b] >= track.n_chunks:
+                    if track is not None:
                         cursors[b] += 1
                     if cursors[b] >= len(streams[b]):
                         return  # this stream is done; stop the whole worker
-                    opened[b] = _Track(
+                    track = opened[b] = _Track(
                         streams[b][cursors[b]], self.chunk_frames, self.dmax,
-                        self.stride, self.right_context,
+                        self.stride, self.right_context, self.heads,
                     )
                     chunk_no[b], reset = 0, True
-                feats, ft, gold = opened[b][chunk_no[b]]
+                feats, ft, gold, y = track[chunk_no[b]]
                 chunk_no[b] += 1
                 row.append(
-                    Chunk(feats, ft, contour=opened[b].contour, gold=gold,
-                          context=self.dmax, right=self.right_context,
-                          stream=base + b, reset=reset)
+                    Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset)
                 )
-            yield collate(row)
+            yield collate(row, context=self.dmax, right=self.right_context)

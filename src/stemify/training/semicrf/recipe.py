@@ -9,20 +9,29 @@ The *decoder* stays in ``decoders.semicrf``. This package is how the thing is tr
 that one is how it decodes at inference.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import numpy as np
 from torch import nn
 from torch.utils.data import DataLoader
 
+import torch
+
+from stemify.cache import Cache
 from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf import SemiCRFDecoder
+from stemify.decoders.semicrf.constants import DMAX_S, DUR_EDGES_S, STRIDE
+from stemify.decoders.semicrf.spans import LinearSpanScorer
 from stemify.features import HOP_LENGTH, SAMPLE_RATE
 from stemify.models.networks import tcn_receptive_field
-from stemify.training.base import Loss, Recipe
-from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS
+from stemify.models.cuenet import CueNet
+from stemify.training.base import Loss, Recipe, config_field, config_str_list
+from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
+from stemify.training.config import TrainConfig
 from stemify.training.frame.recipe import FrameRecipe
 from stemify.training.semicrf import dataset as chunked_ds
+from stemify.training.semicrf.dataset import ChunkBatch
 from stemify.training.semicrf.loss import SemiCRFLoss
 
 # Chunk length in DP frames. ~4.5 s at the decimated hop -- comfortably longer than
@@ -63,6 +72,27 @@ class SemiCRFRecipe(Recipe):
         branches the model actually holds."""
         return [*super().heads, "pitch"] if self.pitch else super().heads
 
+    def _serialisable_scorer(self) -> LinearSpanScorer:
+        """This recipe's scorer, narrowed to the one shape a checkpoint can rebuild.
+
+        Duration-bucket edges are a ``LinearSpanScorer`` parameterisation, not part of
+        the ``SpanScorer`` contract -- ``dmax_s`` is the geometry every scorer has, and
+        it lives on the ABC. So recording the edges means asserting the scorer is
+        linear, and the assertion belongs here, once and loudly.
+
+        A neural scorer will have its own configuration to serialise. Raising is what
+        keeps that an explicit gap rather than a checkpoint that records linear
+        geometry for a scorer that never had any, and rebuilds as the wrong model.
+        """
+        scorer = self.decoder.scorer
+        if not isinstance(scorer, LinearSpanScorer):
+            raise NotImplementedError(
+                f"{type(scorer).__name__} has no checkpoint representation yet: only "
+                "LinearSpanScorer's duration-bucket edges are serialised. Give the "
+                "scorer its own config before training a run you intend to reload."
+            )
+        return scorer
+
     @property
     def config(self) -> dict[str, object]:
         """Everything ``__init__`` takes -- including the decoder's *geometry*.
@@ -78,35 +108,63 @@ class SemiCRFRecipe(Recipe):
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
-                "dur_edges_s": self.decoder.scorer.dur_edges_s.cpu().tolist(),
+                "dur_edges_s": self._serialisable_scorer().dur_edges.cpu().tolist(),
             },
         }
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "SemiCRFRecipe":
-        """The decoder is an object, so it is revived rather than splatted."""
-        config = dict(config)
-        geometry = dict(config.pop("decoder", {}))
+    def from_config(cls, config: Mapping[str, object]) -> "SemiCRFRecipe":
+        """Field by field, because the decoder's geometry is an object to revive and
+        the rest arrives as plain data off disk. A wrong type fails here, naming the
+        field, rather than as a shape error inside the scan."""
+        geometry = config.get("decoder") or {}
+        if not isinstance(geometry, Mapping):
+            raise ValueError(
+                f"recipe config field 'decoder' should be a mapping of geometry, got "
+                f"{type(geometry).__name__}"
+            )
+        # The constructor's own defaults, read from the constants rather than off a
+        # throwaway ``SemiCRFDecoder()`` built only to be measured. Same values, one
+        # fewer object -- and it no longer assumes the default decoder's scorer is the
+        # linear one just to recover a number that never depended on the scorer.
+        edges = geometry.get("dur_edges_s")
         decoder = SemiCRFDecoder(
-            stride=geometry.get("stride", SemiCRFDecoder().stride),
-            **{
-                k: (np.asarray(v, dtype=np.float32) if k == "dur_edges_s" else v)
-                for k, v in geometry.items() if k in ("dmax_s", "dur_edges_s")
-            },
+            stride=config_field(geometry, "stride", int, STRIDE),
+            dmax_s=config_field(geometry, "dmax_s", float, DMAX_S),
+            dur_edges_s=(
+                DUR_EDGES_S if edges is None
+                else np.asarray(edges, dtype=np.float32)
+            ),
         )
-        return cls(decoder=decoder, **config)
+        return cls(
+            conditions=config_str_list(config, "conditions"),
+            decoder=decoder,
+            pitch=config_field(config, "pitch", bool, False),
+        )
+
+    @property
+    def aux_heads(self) -> list[str]:
+        """Heads needing a *per-frame* target, so the dataset caches and serves one.
+
+        Deliberately not ``self.heads``. The structured NLL supervises onset and
+        voicing through the segmentation itself -- their frame targets would be
+        redundant. Pitch is the exception: the span features read how far the
+        distribution *moves* and how much it disagrees, never whether it is right, so
+        nothing in the NLL constrains the head's values and an auxiliary term has to.
+        """
+        return ["pitch"] if self.pitch else []
 
     @property
     def params(self) -> dict[str, object]:
         return {"pitch": self.pitch, "chunk_frames": CHUNK_FRAMES}
 
-    def build_model(self) -> nn.Module:
+    def build_model(self) -> CueNet:
         # Same encoder; only the objective differs.
         return FrameRecipe(
             [c.name for c in self.conditions], pitch=self.pitch
         ).build_model()
 
-    def build_loss(self) -> Loss:
+    def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:
         return SemiCRFLoss(self.decoder)
 
     @property
@@ -128,13 +186,22 @@ class SemiCRFRecipe(Recipe):
         right = -(-half // self.decoder.stride)     # ceil, into DP frames
         return dmax, right
 
-    def _chunks(self, root: str, split: str, conditions, cache, config, limit):
+    def _chunks(
+        self,
+        root: str,
+        split: str,
+        conditions: Sequence[Condition],
+        cache: Cache,
+        config: TrainConfig,
+        limit: int | None,
+    ) -> chunked_ds.ChunkDataset:
         dmax, right = self._geometry
         parts = [
             chunked_ds.ChunkDataset(
                 c.dataset(root, split, limit), cache, c,
                 chunk_frames=CHUNK_FRAMES, dmax=dmax, stride=self.decoder.stride,
                 batch_size=config.batch_size, right_context=right,
+                heads=self.aux_heads,
             )
             for c in conditions
         ]
@@ -145,7 +212,7 @@ class SemiCRFRecipe(Recipe):
             )
         return parts[0]
 
-    def _loader(self, dataset) -> DataLoader:
+    def _loader(self, dataset: chunked_ds.ChunkDataset) -> DataLoader[ChunkBatch]:
         # batch_size=None: the dataset emits whole ChunkBatch objects, because chunks
         # must arrive in per-stream order and a sampler cannot express that. Workers
         # each own a disjoint slice of tracks and stamp globally unique stream ids.
@@ -153,22 +220,26 @@ class SemiCRFRecipe(Recipe):
             dataset, batch_size=None, num_workers=0, collate_fn=None,
         )
 
-    def train_loader(self, root, cache, config, limit) -> DataLoader:
+    def train_loader(
+        self, root: str, cache: Cache, config: TrainConfig, limit: int | None
+    ) -> DataLoader[ChunkBatch]:
         return self._loader(
             self._chunks(root, "train", self.conditions, cache, config, limit)
         )
 
-    def val_loader(self, root, cache, config, val_limit) -> DataLoader:
+    def val_loader(
+        self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
+    ) -> DataLoader[ChunkBatch]:
         condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
         return self._loader(
             self._chunks(root, "validation", [condition], cache, config, val_limit)
         )
 
-    def decoder_from(self, state: dict) -> Decoder:
+    def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
         decoder = SemiCRFDecoder(
             stride=self.decoder.stride,
             dmax_s=self.decoder.scorer.dmax_s,
-            dur_edges_s=self.decoder.scorer.dur_edges_s.cpu().numpy(),
+            dur_edges_s=self._serialisable_scorer().dur_edges.cpu().numpy(),
         )
         # A checkpoint from before the pyin span features were removed carries
         # `scorer.w_pitch`. Loading it strictly fails, which is right -- the scorer it

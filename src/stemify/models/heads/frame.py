@@ -17,7 +17,11 @@ class FrameHead(nn.Module):
         self.proj = nn.Linear(hidden, out_dim)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return self.proj(features)  # (B, T, out_dim)
+        # Annotated rather than returned directly: torch types `Module.__call__` as
+        # returning `Any`, so every submodule call launders its type away. Naming the
+        # local puts it back at the one place that knows it.
+        out: torch.Tensor = self.proj(features)   # (B, T, out_dim)
+        return out
 
 
 def onset_head(hidden: int = 128) -> FrameHead:

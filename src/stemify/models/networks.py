@@ -1,19 +1,20 @@
-"""Temporal backbones over the CQT front-end: ``TCN`` (default) and ``GRU``.
+"""The temporal backbone over the CQT front-end: ``TCN``.
 
-Both first apply the same conv front-end over the (frequency, time) CQT -- filters
-that recognise a pitch's harmonic stack, applied at any register by convolving over
-log-frequency -- then a temporal stack. The stack is what differs:
+A conv front-end over the (frequency, time) CQT -- filters that recognise a pitch's
+harmonic stack, applied at any register by convolving over log-frequency -- then a
+stack of dilated 1-D convolutions over time. Dilation is parallel over the time axis,
+so it is fast on GPU, and its short-to-medium receptive field is a natural fit for the
+local attack shape onset detection keys on.
 
-  - ``TCN`` (default) -- dilated 1-D convolutions over time. Parallel over the time
-    axis, so fast on MPS and GPU alike, and its short-to-medium receptive field is a
-    natural fit for the local attack shape onset detection keys on.
-  - ``GRU`` -- a BiGRU, kept only as an ablation baseline. Metal has no fused RNN
-    kernel, so it is slow on MPS; use it to check the TCN loses nothing.
+There was also a ``GRU`` here, a BiGRU kept as an ablation baseline. It was removed
+rather than left standing: nothing built one, and it could not host the frequency
+head. ``CueNet`` taps ``frequency_and_frame`` for a ``FrequencyHead``, which only
+this backbone defines -- so a tagger built on the GRU with a pitch head raised
+``AttributeError`` on its first forward pass, while the module docstring advertised the
+two as interchangeable. The path forward is a neural CRF, not a second backbone.
 
-Both expose ``.hidden`` and return (batch, time, hidden), so a ``FrameHead`` is a
-plain per-frame projection and the two are interchangeable inside a ``FrameTagger``.
-These are *backbones*, not the pipeline ``Encoder``: a ``NeuralEncoder`` composes one
-of them with heads to produce ``Cues``.
+This is a *backbone*, not the pipeline ``Encoder``: a ``LearnedEncoder`` composes one
+with heads to produce ``Cues``.
 """
 
 import torch
@@ -59,7 +60,12 @@ class _ConvFrontend(nn.Module):
         which is what ends the frequency equivariance a pitch head depends on. See
         ``encoders/pitch_head.py``.
         """
-        return self.conv(x)
+        # Annotated locals throughout this module: torch types `Module.__call__` as
+        # returning `Any`, so a submodule call otherwise launders the tensor type away
+        # and every function that returns one straight through declares more than the
+        # checker can see.
+        out: torch.Tensor = self.conv(x)
+        return out
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         z = self.conv_features(x)              # (B, C, F, T)
@@ -79,7 +85,11 @@ def tcn_receptive_field(levels: int = 4, kernel: int = 3) -> int:
     ``2 * (kernel - 1) * dilation`` with dilation doubling per level. At the defaults
     that is 5 + 4*(1+2+4+8) = 65 frames, ~0.75 s at the CQT hop.
     """
-    return 5 + sum(2 * (kernel - 1) * 2**i for i in range(levels))
+    # ``1 << i`` rather than ``2**i``: the same dilation ladder (1, 2, 4, 8), but an
+    # integer by construction. ``int ** int`` is not necessarily an int -- a negative
+    # exponent gives a float -- so the checker widens it, and the width leaks out
+    # through this function's declared ``int``.
+    return 5 + sum(2 * (kernel - 1) * (1 << i) for i in range(levels))
 
 
 class _TCNBlock(nn.Module):
@@ -98,7 +108,8 @@ class _TCNBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.net(x)  # residual
+        residual: torch.Tensor = self.net(x)
+        return x + residual
 
 
 class TCN(nn.Module):
@@ -134,9 +145,9 @@ class TCN(nn.Module):
         return tcn_receptive_field(self.levels, self.kernel)
 
     def _temporal(self, flat: torch.Tensor) -> torch.Tensor:
-        z = self.project(flat)        # (B, hidden, T)
-        z = self.tcn(z)               # (B, hidden, T)
-        return z.transpose(1, 2)      # (B, T, hidden)
+        z: torch.Tensor = self.project(flat)   # (B, hidden, T)
+        z = self.tcn(z)                        # (B, hidden, T)
+        return z.transpose(1, 2)               # (B, T, hidden)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self._temporal(self.frontend(x))
@@ -147,39 +158,10 @@ class TCN(nn.Module):
         """Both head inputs from a single front-end pass, in dict order:
         ``(B, C, F, T)`` for a ``FrequencyHead``, ``(B, T, hidden)`` for a ``FrameHead``.
 
-        A separate method rather than a wider ``forward`` return, so the backbone
-        contract every existing caller relies on -- and that ``GRU`` also satisfies --
-        is unchanged. A backbone without this method simply cannot host a frequency
-        head, which is the honest outcome: ``GRU`` is an ablation baseline, not a shape
-        the frequency-resolved branch is defined for.
+        A separate method rather than a wider ``forward`` return: a ``FrameHead`` needs
+        only ``(B, T, hidden)``, and widening ``forward`` would make every caller carry
+        a tensor most of them discard.
         """
         frequency = self.frontend.conv_features(x)   # (B, C, F, T)
         b, c, f, t = frequency.shape
         return frequency, self._temporal(frequency.reshape(b, c * f, t))
-
-
-class GRU(nn.Module):
-    """CQT -> per-frame features via a BiGRU. Ablation baseline only (slow on MPS)."""
-
-    def __init__(
-        self,
-        n_bins: int = N_BINS,
-        conv_channels: int = 32,
-        hidden: int = 128,
-        in_channels: int = 1,
-    ):
-        super().__init__()
-        self.hidden = hidden
-        self.in_channels = in_channels
-        self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels)
-        self.rnn = nn.GRU(
-            input_size=self.frontend.out_channels,
-            hidden_size=hidden // 2,
-            batch_first=True,
-            bidirectional=True,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        z = self.frontend(x).transpose(1, 2)  # (B, T, C*F)
-        out, _ = self.rnn(z)
-        return out                             # (B, T, hidden)

@@ -35,11 +35,11 @@ from stemify.training.labels import onset_targets
 
 # A segmentation step: cached features + their contour -> notes. The validator
 # depends on this shape, not on any concrete encoder/decoder -- the caller wraps a
-# checkpoint's NeuralEncoder + a Decoder and passes their composed step.
+# checkpoint's LearnedEncoder + a Decoder and passes their composed step.
 SegmentFn = Callable[[Contour, FrameFeatures], list[NoteEvent]]
 # The encode step: cached features + their contour -> the encoder's Cues. Used for
 # cues-level scoring (onset + voicing head quality) -- a checkpoint's
-# NeuralEncoder.encode_features, so the validator stays model-agnostic.
+# LearnedEncoder.encode_features, so the validator stays model-agnostic.
 EncodeFn = Callable[[Contour, FrameFeatures], Cues]
 
 
@@ -86,7 +86,7 @@ def score_examples(
     references.
 
     The validator owns no segmentation logic -- it just calls the function it was
-    given (typically a decoder over a checkpoint's ``NeuralEncoder.encode_features``,
+    given (typically a decoder over a checkpoint's ``LearnedEncoder.encode_features``,
     the same encoder/decoder pair deployment composes into a ``Segmenter``), so how
     notes are made lives entirely there and eval can't drift from deploy. Pure given
     ``examples`` and ``segment``."""

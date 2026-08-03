@@ -11,7 +11,8 @@ about neither, which is what lets a strategy package import it without a cycle.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Generic, Protocol, TypeVar
 
 import torch
 from torch import nn
@@ -19,38 +20,99 @@ from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder
+from stemify.models.cuenet import CueNet
 from stemify.training.conditions import resolve
 from stemify.training.config import TrainConfig
 
 HEADS = ["onset", "voicing"]
 
-
-def _loader_kwargs(config: TrainConfig) -> dict:
-    """DataLoader settings both paradigms share.
-
-    ``persistent_workers`` keeps the pool alive between epochs -- without it the fork
-    cost is paid every epoch and cancels the benefit on short epochs -- and is only
-    valid when there are workers, so it is gated."""
-    kwargs: dict = {"batch_size": config.batch_size, "num_workers": config.num_workers}
-    if config.num_workers > 0:
-        kwargs["persistent_workers"] = True
-    return kwargs
+T = TypeVar("T")
 
 
-class Loss(ABC):
-    """A training objective the ``Trainer`` optimises, agnostic to batch shape."""
+def config_field(
+    config: Mapping[str, object], key: str, kind: type[T], default: T
+) -> T:
+    """One field out of a ``Recipe.config`` mapping, checked.
+
+    The whole of the coercion helper set on purpose. A checkpoint's config is plain
+    data read off disk, so a wrong type there is a real possibility rather than a
+    theoretical one -- but it is also *rare*, so the answer is one function that names
+    the offending field, not a schema library.
+
+    ``bool`` is checked before ``int`` by Python's own subclassing rule (``bool`` is an
+    ``int``), which is why the check is ``isinstance`` against the requested type
+    rather than a coercing ``kind(value)``: ``int(True)`` would silently accept a bool
+    where a count was meant.
+    """
+    value = config.get(key, default)
+    if not isinstance(value, kind):
+        raise ValueError(
+            f"recipe config field {key!r} should be {kind.__name__}, got "
+            f"{type(value).__name__} ({value!r})"
+        )
+    return value
+
+
+def config_str_list(
+    config: Mapping[str, object], key: str, default: Sequence[str] | None = None
+) -> list[str]:
+    """A list-of-strings field. Separate from ``config_field`` because a container
+    needs its *elements* checked too, and ``isinstance(x, list)`` says nothing about
+    them."""
+    value = config.get(key, default)
+    if value is None:
+        raise ValueError(f"recipe config is missing required field {key!r}")
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        raise ValueError(
+            f"recipe config field {key!r} should be a list of str, got {value!r}"
+        )
+    items = list(value)
+    bad = [v for v in items if not isinstance(v, str)]
+    if bad:
+        raise ValueError(f"recipe config field {key!r} has non-str entries: {bad!r}")
+    return [str(v) for v in items]
+
+
+class Batch(Protocol):
+    """What the training loop needs of a batch, which is one thing: its size.
+
+    Everything else a batch holds is private between the loader that built it and the
+    loss that reads it -- ``Trainer`` passes it through unopened. So this is the whole
+    contract, and each strategy's batch type is free to look however its objective
+    needs (``FrameBatch`` is windows and per-frame targets; ``ChunkBatch`` carries an
+    alpha carry's worth of stream bookkeeping besides).
+
+    ``__len__`` rather than a ``size()`` method because a batch *is* a collection of
+    examples, and because this used to be ``Loss.batch_size(batch)`` -- a property of
+    the batch, implemented on the loss. For the chunked objective that method had
+    become pure forwarding to ``len``; for the frame path it existed only because the
+    batch was an anonymous tuple, where ``len`` would have answered 2.
+    """
+
+    def __len__(self) -> int:
+        """Examples in this batch, for the example-weighted epoch mean."""
+        ...
+
+
+B = TypeVar("B", bound=Batch)
+
+
+class Loss(ABC, Generic[B]):
+    """A training objective the ``Trainer`` optimises, over one strategy's batch type.
+
+    Generic in that type so an objective states what it consumes: ``Loss[FrameBatch]``
+    reads windows, ``Loss[ChunkBatch]`` reads ordered chunks, and neither takes
+    ``object``. The pairing is enforced by ``Recipe``, which builds the loader and the
+    loss together for exactly this reason.
+    """
 
     @abstractmethod
     def compute(
-        self, model: nn.Module, batch: object, device: torch.device
+        self, model: nn.Module, batch: B, device: torch.device
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """``(loss, metrics)``: the scalar to backward, and per-component scalars to
         log. ``metrics`` must include a ``"total"`` key -- the number the early-stopper
         monitors -- so the loop never reaches into a paradigm-specific breakdown."""
-
-    @abstractmethod
-    def batch_size(self, batch: object) -> int:
-        """How many examples ``batch`` holds, for the example-weighted epoch mean."""
 
     def parameters(self) -> Iterable[nn.Parameter]:
         """Learnable parameters this objective adds beyond the model (none by
@@ -75,7 +137,7 @@ class Loss(ABC):
                 f"{sorted(state)}"
             )
 
-    def to(self, device: torch.device) -> "Loss":
+    def to(self, device: torch.device) -> "Loss[B]":
         """Move any owned modules onto ``device`` (no-op unless the objective holds
         parameters). Returns self for chaining, like ``nn.Module.to``."""
         return self
@@ -138,10 +200,22 @@ class Recipe(ABC):
         return {"conditions": [c.name for c in self.conditions]}
 
     @classmethod
-    def from_config(cls, config: dict[str, object]) -> "Recipe":
-        """Rebuild a recipe from ``config``. Override when a field needs reviving into
-        an object rather than passed straight through (see ``SemiCRFRecipe``)."""
-        return cls(**config)
+    @abstractmethod
+    def from_config(cls, config: Mapping[str, object]) -> "Recipe":
+        """Rebuild a recipe from ``config``, pulling each field explicitly.
+
+        Deliberately *not* ``cls(**config)``. This is a deserialisation boundary: the
+        mapping comes off disk, possibly written by an older version -- ``Checkpoint``
+        already reconstructs one for pre-v2 files -- so nothing guarantees a key holds
+        the type the constructor declares. Splatting an untyped mapping into a typed
+        signature is unsound, and a type checker says so. Pulling each field coerces it
+        where it is read, and a malformed checkpoint fails here, naming the field,
+        instead of somewhere downstream with a shape error.
+
+        Abstract rather than defaulted: a recipe that cannot be rebuilt from its own
+        ``config`` is broken, and that should be a missing method rather than a
+        checkpoint that loads into the wrong model.
+        """
 
     @property
     def params(self) -> dict[str, object]:
@@ -156,12 +230,17 @@ class Recipe(ABC):
         return {}
 
     @abstractmethod
-    def build_model(self) -> nn.Module:
+    def build_model(self) -> CueNet:
         """The encoder. Shared shape across recipes -- what varies is the objective
-        over its outputs, not the backbone."""
+        over its outputs, not the backbone.
+
+        ``CueNet`` rather than ``nn.Module`` because that is what the sentence
+        above already claims, and what every consumer needs: ``LearnedEncoder`` takes a
+        ``CueNet``, so a weaker return type here bought no freedom and instead
+        put an unchecked assumption at each of its two call sites."""
 
     @abstractmethod
-    def build_loss(self) -> Loss:
+    def build_loss(self) -> "Loss[Any]":
         """The objective. May own parameters of its own; ``Trainer`` spans them.
 
         Takes nothing: a strategy's own knobs live on the recipe (see
@@ -175,7 +254,7 @@ class Recipe(ABC):
         cache: Cache,
         config: TrainConfig,
         limit: int | None,
-    ) -> DataLoader:
+    ) -> "DataLoader[Any]":
         """Batches from the union of this recipe's input conditions.
 
         Takes the corpus and the cache rather than pre-built paths, because the two
@@ -185,12 +264,12 @@ class Recipe(ABC):
     @abstractmethod
     def val_loader(
         self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
-    ) -> DataLoader:
+    ) -> "DataLoader[Any]":
         """The inline early-stopping set. Clean stems only -- it is the cheap proxy,
         not the number that matters (see ``Trainer``'s docstring)."""
 
     @abstractmethod
-    def decoder_from(self, state: dict) -> Decoder:
+    def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
         """The decoder a checkpoint should be *scored* through.
 
         ``state`` is a ``Trainer.state_cpu`` snapshot, so a structured objective can

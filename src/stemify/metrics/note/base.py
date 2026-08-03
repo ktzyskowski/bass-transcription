@@ -71,12 +71,14 @@ def matched_pairs(
         return []
     ref_int, ref_hz = _to_arrays(ref)
     est_int, est_hz = _to_arrays(est)
-    return mir_eval.transcription.match_notes(
+    # mir_eval ships no annotations, so this is `Any` on the way out.
+    pairs: list[tuple[int, int]] = mir_eval.transcription.match_notes(
         ref_int, ref_hz, est_int, est_hz,
         onset_tolerance=onset_tolerance,
         pitch_tolerance=pitch_tolerance,
         offset_ratio=None,  # onset + pitch only; bass offsets are fuzzy
     )
+    return pairs
 
 
 def count_matches(

@@ -43,18 +43,18 @@ independently testable units:
 Each file gets its own focused test module. No behavior change; pure decomposition.
 Biggest risk-reduction in the list. Medium effort, low risk (tests pin behavior).
 
-### 6 / 6a — A `pitch` abstraction; stop `NeuralEncoder` hardcoding `PyinBaseline`  ✅ DONE (009e777)
-Real coupling: `NeuralEncoder.__init__` defaults `baseline=PyinBaseline()` and calls
+### 6 / 6a — A `pitch` abstraction; stop `LearnedEncoder` hardcoding `PyinBaseline`  ✅ DONE (009e777)
+Real coupling: `LearnedEncoder.__init__` defaults `baseline=PyinBaseline()` and calls
 it for the contour, and `PyinBaseline` lives in `baselines/` (the *eval* package). So a
 production model depends on an eval baseline — role confusion (your 6a).
 
 **Precise scope — I partly disagree with the framing:**
 - **YES** a `stemify/pitch/` module with a `PitchEstimator` (a.k.a. `ContourSource`)
   ABC: `estimate(audio|features) → Contour`. Impls: `PyinPitch` (wraps the pyin call),
-  later `NeuralPitchHead`. `NeuralEncoder` takes a `PitchEstimator`, not a
+  later `NeuralPitchHead`. `LearnedEncoder` takes a `PitchEstimator`, not a
   `PyinBaseline` — the learned head then drops in with no interface change (exactly the
   "encoder produces the contour" promise).
-- **NO separate `onset`/`voicing` ABCs** — those are *outputs of the `FrameTagger`
+- **NO separate `onset`/`voicing` ABCs** — those are *outputs of the `CueNet`
   heads*, not pluggable strategies. Abstracting them would be ceremony around a tensor.
   Pitch is different: it has two genuine sources (pyin now, a head later), so it earns
   the seam. Onset/voicing have one source (the head).
@@ -156,7 +156,7 @@ priority, small.
 
 ### Eval-harness redesign; delete `segmentation/`  ✅ DONE (cf7ceeb)
 Note-eval now scores a `Segmenter` directly -- **no `LearnedBaseline` class**; the
-trained model *is* a `Segmenter(NeuralEncoder(ckpt), decoder)`. `segmentation/`
+trained model *is* a `Segmenter(LearnedEncoder(ckpt), decoder)`. `segmentation/`
 deleted; coverage migrated to `tests/decoders/test_group_contour.py`. Dropped the
 `Transcriber` Protocol / native adapter (no baseline implements `predict_notes` --
 would be dead code; add when one does). Frame harness + `baselines/` left as the
@@ -219,7 +219,7 @@ it's `frames.py` (relocate it, Tier 2). `alignment.py` stays eval-specific.
 ## Suggested execution order
 1. **#5** metrics → `stemify/metrics/` (unblocks the rest of the eval story)
 2. **#7** split `semicrf/` (highest risk reduction; independent)
-3. **6/6a** `pitch/` module + un-hardcode `NeuralEncoder`
+3. **6/6a** `pitch/` module + un-hardcode `LearnedEncoder`
 4. **device.py** unify + **frames.py** relocate + **#4** `FrameFeatures` (small, batchable) ✅ DONE (7fed310)
 5. **#9** `callbacks/` package
 6. **#1** cache unification (design, then rerun on 5090)

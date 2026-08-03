@@ -1,6 +1,6 @@
 """Cues-level evaluation: score an ``Encoder``'s output, decoder-independent.
 
-    CuesEvaluation(SlakhDataset("data/raw/slakh2100"), DSPEncoder()).run()
+    CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ClassicalEncoder()).run()
 
 ``NoteEvaluation`` scores a whole ``Segmenter`` -- "did you find the right notes".
 This scores the *encoder* alone: given the per-frame ``Cues`` it produces, how good
@@ -27,6 +27,7 @@ the contour resampled onto the reference grid for pitch.
 
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -82,7 +83,7 @@ class CuesReport(Report):
                 return result.scalars.get(key)
         return None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "encoder": self.encoder,
             "dataset": self.dataset,

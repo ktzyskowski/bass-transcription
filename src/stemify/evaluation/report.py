@@ -48,7 +48,7 @@ class Report(ABC):
         """A human-readable summary. ``worst`` bounds the worst-items tail."""
 
     @abstractmethod
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """A plain dict suitable for ``json.dumps`` -- the machine-readable form."""
 
     def write_json(self, path: str | Path) -> None:

@@ -28,6 +28,8 @@ so a fresh pass over the loader (a new epoch, or the val loader) rebuilds every 
 before reading it, and no epoch resumes from the last one's state.
 """
 
+from collections.abc import Iterable
+
 import torch
 from torch import nn
 
@@ -37,7 +39,7 @@ from stemify.training.base import Loss
 from stemify.training.semicrf.dataset import ChunkBatch
 
 
-class SemiCRFLoss(Loss):
+class SemiCRFLoss(Loss[ChunkBatch]):
     """The semi-CRF NLL over ordered chunks, carrying alpha between them."""
 
     def __init__(self, decoder: SemiCRFDecoder, detach_carry: bool = True) -> None:
@@ -51,17 +53,17 @@ class SemiCRFLoss(Loss):
         # Resumption state; a gradient path only when detach_carry is False.
         self._carry: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
-    def parameters(self):
+    def parameters(self) -> Iterable[nn.Parameter]:
         return self.decoder.parameters()
 
-    def state_dict(self):
+    def state_dict(self) -> dict[str, torch.Tensor]:
         # The ~15 potentials ARE the decoder. Without them a checkpoint restores an
         # encoder paired with an untrained CRF -- w_on=1, dur=zeros, i.e. no duration
         # preference at all, which is precisely the mechanism this objective exists
         # to learn.
         return {k: v.detach().cpu().clone() for k, v in self.decoder.state_dict().items()}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict[str, torch.Tensor]) -> None:
         self.decoder.load_state_dict(state)
 
     def to(self, device: torch.device) -> "SemiCRFLoss":
@@ -116,9 +118,11 @@ class SemiCRFLoss(Loss):
         # (B, T, K) -- the CRF's path/spread features read these.
         pitch = out["pitch"] if "pitch" in out else None
 
+        # No contour: nothing the scan reads needs one, and every recipe builds a
+        # voicing head, so the fallback that used to want it is unreachable here.
         cues_list = [
             TensorCues.from_logits(
-                batch.contours[b], onset[b], batch.frame_times[b],
+                None, onset[b], batch.frame_times[b],
                 voicing[b] if voicing is not None else None,
                 pitch[b] if pitch is not None else None,
             )
@@ -142,5 +146,3 @@ class SemiCRFLoss(Loss):
         scalar = float(nll.item())
         return nll, {"nll": scalar, "total": scalar}
 
-    def batch_size(self, batch: ChunkBatch) -> int:
-        return len(batch)

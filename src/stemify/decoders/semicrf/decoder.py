@@ -20,6 +20,8 @@ heuristic does. See ``docs/semi-crf.md``, which carries the theory and a ledger 
 where this implementation departs from it.
 """
 
+from collections.abc import Sequence
+
 import librosa
 import numpy as np
 import torch
@@ -32,7 +34,7 @@ from stemify.decoders.semicrf.evidence import Evidence, TensorCues, build_eviden
 from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.score import segmentation_scores
-from stemify.decoders.semicrf.spans import LinearSpanScorer, SpanScorer
+from stemify.decoders.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
 from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.notes import NoteEvent
 
@@ -47,6 +49,13 @@ class SemiCRFDecoder(Decoder, nn.Module):
     """
 
     name = "semicrf"
+
+    # Declared, not assigned: a submodule assigned in ``__init__`` is otherwise read
+    # back through ``nn.Module.__getattr__``, whose return type is ``Tensor | Module``.
+    # Callers reading the scorer's *geometry* (``dmax_s``, ``dur_edges``) then get a
+    # union that has neither, which is what made ``SemiCRFRecipe`` rebuild a decoder
+    # from values the checker could not tell apart from a tensor.
+    scorer: SpanScorer
 
     def __init__(
         self,
@@ -69,7 +78,9 @@ class SemiCRFDecoder(Decoder, nn.Module):
         Sourcing it here is what lets a CUDA-resident decoder score CPU-born cues."""
         return next(self.scorer.parameters()).device
 
-    def _prepare(self, cues_list: list[Cues | TensorCues]) -> tuple[Evidence, object]:
+    def _prepare(
+        self, cues_list: Sequence[Cues | TensorCues]
+    ) -> tuple[Evidence, Grid]:
         """Evidence for a batch, and the ``Grid`` its tracks share.
 
         All tracks come off one feature hop, so the grid is derived once from the first
@@ -83,8 +94,8 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
     def nll_batch(
         self,
-        cues_list: list[Cues | TensorCues],
-        notes_list: list[list[NoteEvent]],
+        cues_list: Sequence[Cues | TensorCues],
+        notes_list: Sequence[list[NoteEvent]],
     ) -> torch.Tensor:
         """Per-track NLL ``(B,)``: one batched ``log Z`` scan over the padded evidence,
         minus each track's gold score.
@@ -102,7 +113,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
     def nll_chunk(
         self,
-        cues_list: list[Cues | TensorCues],
+        cues_list: Sequence[Cues | TensorCues],
         golds: list[list[tuple[int, int, int]]],
         carry: torch.Tensor | None,
         context: int,
@@ -137,7 +148,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         median contour pitch over its span -- pitch comes from the contour, never
         invented. A span the contour left entirely pitchless yields no note.
 
-        The contour is pyin's or the model's own, and this cannot tell: ``NeuralEncoder``
+        The contour is pyin's or the model's own, and this cannot tell: ``LearnedEncoder``
         already substitutes the pitch head's ``decode_contour`` output when the model
         has that head, so both arrive here as a plain ``Contour``. That is why no
         potential reads it and why ``models`` is not imported here."""

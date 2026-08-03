@@ -15,7 +15,7 @@ separation; ``separated`` runs demucs over the train set first, cached.
 Validation runs on every deployment condition of the model's own channel width
 (``--val-sources``), not just clean stems. Cheap per-frame val loss drives early
 stopping inline, while ``AsyncValidationCallback`` scores each checkpoint through the
-real ``NeuralEncoder`` + ``HeuristicDecoder`` pair -- one ``OnsetValidator`` per
+real ``LearnedEncoder`` + ``HeuristicDecoder`` pair -- one ``OnsetValidator`` per
 condition, each caching its contours so a score is a model forward rather than a pyin
 re-run. From that one forward it logs both altitudes to MLflow --
 ``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap, voicing_auroc}``
@@ -27,23 +27,29 @@ on how well the learned cues survive separation.
 import argparse
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
+from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
+from stemify.contour import Contour
 from stemify.decoders.base import Decoder
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
+from stemify.features import FrameFeatures
 from stemify.models.heads import onset_head, voicing_head
+from stemify.notes import NoteEvent
 from stemify.models.networks import TCN
-from stemify.models.tagger import FrameTagger
+from stemify.models.cuenet import CueNet
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
+    Callback,
     ConsoleCallback,
     MLflowCallback,
 )
@@ -85,7 +91,7 @@ def _parse_pos_weight(spec: str) -> dict[str, float]:
     return weights
 
 
-def _epoch_batches(loader) -> int | str:
+def _epoch_batches(loader: DataLoader[Any]) -> int | str:
     """Batches per epoch, or ``"streaming"`` when that is not knowable in advance.
 
     The chunked semi-CRF loader wraps an ``IterableDataset``: it walks ``batch_size``
@@ -101,9 +107,9 @@ def _epoch_batches(loader) -> int | str:
         return "streaming"
 
 
-def build_model(in_channels: int = 1) -> FrameTagger:
+def build_model(in_channels: int = 1) -> CueNet:
     backbone = TCN(in_channels=in_channels)
-    return FrameTagger(
+    return CueNet(
         backbone,
         {"onset": onset_head(backbone.hidden), "voicing": voicing_head(backbone.hidden)},
     )
@@ -147,9 +153,9 @@ def _eval_fn(
     validators: dict[str, OnsetValidator],
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,
-    build_decoder: Callable[[dict], Decoder] | None = None,
-    build_model: Callable[[], nn.Module] = build_model,
-):
+    build_decoder: Callable[[Mapping[str, Any]], Decoder] | None = None,
+    build_model: Callable[[], CueNet] = build_model,
+) -> Callable[[Mapping[str, Any], int], Mapping[str, float]]:
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
     score it through each cached validator (off the training device). Every metric is
     namespaced ``<level>/<condition>/<key>`` so MLflow charts one series per condition
@@ -169,27 +175,27 @@ def _eval_fn(
     reported the *heuristic's* note F1 over its learned cues -- plausible numbers for
     a model nobody trained."""
     if build_decoder is None:
-        def build_decoder(_state: dict) -> Decoder:
+        def build_decoder(_state: Mapping[str, Any]) -> Decoder:
             return HeuristicDecoder()
 
-    def eval_fn(state, epoch):
+    def eval_fn(state: Mapping[str, Any], epoch: int) -> Mapping[str, float]:
         model = build_model()  # the recipe's encoder
         # `state` is a Trainer.state_cpu snapshot: the model's weights under "model"
         # and the objective's own parameters under "loss". The decoder is built from
         # the same snapshot, so a structured objective is scored through the
         # potentials that snapshot actually trained -- not a fresh set.
-        model.load_state_dict(state["model"])
+        model.load_state_dict(dict(state["model"]))
         # Wrap the checkpoint once (CPU, off the training device) as the encoder/decoder
         # pair deployment composes into a Segmenter. The decoder scores notes over the
         # encoder's cues; the encoder alone scores its own cues -- one forward, both.
-        encoder = NeuralEncoder(model, device="cpu")
+        encoder = LearnedEncoder(model, device="cpu")
         decoder = build_decoder(state)
 
-        def segment(contour, features):
+        def segment(contour: Contour, features: FrameFeatures) -> list[NoteEvent]:
             return decoder.decode(encoder.encode_features(contour, features))
 
         metrics: dict[str, float] = {}
-        report: dict = {"epoch": epoch, "conditions": {}}
+        report: dict[str, Any] = {"epoch": epoch, "conditions": {}}
         for tag, validator in validators.items():
             note = validator.score(segment)
             for key, value in note.items():
@@ -288,7 +294,7 @@ def train(
 
     trainer = Trainer(model, recipe.build_loss(), config)
 
-    callbacks: list = [ConsoleCallback()]
+    callbacks: list[Callback] = [ConsoleCallback()]
     mlflow = None
     if tracking_uri:
         # Run names are labels, not keys -- MLflow mints a fresh run_id per launch,
@@ -337,7 +343,7 @@ def train(
     trainer.fit(train_loader, val_loader, callbacks=callbacks)
 
     # fit() restores the best-val checkpoint into trainer.model; persist it so the
-    # trained heads survive the process (a NeuralEncoder loads them) rather than
+    # trained heads survive the process (a LearnedEncoder loads them) rather than
     # living only as MLflow metrics. Save the state_dict plus the metadata needed to
     # rebuild the architecture before loading weights.
     # The recipe goes in rather than the facts derived from it (heads, in_channels,
@@ -420,7 +426,7 @@ def main() -> None:
     # --pos-weight is a frame-strategy setting and is refused elsewhere rather than
     # ignored: the semi-CRF's objective takes no class weights, so while this lived on
     # TrainConfig the flag was accepted and quietly did nothing.
-    strategy_kwargs: dict = {}
+    strategy_kwargs: dict[str, Any] = {}
     if args.objective == "frame":
         strategy_kwargs = {
             "pitch": args.pitch,

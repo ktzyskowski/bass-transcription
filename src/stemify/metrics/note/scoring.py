@@ -20,10 +20,16 @@ the caller.
 from collections.abc import Sequence
 
 from stemify.metrics.base import MetricResult
+from stemify.metrics.note.base import NoteMetric
 from stemify.metrics.note.fragmentation import Fragmentation
 from stemify.metrics.note.prf import PRF
+from stemify.notes import NoteEvent
 
-Notes = list  # a per-track list of NoteEvent; kept loose to avoid importing the type
+# One track's notes. This was a bare ``Notes = list`` "kept loose to avoid importing
+# the type" -- but ``stemify.notes`` is a leaf value module with no dependencies, so the
+# import costs nothing, and the loose alias meant every signature here said ``list[Any]``
+# while reading as though it said something.
+Notes = list[NoteEvent]
 
 # PRF is the headline (what a tab is graded on); Fragmentation explains the false
 # positives PRF only counts. Both read the same match, so they agree on which
@@ -34,7 +40,7 @@ DEFAULT_NOTE_METRICS = (PRF(), Fragmentation())
 def score_notes(
     references: Sequence[Notes],
     estimates: Sequence[Notes],
-    metrics=DEFAULT_NOTE_METRICS,
+    metrics: Sequence[NoteMetric] = DEFAULT_NOTE_METRICS,
 ) -> list[MetricResult]:
     """Each metric's result over the whole set of per-track (reference, estimate) lists."""
     return [m.calculate(list(references), list(estimates)) for m in metrics]

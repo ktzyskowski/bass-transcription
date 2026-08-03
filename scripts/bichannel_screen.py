@@ -32,7 +32,7 @@ import torch
 from stemify.cache import Cache
 from stemify.cues import Cues
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.base import matched_pairs
@@ -99,7 +99,7 @@ def main() -> None:
             # "pyin" reproduces the already-recorded baseline on the same track set;
             # "learned" is the same cues with the pitch source swapped underneath.
             for source in ("pyin", "learned"):
-                enc = NeuralEncoder(cue_model, device="cpu")
+                enc = LearnedEncoder(cue_model, device="cpu")
                 tp = fp = fn = stp = sfp = sfn = 0
                 for ex in v.examples:
                     feats = ex.load_features()

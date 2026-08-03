@@ -60,9 +60,12 @@ def viterbi(
         # (window offset, previous label) -- and the offset maps back to a frame
         # through the *same* clamped start table the recurrence scored against,
         # rather than through a second copy of that arithmetic.
-        arg = int(back[j, label])
-        i = int(candidate_starts(grid, j, cpu)[arg // 3])
-        prev = arg % 3
+        # `flat`, not `arg`: the forward loop above already binds `arg` to the batched
+        # argmax *tensor*, and reusing the name here for one scalar backpointer made
+        # two different things read as one.
+        flat = int(back[j, label])
+        i = int(candidate_starts(grid, j, cpu)[flat // 3])
+        prev = flat % 3
         segs.append((label, i, j))
         j, label = i, prev
         if label == START:

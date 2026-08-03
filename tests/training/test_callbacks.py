@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from stemify.models.heads import onset_head
 from stemify.models.networks import TCN
-from stemify.models.tagger import FrameTagger
+from stemify.models.cuenet import CueNet
 from stemify.features import N_BINS
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -45,7 +45,7 @@ def _loader(n=4, window=16):
 
 
 def _trainer(max_epochs=3):
-    model = FrameTagger(TCN(), {"onset": onset_head()})
+    model = CueNet(TCN(), {"onset": onset_head()})
     return Trainer(model, FrameBCELoss(("onset",)),
                    TrainConfig(device="cpu",
                                max_epochs=max_epochs, patience=99))

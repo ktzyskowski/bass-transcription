@@ -1,4 +1,4 @@
-"""NeuralEncoder: the cached-features path the validator uses, and encode-from-audio.
+"""LearnedEncoder: the cached-features path the validator uses, and encode-from-audio.
 
 Fake models drive known onset/voicing curves so the forward, Cues assembly, and the
 decode that follows are exercised without a trained model.
@@ -12,12 +12,26 @@ from torch import nn
 
 from stemify.contour import Contour
 from stemify.decoders.heuristic import HeuristicDecoder, onset_times_from_probs
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.features import SAMPLE_RATE, FrameFeatures
 from stemify.sources import Sources
 
 
-class _FakeOnsetModel(nn.Module):
+class _FakeCueNet(nn.Module):
+    """Base for the doubles below: the parts of ``CueNet``'s interface that
+    ``LearnedEncoder`` reads besides ``forward``.
+
+    Declared rather than left off. The encoder used to reach for these with
+    ``getattr(..., default)``, which let a double stand in while implementing only
+    half the interface -- and the default it fell back to was a plausible wrong
+    answer in production, not just in tests. A double should be honest about the
+    shape it is standing in for."""
+
+    in_channels = 1
+    frequency_heads: dict = {}
+
+
+class _FakeOnsetModel(_FakeCueNet):
     """Onset logits that peak at given fractions of the input length; no voicing."""
 
     def __init__(self, peak_fracs):
@@ -32,7 +46,7 @@ class _FakeOnsetModel(nn.Module):
         return {"onset": logits}
 
 
-class _FakeOnsetVoicingModel(nn.Module):
+class _FakeOnsetVoicingModel(_FakeCueNet):
     """Onset never fires; voicing is 'sounding' only on the first half of frames."""
 
     def forward(self, x):  # x: (1, 1, F, T)
@@ -55,7 +69,7 @@ def test_encode_features_voicing_head_places_rests():
     # so the decoded note ends early -- the cached validator path end to end.
     n = 40
     contour, features = _held(n)
-    cues = NeuralEncoder(_FakeOnsetVoicingModel(), device="cpu").encode_features(
+    cues = LearnedEncoder(_FakeOnsetVoicingModel(), device="cpu").encode_features(
         contour, features
     )
     assert cues.voicing is not None
@@ -67,7 +81,7 @@ def test_encode_features_voicing_head_places_rests():
 def test_encode_features_without_voicing_falls_back_to_contour():
     n = 40
     contour, features = _held(n)
-    cues = NeuralEncoder(_FakeOnsetModel([]), device="cpu").encode_features(
+    cues = LearnedEncoder(_FakeOnsetModel([]), device="cpu").encode_features(
         contour, features
     )
     assert cues.voicing is None  # onset-only model
@@ -80,7 +94,7 @@ def test_encode_from_audio_peaks_the_onset_curve(tmp_path):
     t = np.linspace(0, dur_s, int(SAMPLE_RATE * dur_s), endpoint=False)
     sf.write(wav, 0.5 * np.sin(2 * np.pi * 110.0 * t), SAMPLE_RATE)
 
-    cues = NeuralEncoder(_FakeOnsetModel([1 / 3, 2 / 3]), device="cpu").encode(
+    cues = LearnedEncoder(_FakeOnsetModel([1 / 3, 2 / 3]), device="cpu").encode(
         Sources(bass=wav)
     )
     assert cues.onset.shape == cues.frame_times.shape
@@ -94,7 +108,7 @@ def test_encode_from_audio_peaks_the_onset_curve(tmp_path):
 # --------------------------------------------------------------------------- #
 # mix-conditioned input: several stacked renderings of one track               #
 # --------------------------------------------------------------------------- #
-class _ChannelCountingModel(nn.Module):
+class _ChannelCountingModel(_FakeCueNet):
     """Records the channel count it was handed; never fires an onset."""
 
     def __init__(self, in_channels):
@@ -114,7 +128,7 @@ def test_encode_features_passes_a_stacked_input_through_unflattened():
     stacked = FrameFeatures(
         np.random.rand(2, 8, n).astype(np.float32), np.arange(n) * 0.0116
     )
-    NeuralEncoder(model, device="cpu").encode_features(contour, stacked)
+    LearnedEncoder(model, device="cpu").encode_features(contour, stacked)
     assert model.seen == (1, 2)          # (batch, channels) -- the axis survives
 
 
@@ -124,7 +138,7 @@ def test_a_bare_cqt_still_reaches_a_single_channel_model():
     n = 12
     contour, features = _held(n)
     model = _ChannelCountingModel(1)
-    NeuralEncoder(model, device="cpu").encode_features(contour, features)
+    LearnedEncoder(model, device="cpu").encode_features(contour, features)
     assert model.seen == (1, 1)
 
 
@@ -133,7 +147,7 @@ def test_encoding_the_wrong_channel_count_fails_loudly():
     # therefore notes, from a model reading half its input as absent.
     n = 12
     contour, features = _held(n)
-    encoder = NeuralEncoder(_ChannelCountingModel(2), device="cpu")
+    encoder = LearnedEncoder(_ChannelCountingModel(2), device="cpu")
     with pytest.raises(ValueError, match="expects 2 input channel"):
         encoder.encode_features(contour, features)
 
@@ -147,7 +161,7 @@ def test_encode_from_audio_reads_the_mix_for_a_second_channel(tmp_path):
     sf.write(mix, 0.5 * np.sin(2 * np.pi * 220.0 * t), SAMPLE_RATE)
 
     model = _ChannelCountingModel(2)
-    NeuralEncoder(model, device="cpu").encode(Sources(bass=bass, mix=mix))
+    LearnedEncoder(model, device="cpu").encode(Sources(bass=bass, mix=mix))
     assert model.seen == (1, 2)
 
 
@@ -156,7 +170,7 @@ def test_a_mix_conditioned_model_needs_a_mix(tmp_path):
     t = np.linspace(0, 0.5, int(SAMPLE_RATE * 0.5), endpoint=False)
     sf.write(bass, 0.5 * np.sin(2 * np.pi * 110.0 * t), SAMPLE_RATE)
 
-    encoder = NeuralEncoder(_ChannelCountingModel(2), device="cpu")
+    encoder = LearnedEncoder(_ChannelCountingModel(2), device="cpu")
     with pytest.raises(ValueError, match="no 'mix' audio"):
         encoder.encode(Sources(bass=bass))
 
@@ -164,7 +178,7 @@ def test_a_mix_conditioned_model_needs_a_mix(tmp_path):
 # --------------------------------------------------------------------------- #
 # the learned contour: a model with a pitch head is its own pitch source       #
 # --------------------------------------------------------------------------- #
-class _FakePitchModel(nn.Module):
+class _FakePitchModel(_FakeCueNet):
     """Confidently predicts one MIDI pitch everywhere; voicing on the first half."""
 
     frequency_heads = {"pitch": object()}   # what has_pitch_head reads
@@ -198,7 +212,7 @@ def test_pitch_head_replaces_the_supplied_contour():
 
     feats = _flat_features()
     pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
-    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu")
+    enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu")
 
     assert enc.has_pitch_head and enc.pitch_source == "learned"
     cues = enc.encode_features(pyin_says, feats)
@@ -211,7 +225,7 @@ def test_pitch_head_replaces_the_supplied_contour():
 
 def test_voicing_head_gates_the_learned_contour():
     feats = _flat_features()
-    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu")
+    enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu")
     cues = enc.encode_features(Contour(feats.frame_times, np.zeros(40)), feats)
     half = feats.frame_times.size // 2
     assert (cues.contour.freqs[:half] > 0).all()     # voiced -> a pitch
@@ -222,7 +236,7 @@ def test_use_pyin_keeps_the_supplied_contour():
     """The A/B escape hatch: same checkpoint, the other pitch source."""
     feats = _flat_features()
     pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
-    enc = NeuralEncoder(_FakePitchModel(45.0), device="cpu", use_pyin=True)
+    enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu", use_pyin=True)
 
     assert enc.has_pitch_head and enc.pitch_source == "pyin"
     cues = enc.encode_features(pyin_says, feats)
@@ -232,7 +246,7 @@ def test_use_pyin_keeps_the_supplied_contour():
 def test_a_model_without_a_pitch_head_still_uses_the_supplied_contour():
     feats = _flat_features()
     supplied = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
-    enc = NeuralEncoder(_FakeOnsetVoicingModel(), device="cpu")
+    enc = LearnedEncoder(_FakeOnsetVoicingModel(), device="cpu")
 
     assert not enc.has_pitch_head and enc.pitch_source == "pyin"
     assert np.allclose(enc.encode_features(supplied, feats).contour.freqs, 200.0)

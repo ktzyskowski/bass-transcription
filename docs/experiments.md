@@ -648,7 +648,7 @@ does cap recall by discarding real notes under 100 ms (~7% of the corpus), accep
 because those fragments are more often FPs than notes; revisit if short-note recall
 ever binds.
 
-Breaking a silent coupling was a precondition: `NeuralEncoder` imported the decoder's
+Breaking a silent coupling was a precondition: `LearnedEncoder` imported the decoder's
 `VOICING_THRESHOLD` to gate the contour, so retuning the decoder would have retuned the
 contour too and shipped a combination nobody measured. It now has its own
 `CONTOUR_VOICING_THRESHOLD`, still 0.5; the numbers above hold only for that pair.

@@ -1,6 +1,6 @@
-"""``NeuralEncoder``: trained backbone + heads as the cue producer.
+"""``LearnedEncoder``: trained backbone + heads as the cue producer.
 
-Runs a ``FrameTagger`` over a track's CQT to produce per-frame onset (and voicing,
+Runs a ``CueNet`` over a track's CQT to produce per-frame onset (and voicing,
 when the model has that head) probabilities, pairs them with a pitch contour, and
 returns a ``Cues``. The model is fully convolutional over time, so the whole track
 goes through in one pass -- no windowing at inference.
@@ -34,20 +34,20 @@ from stemify.device import best_device
 from stemify.encoders.base import Encoder
 from stemify.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
-from stemify.models.tagger import FrameTagger
+from stemify.models.cuenet import CueNet
 from stemify.pitch import PitchEstimator, PyinPitch
 from stemify.sources import Sources
 
 
-class NeuralEncoder(Encoder):
-    """Neural cue producer: a ``FrameTagger``'s onset/voicing probs, plus a contour
+class LearnedEncoder(Encoder):
+    """Neural cue producer: a ``CueNet``'s onset/voicing probs, plus a contour
     from its own pitch head when it has one and pyin when it does not."""
 
     name = "neural"
 
     def __init__(
         self,
-        model: FrameTagger,
+        model: CueNet,
         device: str | None = None,
         pitch: PitchEstimator | None = None,
         use_pyin: bool = False,
@@ -62,13 +62,8 @@ class NeuralEncoder(Encoder):
 
     @property
     def has_pitch_head(self) -> bool:
-        """Whether the wrapped model produces its own contour.
-
-        ``getattr`` because a duck-typed model in a test has no ``frequency_heads``,
-        and for anything that old the answer is the same: no.
-        """
-        heads = getattr(self.model, "frequency_heads", None)
-        return bool(heads is not None and "pitch" in heads)
+        """Whether the wrapped model produces its own contour."""
+        return "pitch" in self.model.frequency_heads
 
     @property
     def pitch_source(self) -> str:
@@ -79,12 +74,15 @@ class NeuralEncoder(Encoder):
     def in_channels(self) -> int:
         """How many stacked renderings the wrapped model expects.
 
-        Defaulted rather than required: a single CQT was the only input a model
-        could have before mix-conditioning existed, so a backbone that does not
-        declare a width is one -- which keeps every earlier checkpoint, and the
-        duck-typed models the tests drive, working unchanged.
+        A direct read. This was ``getattr(self.model, "in_channels", 1)``, defaulted so
+        that a model which did not declare a width counted as single-channel -- but the
+        only things that did not declare one were incomplete test doubles, and the
+        default's cost fell on production: a 2-channel checkpoint whose width went
+        unread would assemble a 1-channel input, and *1* is a plausible enough answer
+        that the failure surfaces as a shape error in the first conv rather than as the
+        misread it is. The doubles now declare the attribute instead.
         """
-        return getattr(self.model, "in_channels", 1)
+        return self.model.in_channels
 
     @torch.no_grad()
     def _forward(

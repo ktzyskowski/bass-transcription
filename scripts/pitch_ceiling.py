@@ -16,7 +16,7 @@ from pathlib import Path
 
 from stemify.cache import Cache
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.fragmentation import Fragmentation
 from stemify.metrics.note.prf import PRF
@@ -35,7 +35,7 @@ for tag, ckpt in [a.split("=") for a in sys.argv[1:]]:
     validator = OnsetValidator(
         condition.dataset(ROOT, "validation", 20), condition, cache=CACHE
     )
-    encoder, decoder = NeuralEncoder(model, device="cpu"), HeuristicDecoder()
+    encoder, decoder = LearnedEncoder(model, device="cpu"), HeuristicDecoder()
 
     refs, ests = [], []
     for ex in validator.examples:

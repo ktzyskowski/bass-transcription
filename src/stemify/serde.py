@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import numpy.typing as npt
 
 from stemify.atomic import atomic_write
 from stemify.contour import Contour
@@ -31,14 +32,25 @@ def _write_npy(dest: Path, arr: np.ndarray) -> None:
         np.save(f, arr)
 
 
-def write_npz(dest: Path, *, compressed: bool, **arrays: np.ndarray) -> None:
+def write_npz(dest: Path, *, compressed: bool, **arrays: npt.ArrayLike) -> None:
     """Write arrays as an npz. Public because callers that rewrite *part* of a cached
     example (the targets backfill) need the same handle trick and the same atomicity,
     and reimplementing either is how a truncated file ends up trusted as a cache hit.
 
-    Same reason as _write_npy: a handle stops np.savez appending '.npz'."""
+    Same reason as _write_npy: a handle stops np.savez appending '.npz'.
+
+    ``ArrayLike`` rather than ``ndarray``: ``TrackExample.save`` passes its ``name``
+    through here as a ``str``, which ``np.savez`` stores as a 0-d array and ``load``
+    reads back with ``str(z["name"])``. That has always worked; the annotation simply
+    did not describe it."""
     with open(dest, "wb") as f:
-        (np.savez_compressed if compressed else np.savez)(f, **arrays)
+        # The ignore is a stub artifact, not a defect: numpy spells these
+        # ``savez(file, *args, allow_pickle=..., **kwds)``, and a ``**mapping`` splat is
+        # checked against *every* keyword the callee declares -- so the array values are
+        # tested against ``allow_pickle: bool`` even though they can only land in
+        # ``**kwds``. There is no call shape that avoids it.
+        write = np.savez_compressed if compressed else np.savez
+        write(f, **arrays)  # type: ignore[arg-type]
 
 
 def features_npy(npz_path: Path) -> Path:

@@ -659,7 +659,7 @@ def test_batched_nll_grad_survives_padding():
 
 
 # --- device placement -------------------------------------------------------------
-# The semi-CRF had never run off CPU: both entry points that build a NeuralEncoder
+# The semi-CRF had never run off CPU: both entry points that build a LearnedEncoder
 # hardcode device="cpu", and there is no semi-CRF training entry point yet, so nothing
 # ever called .to() on the potentials. Two fields were stranded on the host as a
 # result -- the dur_edges_s buffer (read via .numpy(), which raises once moved) and Jc

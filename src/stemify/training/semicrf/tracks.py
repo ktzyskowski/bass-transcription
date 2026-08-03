@@ -21,6 +21,7 @@ audio the reference notes describe; the rest are context the encoder may read. S
 invariant as the frame path, and nothing downstream re-derives it.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from stemify.notes import NoteEvent
 from stemify.pitch import PitchEstimator
 from stemify.serde import TrackExample
 from stemify.training.conditions import Condition
+from stemify.training.examples import ensure_targets
 
 
 @dataclass(frozen=True)
@@ -78,11 +80,42 @@ def channel_window(
     return out
 
 
+def target_windows(
+    example: TrackExample, heads: Sequence[str], start: int, width: int
+) -> dict[str, np.ndarray]:
+    """``{head: (width,)}`` of per-frame targets, **NaN-padded** off the track's ends.
+
+    The target peer of ``channel_window``, and deliberately *not* zero-padded like it.
+    Zero is a meaningless feature value but a meaningful *label*: MIDI 0 for pitch, "no
+    onset" for a binary head. Every loss that reads these masks on ``isnan`` (see
+    ``frame.loss.pitch_ce``), so NaN means "no label here" and a padded frame
+    contributes nothing to the gradient. Pad with zeros instead and a chunk running off
+    a track's end trains the pitch head toward MIDI 0 at every edge -- while the loss
+    falls, because that is a confident answer to a question nobody asked.
+    """
+    n_frames = example.features.shape[-1]
+    lo, hi = max(0, start), min(n_frames, start + width)
+    out: dict[str, np.ndarray] = {}
+    for head in heads:
+        if head not in example.targets:
+            raise KeyError(
+                f"{example.name!r} has no cached {head!r} target (has "
+                f"{sorted(example.targets)}). The dataset must be built with the heads "
+                "it will serve, so `track_inputs` can back-fill them."
+            )
+        y = np.full(width, np.nan, dtype=np.float32)
+        if lo < hi:
+            y[lo - start : hi - start] = example.targets[head][lo:hi]
+        out[head] = y
+    return out
+
+
 def track_inputs(
     dataset: SlakhLikeDataset,
     condition: Condition,
     cache: Cache,
     estimator: PitchEstimator | None = None,
+    heads: Sequence[str] = (),
 ) -> list[TrackInputs]:
     """Resolve and cache every track's inputs for one condition, in dataset order.
 
@@ -98,8 +131,15 @@ def track_inputs(
     and the default is off. Supply an estimator only when something downstream needs a
     pitch track -- the voicing fallback for a model with no voicing head, or naming
     pitches at decode.
+
+    ``heads`` are the per-frame targets an *auxiliary* loss needs; the structured NLL
+    itself reads notes, not frame labels, so the default is none. They are back-filled
+    onto channel 0 alone -- the channel the labels describe -- through the same
+    self-healing writer the frame path uses, so adding one costs a MIDI parse per track
+    and no CQT recompute.
     """
     per_track = condition.channel_paths(dataset, cache)
+    ensure_targets(dataset, [paths[0] for paths in per_track], heads)
     return [
         TrackInputs(
             features=paths,

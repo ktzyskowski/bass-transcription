@@ -37,7 +37,13 @@ from stemify.contour import Contour
 class Cues:
     """Per-frame onset/voicing evidence plus the pitch contour, for a whole track."""
 
-    contour: Contour | None       # pitch track (own grid) -- names a decoded note
+    # Pitch track on its own grid -- what names a decoded note. **Not** optional, unlike
+    # the training-side ``TensorCues``: the DP scores spans with no contour at all, but
+    # an inference ``Cues`` exists to be turned into ``NoteEvent``s, and a note needs a
+    # pitch. Both encoders already guarantee one (``encode_features`` takes a required
+    # ``Contour``), so the union only ever described a state no producer could reach --
+    # while forcing every consumer that names a pitch to guard against it.
+    contour: Contour
     onset: np.ndarray             # (T,) per-frame onset evidence (prob or DSP envelope)
     frame_times: np.ndarray       # (T,) feature-grid times, seconds
     voicing: np.ndarray | None = None  # (T,) per-frame P(voiced), or None (no head)

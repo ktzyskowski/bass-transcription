@@ -13,7 +13,7 @@ design:
 
 The sequenced plan (see the note-level findings) trains **onset first** -- it is
 the biggest lever and its labels are exact MIDI onsets with no gate-fidelity
-question -- so ``FrameTagger`` is built to train a single head, not forced into
+question -- so ``CueNet`` is built to train a single head, not forced into
 joint multi-task. Voicing follows once the reference voicing gate is validated
 against MDB's annotations; pitch only if it beats pyin, which today it does not.
 

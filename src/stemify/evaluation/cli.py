@@ -10,8 +10,8 @@ This module is only argument parsing. The work is:
     CuesEvaluation(dataset, encoder).run() -> CuesReport    (--level cues)
     NoteEvaluation(dataset, Segmenter(encoder, decoder)).run() -> NoteReport  (--level note)
 
-Both levels score the same encoder -- ``pyin`` is the DSP floor (``DSPEncoder``),
-``learned`` a trained ``FrameTagger`` (``NeuralEncoder``, needs ``--checkpoint``).
+Both levels score the same encoder -- ``pyin`` is the DSP floor (``ClassicalEncoder``),
+``learned`` a trained ``CueNet`` (``LearnedEncoder``, needs ``--checkpoint``).
 Cues-level scores that encoder's per-frame evidence; note-level pairs it with a
 decoder and scores the notes. Adding a dataset means writing a ``Dataset`` subclass
 and one line in ``DATASETS``; the runners, metrics and reports need no changes.
@@ -26,10 +26,13 @@ from stemify.data.idmt_smt_bass import IdmtDataset
 from stemify.data.mdb_bass_synth import MdbDataset
 from stemify.data.slakh import SlakhDataset
 from stemify.decoders.heuristic import DSP_PITCH_SPLIT_SEMITONES, HeuristicDecoder
+from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.encoders.base import Encoder
-from stemify.encoders.dsp import DSPEncoder
+from stemify.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
+from stemify.evaluation.report import Report
+from stemify.models.cuenet import CueNet
 from stemify.segmenter import Segmenter
 from stemify.training.checkpoint import Checkpoint
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
@@ -42,8 +45,8 @@ ENCODERS = ("pyin", "learned")
 DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
 
 
-def load_tagger(checkpoint: Path):
-    """The trained ``FrameTagger`` a checkpoint holds.
+def load_tagger(checkpoint: Path) -> CueNet:
+    """The trained ``CueNet`` a checkpoint holds.
 
     Kept as a name because eight callers across ``scripts/`` use it, but it no longer
     rebuilds anything itself: it used to re-derive the architecture from ``heads`` and
@@ -57,27 +60,27 @@ def load_tagger(checkpoint: Path):
 def build_encoder(args: argparse.Namespace) -> Encoder:
     """The encoder both levels score: the pyin DSP floor, or a trained model.
 
-    ``--encoder pyin`` is ``DSPEncoder`` (spectral-flux onset + pyin pitch), the floor.
-    ``--encoder learned --checkpoint X`` loads a trained ``FrameTagger`` into a
-    ``NeuralEncoder``. The learned encoder is CPU-pinned here -- eval is not the hot path.
+    ``--encoder pyin`` is ``ClassicalEncoder`` (spectral-flux onset + pyin pitch), the floor.
+    ``--encoder learned --checkpoint X`` loads a trained ``CueNet`` into a
+    ``LearnedEncoder``. The learned encoder is CPU-pinned here -- eval is not the hot path.
     """
     if args.encoder == "pyin":
-        return DSPEncoder()
+        return ClassicalEncoder()
     if not args.checkpoint:
         raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
-    from stemify.encoders.neural import NeuralEncoder
+    from stemify.encoders.learned import LearnedEncoder
 
-    return NeuralEncoder(load_tagger(args.checkpoint), device="cpu")
+    return LearnedEncoder(load_tagger(args.checkpoint), device="cpu")
 
 
-def build_decoder(args: argparse.Namespace):
+def build_decoder(args: argparse.Namespace) -> Decoder:
     """The decoder, with the one setting that depends on which encoder feeds it.
 
     A pitch change places notes only for an encoder that has no trained onset head.
-    ``DSPEncoder`` emits a spectral-flux spike train and no voicing curve at all, so
+    ``ClassicalEncoder`` emits a spectral-flux spike train and no voicing curve at all, so
     for it the contour moving really is the only evidence a new note began -- and the
     DSP floor has to stay the floor it always was, or every comparison against it
-    silently improves. For a ``NeuralEncoder`` the same rule overrides a ~7 ms-accurate
+    silently improves. For a ``LearnedEncoder`` the same rule overrides a ~7 ms-accurate
     onset with a ~58 ms-late pitch transition, which is why it defaults off; see
     ``heuristic.PITCH_SPLIT_SEMITONES``.
 
@@ -140,7 +143,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--encoder", choices=ENCODERS, required=True,
-        help="pyin (DSP floor) or learned (a trained FrameTagger, with --checkpoint).",
+        help="pyin (DSP floor) or learned (a trained CueNet, with --checkpoint).",
     )
     ap.add_argument(
         "--decoder", choices=DECODERS, default="heuristic",
@@ -199,6 +202,9 @@ def main() -> None:
     try:
         dataset = build_dataset(args)
         encoder = build_encoder(args)
+        # Typed at the base: the two levels produce different reports, and everything
+        # below here asks only for what `Report` promises (`render`, `write_json`).
+        report: Report
         if args.level == "note":
             transcriber = Segmenter(encoder, build_decoder(args))
             report = NoteEvaluation(dataset, transcriber, transform=transform).run()

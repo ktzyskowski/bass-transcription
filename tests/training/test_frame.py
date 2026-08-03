@@ -60,7 +60,8 @@ def test_windowing_enumerates_strided_windows(tmp_path):
 def test_collate_stacks_batch(tmp_path):
     path = _save_example(tmp_path, "t", np.random.rand(5, 10), np.arange(10))
     ds = FrameWindowDataset([(path,)], heads=["onset"], window_frames=4, hop_frames=2)
-    xb, yb = collate([ds[0], ds[1]])
+    batch = collate([ds[0], ds[1]])
+    xb, yb = batch.x, batch.y
     assert xb.shape == (2, 1, 5, 4)
     assert yb["onset"].shape == (2, 4)
 
@@ -98,7 +99,7 @@ def test_bichannel_collate_keeps_the_channel_axis(tmp_path):
     ds = FrameWindowDataset(
         [(bass, mix)], heads=["onset"], window_frames=4, hop_frames=2
     )
-    xb, _ = collate([ds[0], ds[1]])
+    xb = collate([ds[0], ds[1]]).x
     assert xb.shape == (2, 2, 5, 4)     # (B, C, n_bins, W)
 
 
@@ -228,6 +229,7 @@ def test_pos_weight_actually_reaches_the_loss():
     # applied would leave the "optimistic encoder" arm identical to the balanced one.
     import torch
 
+    from stemify.training.frame.dataset import FrameBatch
     from stemify.training.frame.loss import FrameBCELoss
 
     x = torch.zeros(2, 1, 4, 8)
@@ -240,8 +242,8 @@ def test_pos_weight_actually_reaches_the_loss():
 
     plain = FrameBCELoss(["onset"], {})
     heavy = FrameBCELoss(["onset"], {"onset": 5.0})
-    _, m_plain = plain.compute(_Const(), (x, y), torch.device("cpu"))
-    _, m_heavy = heavy.compute(_Const(), (x, y), torch.device("cpu"))
+    _, m_plain = plain.compute(_Const(), FrameBatch(x, y), torch.device("cpu"))
+    _, m_heavy = heavy.compute(_Const(), FrameBatch(x, y), torch.device("cpu"))
     assert m_heavy["total"] > m_plain["total"], (
         "a positive weight must increase the loss on a missed positive"
     )

@@ -17,13 +17,14 @@ with the monitored loss picking the checkpoint between.
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from itertools import chain
+from typing import Generic
 
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
 from stemify.device import best_device
-from stemify.training.base import Loss
+from stemify.training.base import B, Loss
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig
 
@@ -35,10 +36,16 @@ class History:
     best_epoch: int = -1
 
 
-class Trainer:
-    """Fit a model under a ``Loss`` with one optimiser over both their parameters."""
+class Trainer(Generic[B]):
+    """Fit a model under a ``Loss`` with one optimiser over both their parameters.
 
-    def __init__(self, model: nn.Module, loss: Loss, config: TrainConfig) -> None:
+    Generic in the batch type for the same reason ``Loss`` is: a loss and the loader
+    feeding it are a matched pair, and ``Recipe`` builds them together precisely so
+    they cannot be mixed. Spelling the pairing here means a ``Loss[ChunkBatch]`` handed
+    a frame loader is rejected where the two meet, rather than inside ``compute``.
+    """
+
+    def __init__(self, model: nn.Module, loss: Loss[B], config: TrainConfig) -> None:
         self.config = config
         self.device = torch.device(config.device or best_device())
         self.model = model.to(self.device)
@@ -53,7 +60,7 @@ class Trainer:
 
     def _run_epoch(
         self,
-        loader: DataLoader,
+        loader: DataLoader[B],
         train: bool,
         on_batch: Callable[[int, dict[str, float]], None] | None = None,
     ) -> dict[str, float]:
@@ -68,9 +75,11 @@ class Trainer:
                 loss_t, metrics = self.loss.compute(self.model, batch, self.device)
                 if train:
                     self.optimizer.zero_grad()
-                    loss_t.backward()
+                    # torch ships `Tensor.backward` unannotated, so --strict calls this
+                    # an untyped call in typed context. Nothing to fix on our side.
+                    loss_t.backward()  # type: ignore[no-untyped-call]
                     self.optimizer.step()
-                bs = self.loss.batch_size(batch)
+                bs = len(batch)
                 for k, v in metrics.items():
                     totals[k] = totals.get(k, 0.0) + v * bs
                 n += bs
@@ -82,8 +91,8 @@ class Trainer:
 
     def fit(
         self,
-        train_loader: DataLoader,
-        val_loader: DataLoader | None = None,
+        train_loader: DataLoader[B],
+        val_loader: DataLoader[B] | None = None,
         callbacks: Iterable[Callback] = (),
     ) -> History:
         callbacks = list(callbacks)

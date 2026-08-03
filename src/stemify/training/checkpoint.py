@@ -23,13 +23,15 @@ change what a recipe takes and this follows, which is the test for what belongs 
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import nn
 
 from stemify.atomic import atomic_write
 from stemify.decoders.base import Decoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
+from stemify.models.cuenet import CueNet
 from stemify.segmenter import Segmenter
 from stemify.training.base import Recipe
 from stemify.training.recipes import RECIPES
@@ -91,7 +93,7 @@ class Checkpoint:
         return cls._from_v1(raw, path)
 
     @classmethod
-    def _from_v1(cls, raw: dict, path: Path) -> "Checkpoint":
+    def _from_v1(cls, raw: dict[str, Any], path: Path) -> "Checkpoint":
         """Read a pre-``Checkpoint`` file, inferring the recipe it never recorded.
 
         Every inference is logged. A v1 file says which heads it has but not which
@@ -119,7 +121,7 @@ class Checkpoint:
 
     # --- reconstitution: the one question every caller asks -----------------------
 
-    def model(self) -> nn.Module:
+    def model(self) -> CueNet:
         """The trained encoder network. Strict: a checkpoint whose weights include a
         branch the rebuild left out would otherwise load silently and go on producing
         onset and voicing while quietly having no pitch head."""
@@ -133,10 +135,10 @@ class Checkpoint:
         flag -- which is how a semi-CRF came to be scored through a fresh one."""
         return self.recipe.decoder_from({"loss": self.objective_state})
 
-    def encoder(self, **kwargs) -> NeuralEncoder:
-        return NeuralEncoder(self.model(), **kwargs)
+    def encoder(self, **kwargs: Any) -> LearnedEncoder:
+        return LearnedEncoder(self.model(), **kwargs)
 
-    def transcriber(self, **kwargs) -> Segmenter:
+    def transcriber(self, **kwargs: Any) -> Segmenter:
         """Audio -> notes, exactly as this run would deploy.
 
         The seam that training-time validation and the eval CLI must share: two

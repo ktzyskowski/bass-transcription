@@ -27,6 +27,7 @@ directory invalidates its cache.
 import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -115,7 +116,7 @@ class Identity(AudioTransform):
         return Path(source)
 
     def apply(self, source: str | Path) -> Path:
-        return self.cache_path(source)
+        return self.cache_path(Path(source))
 
 
 class DemucsSeparator(AudioTransform):
@@ -151,7 +152,10 @@ class DemucsSeparator(AudioTransform):
         # speedup. On an M-series Mac, MPS measured 14x realtime against CPU's
         # 4.4x on a 171 s track.
         self.device = device or best_device()
-        self._separator = None
+        # `Any`, not a real type: demucs is an optional dependency, imported inside
+        # `_load` precisely so importing this module does not require it -- so there is
+        # no name to annotate with that would not drag the import back up here.
+        self._separator: Any = None
 
     @property
     def name(self) -> str:
@@ -170,7 +174,7 @@ class DemucsSeparator(AudioTransform):
         # rather than assuming it carries over.
         return f"demucs-{self.model}-{self.stem}"
 
-    def _load(self):
+    def _load(self) -> Any:
         if self._separator is None:
             try:
                 from demucs.api import Separator

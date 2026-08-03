@@ -1,15 +1,15 @@
 """Note-level evaluation: bind a dataset and a ``Segmenter``, and score notes.
 
     NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
-                   Segmenter(DSPEncoder(), HeuristicDecoder())).run()
+                   Segmenter(ClassicalEncoder(), HeuristicDecoder())).run()
 
 The cues-level harness (``CuesEvaluation``) scores the encoder's per-frame evidence.
 This asks "did you find the right notes" -- the metric a tab is actually graded on,
 and the one a bass-transcription collaborator's F1 numbers use.
 
 It scores the exact object deployment ships: a ``Segmenter(encoder, decoder)``. The
-DSP floor is ``Segmenter(DSPEncoder(), HeuristicDecoder())``; a trained model is
-``Segmenter(NeuralEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
+DSP floor is ``Segmenter(ClassicalEncoder(), HeuristicDecoder())``; a trained model is
+``Segmenter(LearnedEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
 one object and cannot drift, and there is no separate "learned baseline" class. (A
 note-native transcriber that emits notes without a contour would plug in the same
 way once it exposes ``segment(sources) -> notes``.)
@@ -25,6 +25,7 @@ metric, which loops tracks internally (a frame metric pools frames and scores on
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any
 
 from stemify.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
@@ -82,7 +83,7 @@ class NoteReport(Report):
                 return result.scalars.get(key)
         return None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "transcriber": self.transcriber,
             "dataset": self.dataset,

@@ -57,7 +57,7 @@ MIN_NOTE_S = 0.10
 # shape of a superseded rule rather than a mistuned one. See docs/experiments.md.
 PITCH_SPLIT_SEMITONES: float | None = None
 
-# What an encoder with no trained onset head falls back to. ``DSPEncoder`` has only a
+# What an encoder with no trained onset head falls back to. ``ClassicalEncoder`` has only a
 # spectral-flux spike train and no voicing curve at all, so for it a pitch change
 # really is the only evidence that a new note began; this is the value the project
 # shipped with, kept so the DSP floor stays the floor it always was.
@@ -114,7 +114,8 @@ def onset_times_from_probs(
     hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.01
     distance = max(1, round(min_gap_s / hop))
     peaks, _ = find_peaks(probs, height=threshold, distance=distance)
-    return frame_times[peaks]
+    times: np.ndarray = frame_times[peaks]
+    return times
 
 
 def group_contour(

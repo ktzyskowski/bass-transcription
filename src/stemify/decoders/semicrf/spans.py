@@ -20,6 +20,7 @@ implementation of the same contract, not a different DP.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import torch
@@ -53,6 +54,17 @@ class SpanScorer(nn.Module, ABC):
     touches a parameter, so a new scorer is a new file rather than an edit spread
     across the DP.
     """
+
+    # The longest representable segment, in seconds. Declared here because it is the
+    # *DP's* geometry rather than any one parameterisation's: ``grid`` already has to
+    # produce a ``dmax`` from it, and the scan's candidate-start span, the dataset's
+    # left context and a checkpoint's recorded geometry are all that same number. It
+    # was previously readable only off ``LinearSpanScorer``, so ``SemiCRFRecipe`` --
+    # which records it -- reached through ``nn.Module.__getattr__`` and got back
+    # ``Tensor | Module``. Duration *bucket edges* are deliberately not here: those
+    # are the log-linear scorer's parameterisation, and a neural scorer may model
+    # duration continuously with no edges at all.
+    dmax_s: float
 
     @abstractmethod
     def unary(
@@ -121,6 +133,18 @@ class LinearSpanScorer(SpanScorer):
         self.trans = nn.Parameter(torch.zeros(2, 2))  # [prev, next] over {note, rest}
         self.init = nn.Parameter(torch.zeros(2))      # START -> {note, rest}
 
+    @property
+    def dur_edges(self) -> torch.Tensor:
+        """The duration-bucket edges, typed.
+
+        ``dur_edges_s`` is a registered buffer so it follows ``.to(device)`` and rides
+        in the state dict -- both required, since the bucket map is computed on the
+        module's own device and a checkpoint must restore the edges it was fitted
+        against. The cost is that ``nn.Module.__getattr__`` is typed ``Tensor |
+        Module``, so every read would otherwise need its own cast. One here instead.
+        """
+        return cast(torch.Tensor, self.dur_edges_s)
+
     def grid(self, frame_times: np.ndarray) -> Grid:
         """``dmax`` and the length->bucket map for a frame hop.
 
@@ -130,14 +154,21 @@ class LinearSpanScorer(SpanScorer):
         the bucket edges are bit-for-bit what the numpy version produced."""
         hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.01
         dmax = max(1, round(self.dmax_s / hop))
-        edges = torch.round(self.dur_edges_s / hop).to(torch.int64)
+        edges = torch.round(self.dur_edges / hop).to(torch.int64)
         lengths = torch.arange(dmax + 1, device=edges.device)
         return Grid(dmax, torch.searchsorted(edges, lengths))
 
     def transitions(self) -> torch.Tensor:
         return torch.stack([self.trans[NOTE], self.trans[REST], self.init])
 
-    def unary(self, ev, grid, b, i, j) -> torch.Tensor:
+    def unary(
+        self,
+        ev: Evidence,
+        grid: Grid,
+        b: torch.Tensor | int,
+        i: torch.Tensor | int,
+        j: torch.Tensor | int,
+    ) -> torch.Tensor:
         # `path` and `spread` answer different questions and are both kept: a path
         # length is large for vibrato that returns where it started, a spread is not,
         # and a spread is what says "this span holds two pitches". Supplying both and

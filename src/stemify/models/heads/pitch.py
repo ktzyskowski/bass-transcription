@@ -47,7 +47,7 @@ class FrequencyHead(nn.Module):
     The peer of ``FrameHead``, named for the same thing it is: the granularity of what
     comes *out*. A ``FrameHead`` emits one value per frame; this emits one per frequency
     bin per frame. That difference is why the two tap the backbone at different points
-    and why ``FrameTagger`` keeps them in separate dicts.
+    and why ``CueNet`` keeps them in separate dicts.
 
     Pitch is its only instance today. It is written as the general shape rather than as
     "the pitch branch" because nothing in it is about pitch -- a polyphonic pitch head,
@@ -73,8 +73,8 @@ class FrequencyHead(nn.Module):
         self.out = nn.Conv2d(conv_channels, 1, kernel_size=1)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        h = self.out(self.net(z))            # (B, 1, F, T)
-        return h.squeeze(1).transpose(1, 2)  # (B, T, F)
+        h: torch.Tensor = self.out(self.net(z))   # (B, 1, F, T)
+        return h.squeeze(1).transpose(1, 2)       # (B, T, F)
 
 
 def two_hot(midi: torch.Tensor, n_bins: int = N_BINS) -> torch.Tensor:
@@ -135,12 +135,13 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
     total = local.sum(axis=-1)
     # A frame with no mass anywhere would divide by zero; it has no pitch to report.
     centroid = np.where(total > 0, (local * idx).sum(axis=-1) / np.maximum(total, 1e-9), peak)
-    return FMIN * 2.0 ** (centroid / BINS_PER_OCTAVE)
+    hz: np.ndarray = FMIN * 2.0 ** (centroid / BINS_PER_OCTAVE)
+    return hz
 
 
 # Above this, the voicing head is confident enough that the pitch head's guess for a
 # frame is worth reporting at all. Lives beside ``decode_contour`` because it is part of
-# reading this head's output, and both callers of that function need it: NeuralEncoder,
+# reading this head's output, and both callers of that function need it: LearnedEncoder,
 # which has the logits already, and NeuralPitch, which computes them from a path.
 #
 # Deliberately *not* the decoder's ``VOICING_THRESHOLD``. The two look like the same
@@ -159,7 +160,7 @@ def decode_contour(
     """Per-bin logits ``(T, n_bins)`` -> a ``Contour`` on the feature grid.
 
     The single place the head's output becomes a pitch track, so the two callers that
-    need it -- ``NeuralEncoder`` (which already has the logits) and ``NeuralPitch``
+    need it -- ``LearnedEncoder`` (which already has the logits) and ``NeuralPitch``
     (which computes them from a path) -- cannot drift into two different decodes.
 
     Two things fall out that pyin could not give us. The contour shares the CQT's

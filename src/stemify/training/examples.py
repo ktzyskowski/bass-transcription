@@ -79,8 +79,28 @@ def prepare_examples(
     targets, no CQT recompute -- so widening the head set (adding voicing to an
     onset-only cache) reuses every CQT and pays only a MIDI parse per track.
     """
-    heads = list(heads)
     paths = cache.ensure_features(dataset, transform)
+    ensure_targets(dataset, paths, heads, onset_tolerance_frames)
+    return paths
+
+
+def ensure_targets(
+    dataset: SlakhLikeDataset,
+    paths: Sequence[Path],
+    heads: Iterable[str],
+    onset_tolerance_frames: int = 1,
+) -> None:
+    """Back-fill each requested head's target onto already-cached examples, in place.
+
+    Split out of ``prepare_examples`` because the structured path reaches the same
+    cache by a different route -- it resolves channels through
+    ``Condition.channel_paths``, so it holds the paths already and needs only the
+    labels layered on. Both callers must share the ownership guard below, which is
+    exactly the kind of thing that drifts once it is copied.
+    """
+    heads = list(heads)
+    if not heads:
+        return
     # Features are content-addressed on the resolved audio, so two items sharing one
     # audio file share one cache entry. That is right for the CQT (identical audio,
     # identical features) but wrong for *targets*: each item has its own reference
@@ -99,7 +119,6 @@ def prepare_examples(
                 "must be keyed separately from the features."
             )
         _ensure_targets(path, item, heads, onset_tolerance_frames)
-    return paths
 
 
 def _ensure_targets(

@@ -26,6 +26,8 @@ scan that runs the length of the track. See ``docs/semi-crf.md`` and
 ``docs/gpu-throughput-plan.md``.
 """
 
+from typing import cast
+
 import torch
 
 from stemify.decoders.semicrf.constants import NEG
@@ -99,6 +101,12 @@ def scan(
     image, trailing frames that exist so the *encoder's* receptive field does not see
     zero-padding at the chunk's right edge, and which the DP must not consume.
     """
+    if (ends is None) != (captured is None):
+        raise ValueError(
+            "`ends` and `captured` are two halves of the ragged whole-track readout -- "
+            "where each row ends, and where its alpha is written -- so passing one "
+            "without the other asks for a capture with nowhere to go"
+        )
     B = ev.B
     stop = ev.T if stop is None else stop
     neg_col = ev.onset_logit.new_full((B, 1), NEG)
@@ -106,7 +114,7 @@ def scan(
         term = step_terms(scorer, ev, grid, window, j)
         val = torch.logsumexp(term.reshape(B, -1, 2), dim=1)   # (B, 2)
         new = torch.cat([val, neg_col], dim=1)                 # (B, 3)
-        if ends is not None:
+        if ends is not None and captured is not None:
             for b in ends.get(j, ()):
                 captured[b] = new[b]
         window = push(window, new)
@@ -128,7 +136,20 @@ def log_partitions(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
         captured[b] = window[b, -1]
 
     scan(scorer, ev, grid, window, ends, captured)
-    return torch.logsumexp(torch.stack(captured)[:, :2], dim=1)
+    # Every row is written: `ends` is keyed by `ev.lengths`, no length exceeds `ev.T`
+    # (Tmax *is* the max), and the scan visits every j in [1, T]. Checked rather than
+    # cast, because a row left unwritten means a track whose length the evidence and
+    # the scan disagree about -- and `torch.stack` would report that as a bare TypeError
+    # about NoneType, several frames from the cause.
+    missing = [b for b, a in enumerate(captured) if a is None]
+    if missing:
+        raise RuntimeError(
+            f"rows {missing} were never captured: their lengths "
+            f"{[ev.lengths[b] for b in missing]} lie outside the scanned range "
+            f"[1, {ev.T}]"
+        )
+    alphas = cast(list[torch.Tensor], captured)
+    return torch.logsumexp(torch.stack(alphas)[:, :2], dim=1)
 
 
 def chunk_log_partition(

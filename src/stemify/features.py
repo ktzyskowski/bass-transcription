@@ -30,7 +30,7 @@ SAMPLE_RATE = 22050
 # per semitone, which reaches ~2.6 kHz and so covers the first few harmonics
 # too -- a low-E fundamental is weak on many recordings and the harmonic stack
 # is what actually disambiguates it.
-FMIN = librosa.note_to_hz("D#1")
+FMIN = float(librosa.note_to_hz("D#1"))  # plain float: it divides a Tensor in two_hot
 BINS_PER_SEMITONE = 3
 BINS_PER_OCTAVE = 12 * BINS_PER_SEMITONE
 N_BINS = 6 * BINS_PER_OCTAVE
@@ -78,13 +78,18 @@ def cqt(audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
             bins_per_octave=BINS_PER_OCTAVE,
         )
     )
-    return librosa.amplitude_to_db(spec, ref=np.max, top_db=80.0)
+    # librosa ships no annotations, so everything it returns is `Any`. Asserted here
+    # rather than at each caller.
+    db: np.ndarray = librosa.amplitude_to_db(spec, ref=np.max, top_db=80.0)
+    return db
 
 
 def midi_to_bin(midi_pitch: float) -> float:
     """Map a MIDI pitch to its (fractional) CQT bin index."""
     hz = librosa.midi_to_hz(midi_pitch)
-    return BINS_PER_OCTAVE * np.log2(hz / FMIN)
+    # `float(...)`: this is the scalar path -- `np.log2` of a scalar is a numpy float,
+    # and the declared `float` is what callers index and round with.
+    return float(BINS_PER_OCTAVE * np.log2(hz / FMIN))
 
 
 def frame_times_for(features: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:

@@ -9,6 +9,8 @@ full-scale set never sits in RAM -- but see ``_examples`` for the part of a
 """
 
 from collections.abc import Iterable, Sequence
+from typing import Any
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +25,7 @@ from stemify.serde import TrackExample
 CACHE_TRACKS = 64
 
 
-class FrameWindowDataset(Dataset):
+class FrameWindowDataset(Dataset[Any]):
     """Fixed-length windows over cached ``TrackExample``s.
 
     Windows are enumerated up front (deterministic), so training order is a
@@ -113,11 +115,28 @@ class FrameWindowDataset(Dataset):
         return torch.from_numpy(x), y  # (C, n_bins, W), {head: (W,)}
 
 
+@dataclass
+class FrameBatch:
+    """A minibatch of windows and their per-frame targets.
+
+    A named type rather than the bare ``(x, y)`` tuple this used to be, because the
+    training loop asks a batch for its size and ``len((x, y))`` answers **2**. That
+    wrong answer is why ``batch_size`` used to live on the ``Loss`` -- a property of
+    the batch, implemented on its consumer, once per objective.
+    """
+
+    x: torch.Tensor              # (B, C, n_bins, W)
+    y: dict[str, torch.Tensor]   # {head: (B, W)}
+
+    def __len__(self) -> int:
+        return int(self.x.shape[0])
+
+
 def collate(
     batch: list[tuple[torch.Tensor, dict[str, torch.Tensor]]],
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+) -> FrameBatch:
     """Stack windows into (B, C, n_bins, W) and each target into (B, W)."""
     xs = torch.stack([x for x, _ in batch])
     heads = batch[0][1].keys()
     ys = {h: torch.stack([y[h] for _, y in batch]) for h in heads}
-    return xs, ys
+    return FrameBatch(xs, ys)

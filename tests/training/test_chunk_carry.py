@@ -122,16 +122,16 @@ def _whole_track_nll(model, cache, items, feats) -> float:
     chunk = Chunk(
         features=feats[None],                       # (1, n_bins, T)
         frame_times=times,
-        contour=cache.contour(None, None),
         gold=gold_segments(times[::STRIDE], items[0].reference_notes(), dmax),
-        context=0,
-        right=0,
+        y={},
         stream=0,
         reset=True,
     )
     loss = SemiCRFLoss(decoder)
     with torch.no_grad():
-        _, metrics = loss.compute(model, collate([chunk]), torch.device("cpu"))
+        _, metrics = loss.compute(
+            model, collate([chunk], context=0, right=0), torch.device("cpu")
+        )
     return metrics["total"]
 
 

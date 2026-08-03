@@ -15,7 +15,7 @@ from pathlib import Path
 
 from stemify.cache import Cache
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
@@ -45,7 +45,7 @@ def main() -> None:
           f"{'blind F1':>9} {'strict F1':>10} {'pitch gap':>10}")
     for name, tag in ARMS:
         condition = CONDITIONS[tag]
-        encoder = NeuralEncoder(load_tagger(Path(f"data/checkpoints/{name}.pt")))
+        encoder = LearnedEncoder(load_tagger(Path(f"data/checkpoints/{name}.pt")))
         for split in args.splits.split(","):
             v = OnsetValidator(
                 condition.dataset(ROOT, split, args.limit), condition, cache=Cache("data/cache")

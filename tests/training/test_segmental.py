@@ -60,20 +60,22 @@ def _chunk(spans, pitches_hz, stream: int) -> Chunk:
         # (1, n_bins, T): the channel axis is always present, single-channel or not.
         features=feats[None],
         frame_times=TIMES,
-        contour=Contour(times=TIMES, freqs=freqs),
         gold=gold_segments(TIMES[::STRIDE], notes, dmax),
-        context=0,
-        right=0,
+        y={},
         stream=stream,
         reset=True,
     )
 
 
 def _batch():
-    return collate([
-        _chunk([(0.2, 0.9), (1.2, 1.9)], [110, 146], stream=0),
-        _chunk([(0.3, 0.8), (1.4, 2.0)], [98, 130], stream=1),
-    ])
+    return collate(
+        [
+            _chunk([(0.2, 0.9), (1.2, 1.9)], [110, 146], stream=0),
+            _chunk([(0.3, 0.8), (1.4, 2.0)], [98, 130], stream=1),
+        ],
+        context=0,
+        right=0,
+    )
 
 
 def test_compute_returns_finite_loss_and_total_metric():
@@ -81,7 +83,7 @@ def test_compute_returns_finite_loss_and_total_metric():
     total, metrics = loss.compute(_LinearHeads(), _batch(), torch.device("cpu"))
     assert torch.isfinite(total) and total.requires_grad
     assert metrics["total"] == metrics["nll"]
-    assert loss.batch_size(_batch()) == 2
+    assert len(_batch()) == 2   # the batch answers its own size now
 
 
 def test_parameters_expose_the_decoder_potentials():

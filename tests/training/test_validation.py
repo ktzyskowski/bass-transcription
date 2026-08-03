@@ -10,7 +10,7 @@ from torch import nn
 
 from stemify.contour import Contour
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.notes import NoteEvent
 from stemify.training.validation import (
     ValExample,
@@ -22,9 +22,9 @@ N_BINS = 8
 
 
 def _segment(model):
-    """The segment step the validator scores: the NeuralEncoder + HeuristicDecoder
+    """The segment step the validator scores: the LearnedEncoder + HeuristicDecoder
     pair deployment composes, fed cached (contour, features) -- the same path."""
-    encoder = NeuralEncoder(model, device="cpu")
+    encoder = LearnedEncoder(model, device="cpu")
     decoder = HeuristicDecoder()
 
     def segment(contour, features):
@@ -48,7 +48,15 @@ class _CountingBaseline:
                        confidence=np.full(5, 0.9))
 
 
-class _FakeOnsetModel(nn.Module):
+class _FakeCueNet(nn.Module):
+    """The parts of ``CueNet``'s interface ``LearnedEncoder`` reads besides ``forward``
+    -- declared, because the encoder no longer defaults them when a double omits them."""
+
+    in_channels = 1
+    frequency_heads: dict = {}
+
+
+class _FakeOnsetModel(_FakeCueNet):
     """Onset logits peaking at given frame indices."""
 
     def __init__(self, peak_frames):
@@ -105,7 +113,7 @@ def test_missing_onsets_lower_recall():
     assert few["note_recall"] < many["note_recall"]
 
 
-class _FakeVoicingModel(nn.Module):
+class _FakeVoicingModel(_FakeCueNet):
     """A voicing head that ranks voiced frames (first half) above the rest."""
 
     def forward(self, x):  # (1, 1, F, T)
@@ -118,8 +126,8 @@ class _FakeVoicingModel(nn.Module):
 
 def _encode(model):
     """The encode step the validator scores cues through: a checkpoint's
-    NeuralEncoder over cached (contour, features)."""
-    return NeuralEncoder(model, device="cpu").encode_features
+    LearnedEncoder over cached (contour, features)."""
+    return LearnedEncoder(model, device="cpu").encode_features
 
 
 def test_score_cues_returns_voicing_auroc_against_the_label():

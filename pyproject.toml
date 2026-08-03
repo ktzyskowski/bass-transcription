@@ -29,7 +29,21 @@ build-backend = "hatchling.build"
 packages = ["src/stemify"]
 
 [dependency-groups]
-dev = ["pytest>=8", "mlflow>=2"]
+dev = ["pytest>=8", "mlflow>=2", "mypy>=1.14"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/stemify"]
+strict = true
+# librosa, demucs, mir_eval, pretty_midi and mlflow ship no stubs. Silencing the
+# import errors is not the same as silencing errors *about* them: calls into these
+# return Any, which `strict` still flags at the boundary where an Any is returned or
+# assigned into a typed name -- which is where a wrong assumption about a third party
+# actually bites.
+ignore_missing_imports = true
+# Tests are deliberately out of scope for now. They are dense with fixtures and
+# duck-typed stand-ins whose whole purpose is to be structurally minimal, so checking
+# them would add noise without adding safety. Revisit once src is clean.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

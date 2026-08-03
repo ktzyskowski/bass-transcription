@@ -28,8 +28,11 @@ from stemify.pitch.base import PitchEstimator
 # octave.
 # Distinct from ``features.FMIN`` (D#1), which is the CQT's lower *bin* edge and sits a
 # semitone lower for margin. This is the lowest pitch pyin will search for.
-FMIN = librosa.note_to_hz("E1")
-FMAX = librosa.note_to_hz("A4")
+# ``float(...)`` because ``note_to_hz`` returns a numpy scalar, and these are read as
+# plain frequencies -- a default for a ``float`` parameter here, a divisor of a Tensor
+# in ``features``. Converting at the definition beats converting at every use.
+FMIN = float(librosa.note_to_hz("E1"))
+FMAX = float(librosa.note_to_hz("A4"))
 HOP_LENGTH = 512  # pyin's default; pinned so the time grid is explicit
 # Twice ``features.HOP_LENGTH`` (256), which is the CQT's. Same name, different grid:
 # any contour from this estimator is half the resolution of the model's frame grid, and

@@ -46,6 +46,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
+from typing import Any
 
 import librosa
 import numpy as np
@@ -271,7 +272,7 @@ def resolve_root(root: str | Path) -> Path:
     return root
 
 
-def read_metadata(track_dir: Path) -> dict:
+def read_metadata(track_dir: Path) -> dict[str, Any]:
     """A track's ``metadata.yaml`` stem table, or ``{}`` if unreadable.
 
     Returning empty on failure is deliberate: callers treat "no metadata" as

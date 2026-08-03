@@ -5,9 +5,9 @@ audio into all the per-frame evidence a decoder needs -- an onset curve, a voici
 curve, and the pitch contour -- bundled into a ``Cues``. Two encoders, one
 interface:
 
-  - ``DSPEncoder`` -- spectral-flux onset envelope + pyin pitch, no learning (the
+  - ``ClassicalEncoder`` -- spectral-flux onset envelope + pyin pitch, no learning (the
     floor).
-  - ``NeuralEncoder`` -- a trained backbone (TCN) + heads producing onset/voicing
+  - ``LearnedEncoder`` -- a trained backbone (TCN) + heads producing onset/voicing
     probabilities, and the pitch contour from its own ``FrequencyHead`` when the
     checkpoint carries one, falling back to pyin when it does not.
 
@@ -20,7 +20,7 @@ behind the encoder, not in its signature. When pitch becomes learned it is
 checkpoint-*dependent* and recomputed per checkpoint, which is the point; the
 interface does not change.
 
-Swapping ``DSPEncoder`` for ``NeuralEncoder`` is exactly the DSP-floor-vs-learned
+Swapping ``ClassicalEncoder`` for ``LearnedEncoder`` is exactly the DSP-floor-vs-learned
 comparison, now a change of one composed object rather than a subclass.
 """
 

@@ -27,7 +27,7 @@ from pathlib import Path
 
 from stemify.cache import Cache
 from stemify.decoders.heuristic import HeuristicDecoder
-from stemify.encoders.neural import NeuralEncoder
+from stemify.encoders.learned import LearnedEncoder
 from stemify.evaluation.cli import load_tagger
 from stemify.metrics.note.base import matched_pairs
 from stemify.metrics.note.prf import prf_rates
@@ -60,7 +60,7 @@ def main() -> None:
                 condition.dataset(ROOT, split, args.limit), condition, cache=cache
             )
             for use_pyin in (True, False):
-                enc = NeuralEncoder(model, use_pyin=use_pyin)
+                enc = LearnedEncoder(model, use_pyin=use_pyin)
                 if not enc.has_pitch_head:
                     raise SystemExit(
                         f"{args.checkpoint} has no pitch head; there is no A/B to run."

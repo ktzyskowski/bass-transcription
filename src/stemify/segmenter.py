@@ -8,8 +8,8 @@ transcribe through the exact same object and cannot drift.
 
 It is deliberately not an ABC: composition is the only behaviour, and the two
 swappable parts are the ``Encoder`` and ``Decoder`` it holds. The interesting
-combinations are just different pairs -- ``Segmenter(DSPEncoder(), HeuristicDecoder())``
-is the DSP floor, ``Segmenter(NeuralEncoder(ckpt), SemiCRFDecoder())`` the learned
+combinations are just different pairs -- ``Segmenter(ClassicalEncoder(), HeuristicDecoder())``
+is the DSP floor, ``Segmenter(LearnedEncoder(ckpt), SemiCRFDecoder())`` the learned
 end-to-end model -- not different ``Segmenter`` subclasses.
 """
 
