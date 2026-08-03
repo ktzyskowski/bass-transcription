@@ -30,7 +30,8 @@ from torch import nn
 from stemify.cues import Cues
 from stemify.decoders.base import Decoder
 from stemify.decoders.semicrf.constants import DMAX_S, DUR_EDGES_S, NOTE, STRIDE
-from stemify.decoders.semicrf.evidence import Evidence, TensorCues, build_evidence
+from stemify.decoders.semicrf.evidence import Evidence, build_evidence
+from stemify.decoders.semicrf.tensor_cues import TensorCues
 from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.score import segmentation_scores

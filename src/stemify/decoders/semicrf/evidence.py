@@ -35,6 +35,10 @@ import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
+from stemify.decoders.semicrf.cumsums import pitch_cumsums, voiced_logcumsum
+from stemify.decoders.semicrf.tensor_cues import (
+    TensorCues, _check_one_device, _cues_device, _on,
+)
 from stemify.grids import resample_mask
 
 # A span index: an int for a single span, or a tensor when the scan broadcasts a
@@ -43,76 +47,6 @@ from stemify.grids import resample_mask
 Idx = torch.Tensor | int
 
 
-def _check_one_device(what: str, **fields: torch.Tensor) -> None:
-    """Raise unless every named field shares a device. The guard behind the one-device
-    invariant: it names the offending field, which a ``RuntimeError`` raised deep in
-    the recurrence does not."""
-    by_device: dict[torch.device, list[str]] = {}
-    for name, t in fields.items():
-        by_device.setdefault(t.device, []).append(name)
-    if len(by_device) > 1:
-        detail = ", ".join(
-            f"{'/'.join(sorted(names))} on {dev}" for dev, names in by_device.items()
-        )
-        raise ValueError(f"{what} fields span multiple devices: {detail}")
-
-
-def _on(x: np.ndarray | torch.Tensor, device: torch.device) -> torch.Tensor:
-    """``x`` as a tensor on ``device``. ``as_tensor`` keeps a numpy input a constant
-    and a tensor input on the autograd graph; ``.to`` is itself differentiable, so a
-    grad-bearing cue survives the placement."""
-    return torch.as_tensor(x).to(device)
-
-
-def _cues_device(cues: Cues | TensorCues) -> torch.device:
-    """Where a cues bundle's evidence already lives: the encoder's device for a
-    ``TensorCues``, CPU for a numpy ``Cues``. Only a fallback -- callers that own a
-    module (``SemiCRFDecoder``) pass its device explicitly instead."""
-    if isinstance(cues.onset, torch.Tensor):
-        return cues.onset.device
-    return torch.device("cpu")
-
-
-@dataclass(frozen=True)
-class TensorCues:
-    """The tensor peer of ``Cues``: the training-time intermediary.
-
-    Field-for-field a ``Cues``, but ``onset``/``voicing`` are grad-bearing tensors (the
-    encoder's forward output) rather than detached numpy, so a loss over them
-    backprops into the encoder. ``contour`` and ``frame_times`` stay numpy: they are
-    constants (pyin's pitch, the time grid) that never need gradients. ``Cues`` remains
-    the *inference* intermediary; this is only built inside a training step. It lives
-    here, not beside ``Cues``, so ``cues.py`` stays torch-free and the light DSP path
-    never pulls torch."""
-
-    # Pitch track (numpy) -- used to name a decoded note's pitch, never scored by the
-    # DP. None when the model's own pitch head supplies it instead.
-    contour: Contour | None
-    onset: torch.Tensor            # (T,) P(onset), differentiable
-    frame_times: np.ndarray        # (T,) feature-grid times, seconds
-    voicing: torch.Tensor | None = None  # (T,) P(voiced), differentiable, or None
-    # (T, n_bins) raw per-bin logits from a FrequencyHead, or None when the model has
-    # no pitch head. Raw rather than softmaxed, because the span features normalise
-    # across the bin axis themselves and squashing twice would be the wrong
-    # distribution. Grad-bearing: this is how the CRF objective reaches the pitch head.
-    pitch_logits: torch.Tensor | None = None
-
-    @classmethod
-    def from_logits(
-        cls,
-        contour: Contour | None,
-        onset_logit: torch.Tensor,
-        frame_times: np.ndarray,
-        voicing_logit: torch.Tensor | None = None,
-        pitch_logits: torch.Tensor | None = None,
-    ) -> TensorCues:
-        """Wrap a model's raw head logits, squashing the *binary* heads to the
-        probabilities ``Cues`` carries so the two intermediaries hold the same quantity
-        in the same range. Pitch stays as logits -- see the field."""
-        voicing = None if voicing_logit is None else torch.sigmoid(voicing_logit)
-        return cls(
-            contour, torch.sigmoid(onset_logit), frame_times, voicing, pitch_logits
-        )
 
 
 @dataclass
@@ -257,68 +191,6 @@ class Evidence:
         return -(p * p.log()).sum(-1) - self.mean_entropy(b, i, j)
 
 
-def voiced_logcumsum(
-    voicing: np.ndarray | torch.Tensor | None,
-    contour: Contour | None,
-    frame_times: np.ndarray,
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Prefix cumsums of ``(log P(voiced), log P(unvoiced))`` on the strided grid.
-
-    Prefer the voicing head; with none, fall back to a contour's own voiced mask
-    (``freqs > 0``) resampled to the frame grid, as a near-hard 0/1 probability -- the
-    CRF still runs on DSP-only cues, just without a learned rest signal. Both branches
-    land on ``device``: the fallback is numpy-born and would otherwise pin the cumsums
-    to CPU while a head-fed run put them on the accelerator.
-
-    With *neither*, raise. Voiced/unvoiced is the one thing the segmental scan cannot
-    proceed without -- ``rest_mass`` and ``voiced_mass`` are what separate a note from
-    a silence -- so defaulting to "everything is voiced" would return a plausible
-    number for a model that was never given the question."""
-    if voicing is not None:
-        v = _on(voicing, device).float().clamp(1e-6, 1 - 1e-6)
-        vlp, ulp = torch.log(v), torch.log1p(-v)
-    else:
-        if contour is None:
-            raise ValueError(
-                "no voicing signal: the model has no voicing head and no contour was "
-                "supplied, so there is nothing to say where the bass sounds. Train "
-                "with a voicing head, or pass a contour to fall back on."
-            )
-        mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
-        vp = np.clip(mask, 1e-6, 1 - 1e-6)
-        vlp = _on(np.log(vp).astype(np.float32), device)
-        ulp = _on(np.log1p(-vp).astype(np.float32), device)
-    Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
-    Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
-    return Vc, Uc
-
-
-def pitch_cumsums(
-    logits: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Per-bin pitch logits ``(T, K)`` -> ``(path_c, entropy_c, pitch_c)`` prefix sums.
-
-    Every quantity here has to be additive over frames, because a span reads it as an
-    O(1) difference and there are O(T * dmax) spans. That is the constraint, and it is
-    why the two features are shaped as they are rather than as some arbitrary function
-    of the span's frames.
-
-    ``path`` uses the Bhattacharyya coefficient rather than a dot product: ``BC`` is 1
-    for any two *identical* distributions however diffuse, while ``<p, q>`` falls with
-    spread, so a dot product would report a quiet passage the head is unsure about as
-    constant pitch movement. The first frame has no predecessor and contributes 0."""
-    p = torch.softmax(logits, dim=-1)
-    sq = p.sqrt()
-    bc = (sq[1:] * sq[:-1]).sum(-1)                       # (T-1,)
-    path = torch.cat([bc.new_zeros(1), 1.0 - bc])         # (T,)
-    entropy = -(p.clamp_min(1e-9) * p.clamp_min(1e-9).log()).sum(-1)   # (T,)
-    zero_row = p.new_zeros(1, p.shape[-1])
-    return (
-        torch.cat([path.new_zeros(1), torch.cumsum(path, 0)]),
-        torch.cat([entropy.new_zeros(1), torch.cumsum(entropy, 0)]),
-        torch.cat([zero_row, torch.cumsum(p, 0)]),
-    )
 
 
 def _track_tensors(

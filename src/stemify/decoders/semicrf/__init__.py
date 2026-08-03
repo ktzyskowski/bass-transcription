@@ -4,9 +4,12 @@ A learned, global note decoder over per-frame ``Cues`` (contrast the greedy
 ``GreedyDecoder``). The package composes:
 
   - ``constants`` -- grid stride, segment labels, duration edges.
-  - ``evidence`` -- ``TensorCues`` and ``Cues|TensorCues -> Evidence``: the per-frame
-    tensors the scan reads, always batched, plus the span accessors that own the index
-    conventions.
+  - ``tensor_cues`` -- ``TensorCues``, the training-side twin of ``Cues``, and the
+    one-device rule its fields obey.
+  - ``cumsums`` -- the prefix sums that make a span score O(1) in its length. They
+    change when a span *feature* is added or retired.
+  - ``evidence`` -- ``Evidence`` and ``build_evidence``: the per-frame tensors the scan
+    reads, always batched, plus the span accessors that own the index conventions.
   - ``spans`` -- ``SpanScorer`` (what a span is worth) and ``Grid``. The *only* place a
     potential is written down; ``LinearSpanScorer`` is the classical log-linear form.
   - ``window`` -- the rolling ``alpha`` buffer both recurrences scan over.
@@ -27,7 +30,7 @@ implementing a new potential.
 """
 
 from stemify.decoders.semicrf.decoder import SemiCRFDecoder
-from stemify.decoders.semicrf.evidence import TensorCues
+from stemify.decoders.semicrf.tensor_cues import TensorCues
 from stemify.decoders.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
 
 __all__ = [
