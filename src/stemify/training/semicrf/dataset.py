@@ -250,7 +250,17 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         items, base = self._shard()
         streams = [items[b :: self.batch_size] for b in range(self.batch_size)]
         if not all(streams):
-            return  # fewer tracks than streams: nothing coherent to emit
+            # Used to `return` here, which emitted nothing and said nothing: the epoch
+            # then averaged over zero batches and the trainer died several frames later
+            # on a missing "total" key. The condition is a plain misconfiguration --
+            # a val set smaller than the batch is the usual way in -- so it is worth
+            # naming both numbers and the fix.
+            raise ValueError(
+                f"{len(items)} track(s) cannot fill {self.batch_size} parallel streams: "
+                "every stream needs at least one track, and a stream that starts empty "
+                "would make the batch width inconsistent. Lower batch_size to at most "
+                f"{len(items)}, or give this split more tracks."
+            )
         cursors = [0] * self.batch_size          # index into this stream's track list
         opened: list[_Track | None] = [None] * self.batch_size
         chunk_no = [0] * self.batch_size

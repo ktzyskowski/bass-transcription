@@ -87,7 +87,18 @@ class Trainer(Generic[B]):
                 if train and on_batch is not None:
                     self._global_step += 1
                     on_batch(self._global_step, metrics)
-        return {k: v / max(n, 1) for k, v in totals.items()}
+        if n == 0:
+            # A loader that yields nothing returns no metrics, so the caller's
+            # `losses["total"]` raises a bare KeyError with no hint that the *loader*
+            # was empty. Every reachable cause is a misconfiguration -- a split with no
+            # tracks, a limit below the batch size, a filter that excluded everything --
+            # so it is worth failing here, where the emptiness is the observation.
+            raise ValueError(
+                f"the {'train' if train else 'validation'} loader yielded no batches, "
+                "so this epoch has nothing to average. Usual causes: the split is "
+                "empty, or a --limit/--val-limit is smaller than the batch size."
+            )
+        return {k: v / n for k, v in totals.items()}
 
     def fit(
         self,
