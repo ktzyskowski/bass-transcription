@@ -89,7 +89,7 @@ def train(
     val_every: int = 5,
     tracking_uri: str | None = None,
     experiment: str = "onset-detection",
-    run_name: str = "tcn-v2",
+    run_name: str | None = None,
     batch_log_every: int = 100,
     limit: int | None = None,
     out: Path | None = None,
@@ -163,9 +163,19 @@ def train(
         # so two runs can share a name. Suffix a UTC timestamp so relaunching with
         # the same --run-name yields distinct, self-dating runs ("tcn-v1" stays the
         # groupable prefix) rather than ambiguous duplicates.
+        # Derived from what the run *is* when the caller did not name it. The old
+        # default was the literal string "tcn-v2" -- a specific frame checkpoint in
+        # docs/experiments.md -- so a semi-CRF run with a pitch head logged itself
+        # under the name of an unrelated model, and every run of every kind collided
+        # in the same label. A run's identity is its objective, its heads and its
+        # conditions; those are exactly what makes two runs comparable or not.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+        name = run_name or "-".join(
+            [recipe.name, *sorted(set(recipe.heads) - set(HEADS)),
+             "".join(sorted(c.name[0] for c in recipe.conditions))]
+        )
         mlflow = MLflowCallback(
-            run_name=f"{run_name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
+            run_name=f"{name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
             batch_log_every=batch_log_every,
             # Loop-level settings here; strategy knobs come from ``recipe.params``,
             # which is the only thing that knows which of them this run even has.

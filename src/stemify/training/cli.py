@@ -66,7 +66,10 @@ def main() -> None:
     ap.add_argument("--tracking-uri", help="MLflow tracking URI, e.g. file:./mlruns")
     ap.add_argument("--experiment", default="onset-detection",
                     help="MLflow experiment name")
-    ap.add_argument("--run-name", default="tcn-v2", help="MLflow run name")
+    ap.add_argument("--run-name", default=None,
+                    help="MLflow run name. Default is derived from the run itself -- "
+                         "objective, extra heads, and condition initials -- because a "
+                         "fixed default labelled every run of every kind the same.")
     ap.add_argument("--limit", type=int, help="cap train tracks per source")
     ap.add_argument("--val-limit", type=int, default=40)
     ap.add_argument("--val-every", type=int, default=1)
