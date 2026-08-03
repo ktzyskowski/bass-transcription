@@ -14,11 +14,16 @@ peak-picks and thresholds these into discrete cues, but ``SemiCRFDecoder`` consu
 the raw probabilities, which is how it recovers sub-threshold onsets the heuristic
 would throw away.
 
-``onset``/``voicing`` are per-frame on the ``frame_times`` grid (the feature grid,
-~11.6 ms); ``contour`` is the pyin pitch track on its own grid. Pitch always comes
-from ``contour`` -- a decoder places, splits and merges notes, but never invents a
-pitch, so a frame the model calls voiced yet pyin left pitchless contributes no
-pitch rather than a guessed one.
+``onset``/``voicing``/``pitch_logits`` are per-frame on the ``frame_times`` grid (the
+feature grid, ~11.6 ms); ``contour`` is a pitch track on its own grid. A decoded
+note's pitch always comes from ``contour`` -- a decoder places, splits and merges
+notes, but never invents a pitch, so a frame the model calls voiced yet the contour
+left pitchless contributes no pitch rather than a guessed one.
+
+**The contour and the logits are not redundant.** The contour is a point estimate,
+one reading of a distribution; ``pitch_logits`` is the distribution. A segmental
+decoder scores properties the point estimate cannot express -- how far pitch travelled
+inside a span, how much the span's frames disagree -- so both travel together.
 """
 
 from dataclasses import dataclass
@@ -32,10 +37,20 @@ from stemify.contour import Contour
 class Cues:
     """Per-frame onset/voicing evidence plus the pitch contour, for a whole track."""
 
-    contour: Contour              # pyin pitch track (own grid) -- the pitch source
+    contour: Contour | None       # pitch track (own grid) -- names a decoded note
     onset: np.ndarray             # (T,) per-frame onset evidence (prob or DSP envelope)
     frame_times: np.ndarray       # (T,) feature-grid times, seconds
     voicing: np.ndarray | None = None  # (T,) per-frame P(voiced), or None (no head)
+    # (T, n_bins) raw per-bin logits from a FrequencyHead, or None when the model has
+    # no pitch head. Raw rather than softmaxed: the span features that read these
+    # normalise across the bin axis themselves.
+    #
+    # This field is why the *decoded* result matches what was trained. The semi-CRF's
+    # `path_length` and `pitch_spread` potentials are functions of these logits, and a
+    # cues bundle that drops them makes both read zero -- so a decoder would score
+    # spans as though w_path and w_spread were zero, however they were fitted. That is
+    # not a degradation the loss can see, because it only happens after training.
+    pitch_logits: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if self.onset.shape != self.frame_times.shape:

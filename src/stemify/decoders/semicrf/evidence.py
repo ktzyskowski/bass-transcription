@@ -4,17 +4,20 @@
 single-track type, because the two differed only in a leading axis while duplicating
 every accessor and forcing the alpha window to be shape-polymorphic.
 
-Voicing and the pitch-change cue enter as *prefix cumsums*, so a span's mass is an
-O(1) difference ``C[j] - C[i]`` rather than a re-sum per candidate. That is what keeps
-the scan linear in the segment cap, and it is the constraint every future feature has
-to satisfy -- an interior term must be additive over frames, or endpoint- and
-length-only.
+Voicing and the pitch cues enter as *prefix cumsums*, so a span's mass is an O(1)
+difference ``C[j] - C[i]`` rather than a re-sum per candidate. That is what keeps the
+scan linear in the segment cap, and it is the constraint every future feature has to
+satisfy -- an interior term must be additive over frames, or endpoint- and length-only.
 
 The span accessors live here rather than in the scorer because they encode *index
-conventions*, not modelling choices. In particular ``interior_jumps`` owns the
-``i + 1`` offset that makes a pitch change at the span's own first frame not count
-against it; that offset used to be applied by three different callers, one of which
-delegated it to *its* caller in a docstring.
+conventions*, not modelling choices.
+
+**The DP reads only learned evidence.** It used to also score ``interior_jumps``, a
+count of pyin pitch-change flags inside a span. That was deleted: ``path_length`` asks
+the same question -- how far pitch moved inside this span -- of the model's own pitch
+head, at the CQT grid rather than pyin's coarser one, and with a gradient. Keeping both
+meant the contour was a hard dependency of the *model*, not just of the data pipeline.
+A contour is still read to name a decoded note's pitch, and is optional there.
 
 ``torch.as_tensor`` is the load-bearing trick throughout: it treats a numpy ``Cues``
 field as a constant (inference/decode) and a ``TensorCues`` tensor as a graph node
@@ -25,22 +28,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import librosa
 import numpy as np
 import torch
 
 from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.grids import resample_mask
-
-# How far pyin's pitch must move for ``pitch_jumps`` to mark a frame. This was
-# ``heuristic.PITCH_SPLIT_SEMITONES`` until that constant was turned off by default (a
-# pitch change no longer *places* a note there -- see its docstring). The two usages
-# were never the same question: there the threshold decided a hard note boundary, here
-# it only raises a feature the CRF is free to weight, so the value is pinned locally at
-# what every recorded semi-CRF run used rather than following a default that now means
-# something else.
-JUMP_SEMITONES = 0.8
 
 
 def _check_one_device(what: str, **fields: torch.Tensor) -> None:
@@ -85,7 +78,9 @@ class TensorCues:
     here, not beside ``Cues``, so ``cues.py`` stays torch-free and the light DSP path
     never pulls torch."""
 
-    contour: Contour               # pitch track (numpy) -- used for note pitches
+    # Pitch track (numpy) -- used to name a decoded note's pitch, never scored by the
+    # DP. None when the model's own pitch head supplies it instead.
+    contour: Contour | None
     onset: torch.Tensor            # (T,) P(onset), differentiable
     frame_times: np.ndarray        # (T,) feature-grid times, seconds
     voicing: torch.Tensor | None = None  # (T,) P(voiced), differentiable, or None
@@ -98,7 +93,7 @@ class TensorCues:
     @classmethod
     def from_logits(
         cls,
-        contour: Contour,
+        contour: Contour | None,
         onset_logit: torch.Tensor,
         frame_times: np.ndarray,
         voicing_logit: torch.Tensor | None = None,
@@ -117,12 +112,10 @@ class TensorCues:
 class Evidence:
     """The strided per-frame evidence for a batch of tracks, as the DP consumes it.
 
-    **Device invariant: all four tensor fields live on one device.** This is the type
-    that needs it, because it is where two provenances meet: ``onset_logit``,
-    ``voiced_c`` and ``rest_c`` descend from ``TensorCues``' grad-bearing tensors and
-    follow the encoder onto its accelerator, while ``jump_c`` descends from a numpy
-    contour and is CPU-born. The DP adds them term by term, so a split is a hard error
-    the moment the encoder is not on CPU.
+    **Device invariant: every tensor field lives on one device.** The DP adds them
+    term by term, so a split is a hard error the moment the encoder is not on CPU.
+    The fields descend from ``TensorCues``' grad-bearing tensors and follow the encoder
+    onto its accelerator; a numpy ``Cues`` is placed explicitly by ``build_evidence``.
 
     Ragged tracks are padded to a common length: ``onset_logit`` pads with 0 and the
     cumsums pad **flat** (last value repeated), so no voiced or onset mass accrues past
@@ -132,10 +125,11 @@ class Evidence:
     onset_logit: torch.Tensor       # (B, Tmax)
     voiced_c: torch.Tensor          # (B, Tmax+1) cumsum log P(voiced)
     rest_c: torch.Tensor            # (B, Tmax+1) cumsum log(1 - P(voiced))
-    jump_c: torch.Tensor            # (B, Tmax+1) cumsum of pyin pitch-change flags
     lengths: list[int]
     frame_times: list[np.ndarray]   # per track, strided grid, absolute seconds
-    contours: list[Contour]         # per track, for reading note pitches
+    # Per track, for naming a decoded note's pitch. None when the model's own pitch
+    # head supplies it instead -- no DP potential reads this.
+    contours: list[Contour] | None
     # From a learned pitch head, all None when the model has none. Three cumsums
     # because the two span features they serve need different aggregates: a *path
     # length* (how far the distribution travelled, frame to frame) and a *spread* (how
@@ -148,7 +142,7 @@ class Evidence:
         _check_one_device(
             "Evidence",
             onset_logit=self.onset_logit, voiced_c=self.voiced_c,
-            rest_c=self.rest_c, jump_c=self.jump_c,
+            rest_c=self.rest_c,
         )
 
     @property
@@ -171,8 +165,9 @@ class Evidence:
         cut = lambda x, k=1: None if x is None else x[b : b + 1, : t + k]
         return Evidence(
             self.onset_logit[b : b + 1, :t], self.voiced_c[b : b + 1, : t + 1],
-            self.rest_c[b : b + 1, : t + 1], self.jump_c[b : b + 1, : t + 1],
-            [t], [self.frame_times[b]], [self.contours[b]],
+            self.rest_c[b : b + 1, : t + 1],
+            [t], [self.frame_times[b]],
+            None if self.contours is None else [self.contours[b]],
             cut(self.path_c), cut(self.entropy_c), cut(self.pitch_c),
         )
 
@@ -190,14 +185,6 @@ class Evidence:
         """``sum of log(1 - P(voiced))`` over ``[i, j)``."""
         return self.rest_c[b, j] - self.rest_c[b, i]
 
-    def interior_jumps(self, b, i, j) -> torch.Tensor:
-        """Pitch changes landing **strictly inside** ``[i, j)``.
-
-        The ``i + 1`` is the whole point: a pitch change at the span's own first frame
-        is what *starts* this note, so charging the span for it would penalise every
-        correctly-placed boundary."""
-        return self.jump_c[b, j] - self.jump_c[b, i + 1]
-
     def _zeros_like_span(self, b, i, j) -> torch.Tensor:
         """A zero of whatever shape a span accessor would have returned.
 
@@ -214,7 +201,11 @@ class Evidence:
         A sum of per-frame moves, so it is large for a step change and also for
         vibrato that returns where it started -- it measures distance covered, not
         whether the span holds one pitch. ``pitch_spread`` is the peer that answers
-        the latter. Interior-only, on the same reasoning as ``interior_jumps``."""
+        the latter.
+
+        The ``i + 1`` makes it interior-only, and that offset is the whole point: the
+        pitch move at the span's own first frame is what *starts* this note, so
+        charging the span for it would penalise every correctly-placed boundary."""
         if self.path_c is None:
             return self._zeros_like_span(b, i, j)
         return self.path_c[b, j] - self.path_c[b, i + 1]
@@ -257,58 +248,34 @@ class Evidence:
         return -(p * p.log()).sum(-1) - self.mean_entropy(b, i, j)
 
 
-def pitch_jumps(contour: Contour, frame_times: np.ndarray) -> np.ndarray:
-    """Per-frame indicator of a pyin pitch-change landing at each grid frame.
-
-    A ``note`` span crossing a change is penalised, so the decoder can split a legato
-    run at the pitch boundary even with no rest and a weak onset. ``group()`` once
-    split on this cue too and no longer does -- pyin's transition lags a real onset,
-    which made it place notes late enough to fall outside the match tolerance. Here it
-    is a weighted *feature* rather than a hard boundary, so the same lag is something
-    the decoder can learn to discount; that is a weaker claim than "this cue is good",
-    and it is why the threshold lives here rather than being imported.
-
-    Detection bridges pyin dropouts the way ``group()``'s running pitch does: a bass
-    note transition usually has a one-frame unvoiced attack right at the boundary, so
-    comparing only adjacent voiced frames would miss exactly the changes that matter.
-    Each voiced frame is instead compared to the *last* voiced pitch, carried across
-    the gap."""
-    cmidi = np.full(contour.freqs.shape, np.nan)
-    voiced = contour.freqs > 0
-    cmidi[voiced] = librosa.hz_to_midi(contour.freqs[voiced])
-    nearest = np.clip(
-        np.searchsorted(contour.times, frame_times), 0, contour.times.size - 1
-    )
-    midi = cmidi[nearest]  # pyin pitch on the (strided) CRF grid
-    jump = np.zeros(frame_times.size, dtype=np.float32)
-    last = np.nan
-    for k in range(frame_times.size):
-        m = midi[k]
-        if np.isnan(m):
-            continue  # dropout: hold `last`
-        if not np.isnan(last) and abs(m - last) > JUMP_SEMITONES:
-            jump[k] = 1.0
-        last = m
-    return jump
-
-
 def voiced_logcumsum(
     voicing: np.ndarray | torch.Tensor | None,
-    contour: Contour,
+    contour: Contour | None,
     frame_times: np.ndarray,
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Prefix cumsums of ``(log P(voiced), log P(unvoiced))`` on the strided grid.
 
-    Prefer the voicing head; with none, fall back to pyin's own voiced mask
+    Prefer the voicing head; with none, fall back to a contour's own voiced mask
     (``freqs > 0``) resampled to the frame grid, as a near-hard 0/1 probability -- the
     CRF still runs on DSP-only cues, just without a learned rest signal. Both branches
     land on ``device``: the fallback is numpy-born and would otherwise pin the cumsums
-    to CPU while a head-fed run put them on the accelerator."""
+    to CPU while a head-fed run put them on the accelerator.
+
+    With *neither*, raise. Voiced/unvoiced is the one thing the segmental scan cannot
+    proceed without -- ``rest_mass`` and ``voiced_mass`` are what separate a note from
+    a silence -- so defaulting to "everything is voiced" would return a plausible
+    number for a model that was never given the question."""
     if voicing is not None:
         v = _on(voicing, device).float().clamp(1e-6, 1 - 1e-6)
         vlp, ulp = torch.log(v), torch.log1p(-v)
     else:
+        if contour is None:
+            raise ValueError(
+                "no voicing signal: the model has no voicing head and no contour was "
+                "supplied, so there is nothing to say where the bass sounds. Train "
+                "with a voicing head, or pass a contour to fall back on."
+            )
         mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
         vp = np.clip(mask, 1e-6, 1 - 1e-6)
         vlp = _on(np.log(vp).astype(np.float32), device)
@@ -356,13 +323,12 @@ def _track_tensors(
     onset_logit = torch.logit(onset.clamp(1e-6, 1 - 1e-6))
     voicing = cues.voicing[::stride] if cues.voicing is not None else None
     Vc, Uc = voiced_logcumsum(voicing, cues.contour, frame_times, device)
-    # `jump` reads the pyin contour, which is numpy by TensorCues' invariant, so this
-    # is the field that would otherwise strand the DP across two devices.
-    jump = _on(pitch_jumps(cues.contour, frame_times), device)
-    Jc = torch.cat([jump.new_zeros(1), torch.cumsum(jump, 0)])
-    logits = getattr(cues, "pitch_logits", None)
+    # A plain attribute, not a getattr default: both cue types carry this field, and
+    # the probe that used to stand here is what let the numpy path silently arrive
+    # without one -- zeroing the learned span features at decode.
+    logits = cues.pitch_logits
     pitch = None if logits is None else pitch_cumsums(_on(logits, device)[::stride])
-    return onset_logit, Vc, Uc, Jc, frame_times, pitch
+    return onset_logit, Vc, Uc, frame_times, pitch
 
 
 def build_evidence(
@@ -373,9 +339,9 @@ def build_evidence(
     """Build the strided ``Evidence`` the DP scans, from one track or a list.
 
     ``device`` is the single placement every field is built onto, establishing the
-    one-device invariant. Callers that own the scorer pass *its* module's device, so
-    the numpy-born ``jump_c`` follows the parameters it will be added to -- which is
-    what makes a numpy ``Cues`` decodable by a module on an accelerator.
+    one-device invariant. Callers that own the scorer pass *its* module's device, so a
+    numpy-born field follows the parameters it will be added to -- which is what makes
+    a numpy ``Cues`` decodable by a module on an accelerator.
 
     Padding is grad-preserving: the per-track tensors are scattered into buffers
     allocated off the first track."""
@@ -391,32 +357,33 @@ def build_evidence(
     onset = built[0][0].new_zeros(B, Tmax)
     Vc = onset.new_zeros(B, Tmax + 1)
     Uc = onset.new_zeros(B, Tmax + 1)
-    Jc = onset.new_zeros(B, Tmax + 1)
-    has_pitch = built[0][5] is not None
-    if has_pitch and any(t[5] is None for t in built):
+    has_pitch = built[0][4] is not None
+    if has_pitch and any(t[4] is None for t in built):
         raise ValueError(
             "batch mixes tracks with and without pitch logits; every track in a batch "
             "must come from the same model, or the span features silently read zeros "
             "for some rows and real evidence for others"
         )
-    K = built[0][5][2].shape[-1] if has_pitch else 0
+    K = built[0][4][2].shape[-1] if has_pitch else 0
     Pc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
     Hc = onset.new_zeros(B, Tmax + 1) if has_pitch else None
     Dc = onset.new_zeros(B, Tmax + 1, K) if has_pitch else None
 
-    for b, (o, v, u, jc, _, pitch) in enumerate(built):
+    for b, (o, v, u, _, pitch) in enumerate(built):
         t = lengths[b]
         onset[b, :t] = o
         Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
         Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
-        Jc[b, : t + 1], Jc[b, t + 1 :] = jc, jc[-1]
         if pitch is not None:
             pc, hc, dc = pitch
             Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
             Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
             Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
 
+    # A batch of contours only when every track has one: a partial list would silently
+    # give some decoded notes a pyin pitch and others none.
+    contours = [c.contour for c in batch]
     return Evidence(
-        onset, Vc, Uc, Jc, lengths,
-        [t[4] for t in built], [c.contour for c in batch], Pc, Hc, Dc,
+        onset, Vc, Uc, lengths, [t[3] for t in built],
+        None if any(c is None for c in contours) else contours, Pc, Hc, Dc,
     )

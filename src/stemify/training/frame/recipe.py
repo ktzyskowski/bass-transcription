@@ -73,6 +73,17 @@ class FrameRecipe(Recipe):
         return [*super().heads, "pitch"] if self.pitch else super().heads
 
     @property
+    def config(self) -> dict[str, object]:
+        """Everything ``__init__`` takes, unflattened -- see ``Recipe.config``."""
+        return {
+            **super().config,
+            "pitch": self.pitch,
+            "window_frames": self.window_frames,
+            "hop_frames": self.hop_frames,
+            "pos_weight": dict(self.pos_weight),
+        }
+
+    @property
     def params(self) -> dict[str, object]:
         """What this strategy contributes to the run's logged params."""
         return {

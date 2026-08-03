@@ -115,7 +115,6 @@ def _fitted_scorer(dec):
         dec.scorer.w_on.fill_(0.7)
         dec.scorer.w_v.fill_(1.3)
         dec.scorer.w_u.fill_(0.4)
-        dec.scorer.w_pitch.fill_(-0.9)
         dec.scorer.b_note.fill_(0.25)
         dec.scorer.b_rest.fill_(-0.4)
         dec.scorer.dur.copy_(torch.linspace(-1.0, 1.0, dec.scorer.dur.numel()))
@@ -213,7 +212,7 @@ def _truncate(ev, n):
     """The first ``n`` DP frames of an Evidence, so chunks tile it exactly."""
     return Evidence(
         ev.onset_logit[:, :n], ev.voiced_c[:, : n + 1], ev.rest_c[:, : n + 1],
-        ev.jump_c[:, : n + 1], [n], [ev.frame_times[0][:n]], ev.contours,
+        [n], [ev.frame_times[0][:n]], ev.contours,
     )
 
 
@@ -244,7 +243,6 @@ def _stack_evidence(es):
         torch.cat([e.onset_logit for e in es]),
         torch.cat([e.voiced_c for e in es]),
         torch.cat([e.rest_c for e in es]),
-        torch.cat([e.jump_c for e in es]),
         [e.lengths[0] for e in es],
         [e.frame_times[0] for e in es],
         [e.contours[0] for e in es],
@@ -274,7 +272,7 @@ def _random_emissions(T, seed=0):
     contour = Contour(times=ft, freqs=np.full(T, 110.0, dtype=np.float32))
     cs = lambda: torch.cumsum(torch.randn(T + 1, generator=g), 0).unsqueeze(0)
     return Evidence(
-        torch.randn(1, T, generator=g), cs(), cs(), cs(), [T], [ft], [contour],
+        torch.randn(1, T, generator=g), cs(), cs(), [T], [ft], [contour],
     )
 
 
@@ -359,7 +357,6 @@ def _chunks(e, size, dmax):
                 e.onset_logit[:, lo : s + size],
                 e.voiced_c[:, lo : s + size + 1] - e.voiced_c[:, lo : lo + 1],
                 e.rest_c[:, lo : s + size + 1] - e.rest_c[:, lo : lo + 1],
-                e.jump_c[:, lo : s + size + 1] - e.jump_c[:, lo : lo + 1],
                 [s + size - lo],
                 [e.frame_times[0][lo : s + size]],
                 e.contours,
@@ -392,7 +389,6 @@ def _chunks_with_right(e, size, dmax, right):
                 e.onset_logit[:, lo:hi],
                 e.voiced_c[:, lo : hi + 1] - e.voiced_c[:, lo : lo + 1],
                 e.rest_c[:, lo : hi + 1] - e.rest_c[:, lo : lo + 1],
-                e.jump_c[:, lo : hi + 1] - e.jump_c[:, lo : lo + 1],
                 [hi - lo],
                 [e.frame_times[0][lo:hi]],
                 e.contours,
@@ -513,7 +509,7 @@ def test_detaching_the_carry_still_reaches_every_chunk():
     for chunk, ctx in _chunks(trimmed, size, grid.dmax):
         onset = chunk.onset_logit.detach().clone().requires_grad_(True)
         live = Evidence(
-            onset, chunk.voiced_c, chunk.rest_c, chunk.jump_c,
+            onset, chunk.voiced_c, chunk.rest_c,
             chunk.lengths, chunk.frame_times, chunk.contours,
         )
         A, carry = chunk_log_partition(dec.scorer, live, grid, carry, ctx)
@@ -761,7 +757,7 @@ def test_evidence_rejects_fields_on_different_devices():
     t, cum = torch.zeros(1, 4), torch.zeros(1, 5)
     with pytest.raises(ValueError, match="span multiple devices"):
         Evidence(
-            t, cum, cum, torch.zeros(1, 5, device="meta"),
+            t, cum, torch.zeros(1, 5, device="meta"),
             [4], [np.zeros(4)], [Contour.empty()],
         )
 
@@ -788,3 +784,97 @@ def test_decode_without_voicing_head_falls_back_to_contour():
         dec.nll(cues, notes).backward()
         opt.step()
     assert len(dec.decode(cues)) == 2
+
+
+def test_the_dp_runs_with_no_contour_at_all():
+    # The point of removing the pyin span features: no potential reads a contour, so
+    # the whole scan must run without one. If any code path still reaches for it, this
+    # raises rather than quietly scoring a feature nobody asked for.
+    T = 60
+    ft = np.arange(T) * DT
+    rng = np.random.default_rng(0)
+    cues = TensorCues(
+        contour=None,
+        onset=torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+        frame_times=ft,
+        voicing=torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+    )
+    dec = SemiCRFDecoder()
+    notes = _notes([(0.1, 0.4), (0.5, 0.6)], [45, 50])
+    loss = dec.nll(cues, notes)
+    assert torch.isfinite(loss)
+    loss.backward()   # and the gradient still reaches the cues
+
+
+def test_decoding_without_a_contour_says_why():
+    # The DP scores spans with no contour, but a NoteEvent needs a pitch. That has to
+    # fail with the reason, not an IndexError three frames deep.
+    T = 30
+    cues = TensorCues(
+        contour=None,
+        onset=torch.zeros(T),
+        frame_times=np.arange(T) * DT,
+        voicing=torch.full((T,), 0.9),
+    )
+    with pytest.raises(ValueError, match="no contour"):
+        SemiCRFDecoder().decode(cues)
+
+
+def test_no_voicing_head_and_no_contour_is_refused():
+    # Voiced/unvoiced is the one signal the scan cannot proceed without: with neither
+    # source, "everything is voiced" would be a plausible number for a question the
+    # model was never asked.
+    T = 30
+    cues = TensorCues(
+        contour=None, onset=torch.zeros(T), frame_times=np.arange(T) * DT, voicing=None,
+    )
+    with pytest.raises(ValueError, match="no voicing signal"):
+        SemiCRFDecoder().nll(cues, _notes([(0.1, 0.2)], [45]))
+
+
+def test_the_learned_pitch_features_survive_into_inference():
+    # The DP's `path_length` and `pitch_spread` are functions of the pitch head's
+    # per-bin logits. Training passes them through TensorCues; inference builds a numpy
+    # Cues. If only one of those carries the logits, a checkpoint decodes as though
+    # w_path and w_spread were zero however they were fitted -- and nothing fails,
+    # because the discrepancy only exists after training.
+    T, K = 40, 216
+    ft = np.arange(T) * DT
+    rng = np.random.default_rng(0)
+    onset = rng.random(T).astype(np.float32)
+    voicing = np.full(T, 0.9, dtype=np.float32)
+    contour = Contour(times=ft, freqs=np.full(T, 110.0, dtype=np.float32))
+    # Confident, and moving halfway through: exactly what the two features detect.
+    logits = np.full((T, K), -8.0, dtype=np.float32)
+    logits[: T // 2, 40] = 12.0
+    logits[T // 2 :, 55] = 12.0
+
+    at_inference = Cues(
+        contour=contour, onset=onset, frame_times=ft, voicing=voicing,
+        pitch_logits=logits,
+    )
+    in_training = TensorCues(
+        contour=contour,
+        onset=torch.from_numpy(onset),
+        frame_times=ft,
+        voicing=torch.from_numpy(voicing),
+        pitch_logits=torch.from_numpy(logits),
+    )
+
+    dec = SemiCRFDecoder(stride=1)
+    with torch.no_grad():
+        dec.scorer.w_path.fill_(3.0)
+        dec.scorer.w_spread.fill_(3.0)
+
+    scores = []
+    for cues in (at_inference, in_training):
+        ev = build_evidence(cues, stride=1, device=torch.device("cpu"))
+        assert ev.path_c is not None, "pitch logits did not reach the evidence"
+        assert float(ev.path_length(0, 0, T - 1)) > 0.5, "a real pitch move read as zero"
+        grid = dec.scorer.grid(ev.frame_times[0])
+        scores.append(float(dec.scorer.unary(ev, grid, 0, 0, T - 1)[0].detach()))
+
+    assert scores[0] == pytest.approx(scores[1], abs=1e-5), (
+        f"inference scores {scores[0]} but training scored {scores[1]} for the same "
+        "cues -- the decoder is not the model that was trained"
+    )

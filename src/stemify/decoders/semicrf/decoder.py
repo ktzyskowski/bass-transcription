@@ -135,7 +135,19 @@ class SemiCRFDecoder(Decoder, nn.Module):
     ) -> list[NoteEvent]:
         """Turn ``note`` segments into ``NoteEvent``s, reading each note's pitch as the
         median contour pitch over its span -- pitch comes from the contour, never
-        invented. A span the contour left entirely pitchless yields no note."""
+        invented. A span the contour left entirely pitchless yields no note.
+
+        The contour is pyin's or the model's own, and this cannot tell: ``NeuralEncoder``
+        already substitutes the pitch head's ``decode_contour`` output when the model
+        has that head, so both arrive here as a plain ``Contour``. That is why no
+        potential reads it and why ``models`` is not imported here."""
+        if ev.contours is None:
+            raise ValueError(
+                "cannot name note pitches: this Evidence carries no contour. The DP "
+                "scores spans without one, but a NoteEvent needs a pitch -- decode "
+                "through cues from an encoder (pyin or a pitch head), not a "
+                "contour-less training batch."
+            )
         ft, contour = ev.frame_times[0], ev.contours[0]
         hop = float(np.median(np.diff(ft))) if ft.size > 1 else 0.01 * self.stride
         ct, cf = contour.times, contour.freqs

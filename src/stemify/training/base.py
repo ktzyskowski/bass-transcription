@@ -121,6 +121,29 @@ class Recipe(ABC):
         return list(HEADS)
 
     @property
+    def config(self) -> dict[str, object]:
+        """The keyword arguments that reconstruct this recipe.
+
+        The companion to ``from_config``, and the whole of what a checkpoint stores
+        about *how* its model was built: ``heads``, ``in_channels`` and the decoder a
+        checkpoint is scored through are all derived from a recipe, so a checkpoint
+        that records this needs to record nothing else. That is what stops it
+        accumulating a field per question anyone ever asks of it.
+
+        Deliberately distinct from ``params``. That one is a *display* projection for
+        MLflow -- it renders ``pos_weight`` as ``"onset=5"`` and omits the conditions --
+        so it is lossy by design. The two should eventually be one, with ``params``
+        derived from this; until then, this is the one that must round-trip.
+        """
+        return {"conditions": [c.name for c in self.conditions]}
+
+    @classmethod
+    def from_config(cls, config: dict[str, object]) -> "Recipe":
+        """Rebuild a recipe from ``config``. Override when a field needs reviving into
+        an object rather than passed straight through (see ``SemiCRFRecipe``)."""
+        return cls(**config)
+
+    @property
     def params(self) -> dict[str, object]:
         """Strategy-specific settings worth recording on a run.
 

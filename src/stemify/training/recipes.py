@@ -13,12 +13,7 @@ import ``base``, so folding the table in beside the ABCs would close the cycle.
 from stemify.training.base import HEADS, Recipe
 from stemify.training.frame import FrameRecipe
 from stemify.training.semicrf import SemiCRFRecipe
-from stemify.training.semicrf.tbptt import SemiCRFTbpttRecipe
 
-RECIPES: dict[str, type[Recipe]] = {
-    r.name: r for r in (FrameRecipe, SemiCRFRecipe, SemiCRFTbpttRecipe)
-}
+RECIPES: dict[str, type[Recipe]] = {r.name: r for r in (FrameRecipe, SemiCRFRecipe)}
 
-__all__ = [
-    "HEADS", "RECIPES", "FrameRecipe", "Recipe", "SemiCRFRecipe", "SemiCRFTbpttRecipe",
-]
+__all__ = ["HEADS", "RECIPES", "FrameRecipe", "Recipe", "SemiCRFRecipe"]

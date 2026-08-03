@@ -41,6 +41,7 @@ from stemify.encoders.neural import NeuralEncoder
 from stemify.models.heads import onset_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.tagger import FrameTagger
+from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     ConsoleCallback,
@@ -275,13 +276,13 @@ def train(
         # start from *good* cues instead of learning the encoder and the potentials
         # simultaneously from scratch. Strict: a shape mismatch should fail loudly,
         # not silently leave half the encoder random.
-        ckpt = torch.load(init_from, map_location="cpu", weights_only=False)
-        model.load_state_dict(ckpt["state_dict"])
-        if ckpt.get("loss_state"):
+        warm = Checkpoint.load(init_from)
+        model.load_state_dict(warm.model_state)
+        if warm.objective_state:
             logger.warning(
                 "%s carries objective parameters (%s); --init-from restores the "
                 "encoder only, so these are dropped",
-                init_from, sorted(ckpt["loss_state"]),
+                init_from, sorted(warm.objective_state),
             )
         logger.info("initialised encoder from %s", init_from)
 
@@ -339,27 +340,16 @@ def train(
     # trained heads survive the process (a NeuralEncoder loads them) rather than
     # living only as MLflow metrics. Save the state_dict plus the metadata needed to
     # rebuild the architecture before loading weights.
-    out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "state_dict": trainer.model.state_dict(),
-            # The objective's own learned parameters: empty for frame BCE, the ~15
-            # potentials for a semi-CRF. Persisted because the optimiser trained both
-            # -- saving only the model would discard half the trained system and leave
-            # a decode-time decoder freshly initialised, which fails silently.
-            "loss_state": trainer.loss.state_dict(),
-            "heads": recipe.heads,
-            "encoder": "tcn",
-            # The input width is architecture, not a hyperparameter: loading these
-            # weights into a 1-channel TCN fails on the first conv, and guessing it
-            # from the state_dict means reverse-engineering a conv shape. Recorded
-            # alongside the conditions that produced it so a checkpoint says what
-            # it expects to be fed.
-            "in_channels": recipe.in_channels,
-            "conditions": sources,
-        },
-        out,
-    )
+    # The recipe goes in rather than the facts derived from it (heads, in_channels,
+    # the decoder to score through): recording the recipe means a reader rebuilds them
+    # the same way training did, instead of re-deriving them and getting it subtly
+    # wrong. The objective's own parameters travel too -- for a semi-CRF they *are*
+    # the decoder, and a file without them restores half a system while looking whole.
+    Checkpoint(
+        recipe=recipe,
+        model_state=trainer.model.state_dict(),
+        objective_state=trainer.loss.state_dict(),
+    ).save(out)
     logger.info("saved onset model -> %s", out)
     if mlflow is not None:
         mlflow.log_artifact(out)
@@ -397,7 +387,8 @@ def main() -> None:
     ap.add_argument("--objective", default="frame", choices=sorted(RECIPES),
                     help="training objective: 'frame' is per-frame BCE over fixed "
                          "windows grouped by the heuristic; 'semicrf' trains the "
-                         "segmental decoder jointly with the encoder over whole tracks")
+                         "segmental decoder jointly with the encoder, over ordered "
+                         "chunks of a track carrying the alpha window between them")
     ap.add_argument("--init-from", type=Path,
                     help="warm-start the encoder from a checkpoint's state_dict "
                          "(objective parameters are not restored)")
@@ -444,8 +435,10 @@ def main() -> None:
         if unsupported:
             raise SystemExit(
                 f"{', '.join(unsupported)} applies to --objective frame, not "
-                f"{args.objective!r}: the semi-CRF's DP scores onset and voicing "
-                "evidence only, and its structured NLL takes no class weights."
+                f"{args.objective!r}. --pos-weight because a structured NLL takes no "
+                "class weights; --pitch because nothing here supervises the head's "
+                "*values* yet -- the span features read how far the distribution moves, "
+                "never whether it is right, so the head would train on no signal at all."
             )
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(

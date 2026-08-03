@@ -1,14 +1,17 @@
-"""``ChunkedSemiCRFLoss``: the property the whole truncated-BPTT design rests on.
+"""``SemiCRFLoss``'s carry: the property the whole chunked design rests on.
 
-Summing the per-chunk losses over a track must reproduce the whole-track semi-CRF NLL
-exactly. If it does not, chunked training optimises something other than what it
-reports, and every number a step-matched run produces is uninterpretable.
+Summing the per-chunk losses over a track must reproduce the NLL of one uninterrupted
+scan over that same track. If it does not, chunked training optimises something other
+than what it reports, and every number a step-matched run produces is uninterpretable.
 
-The DP half of this is already covered in ``tests/decoders/test_semicrf.py`` (the carry
-and the telescoping identity, against a brute-force whole-track ``log Z``). What is
-tested *here* is the layer above: that the loss drives the decoder correctly across a
-loader -- resuming the right carry per stream, resetting at track boundaries, and
-subtracting the right gold pieces.
+The reference here is a *single chunk spanning the whole track* (``context=0``,
+``right=0``, one scan, no carry), which is what the deleted whole-track loss computed.
+The DP half is covered independently in ``tests/decoders/test_semicrf.py``, against
+brute-force enumeration of every segmentation -- that is the check that grounds this
+one, and it does not compare the implementation to itself. What is tested *here* is the
+layer above: that the loss drives the decoder correctly across a loader -- resuming the
+right carry per stream, resetting at track boundaries, and subtracting the right gold
+pieces.
 
 The model is deliberately **pointwise** (receptive field 1). A real TCN sees 65 frames,
 so its cues near a chunk edge are computed partly from the window's zero-padding and
@@ -28,15 +31,13 @@ from torch import nn
 from stemify.cache import Cache
 from stemify.contour import Contour
 from stemify.decoders.semicrf import SemiCRFDecoder
+from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
 from stemify.training.conditions import CONDITIONS
-from stemify.training.semicrf.tbptt.dataset import ChunkedSequenceDataset
-from stemify.training.semicrf.dataset import SequenceExample
-from stemify.training.semicrf.dataset import collate as sequence_collate
+from stemify.training.semicrf.dataset import Chunk, ChunkDataset, collate
 from stemify.training.semicrf.loss import SemiCRFLoss
-from stemify.training.semicrf.tbptt.loss import ChunkedSemiCRFLoss
 
 N_BINS, HOP_S, STRIDE = 12, 0.0116, 3
 CHUNK, DMAX = 10, 30
@@ -110,29 +111,37 @@ def track(tmp_path):
 
 
 def _whole_track_nll(model, cache, items, feats) -> float:
-    """The reference: one ``SemiCRFLoss`` call over the whole track."""
+    """The reference: the whole track as ONE chunk, so the scan runs uninterrupted.
+
+    ``context=0``/``right=0`` and a fresh carry make this exactly ``log Z - gold`` over
+    the track -- what the removed whole-track loss computed, with none of its padding.
+    """
     times = np.arange(N_CQT) * HOP_S
-    example = SequenceExample(
+    decoder = SemiCRFDecoder(stride=STRIDE)
+    dmax = decoder.scorer.grid(times[::STRIDE]).dmax
+    chunk = Chunk(
         features=feats[None],                       # (1, n_bins, T)
         frame_times=times,
         contour=cache.contour(None, None),
-        notes=items[0].reference_notes(),
+        gold=gold_segments(times[::STRIDE], items[0].reference_notes(), dmax),
+        context=0,
+        right=0,
+        stream=0,
+        reset=True,
     )
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(decoder)
     with torch.no_grad():
-        _, metrics = loss.compute(
-            model, sequence_collate([example]), torch.device("cpu")
-        )
+        _, metrics = loss.compute(model, collate([chunk]), torch.device("cpu"))
     return metrics["total"]
 
 
 def _chunked_nll(model, cache, items, right: int) -> float:
     """The sum of per-chunk telescoping losses over the same track."""
-    dataset = ChunkedSequenceDataset(
+    dataset = ChunkDataset(
         items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=right,
     )
-    loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
     total = 0.0
     with torch.no_grad():
         for batch in dataset:
@@ -160,11 +169,11 @@ def test_a_second_epoch_gives_the_same_losses(track):
     # from epoch 1's alpha and every epoch after the first is quietly wrong.
     items, cache, _ = track
     model = _Pointwise()
-    dataset = ChunkedSequenceDataset(
+    dataset = ChunkDataset(
         items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
-    loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
 
     def one_pass():
         with torch.no_grad():
@@ -181,11 +190,11 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
     # window and report a plausible number for the wrong quantity.
     items, cache, _ = track
     model = _Pointwise()
-    dataset = ChunkedSequenceDataset(
+    dataset = ChunkDataset(
         items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
-    loss = ChunkedSemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
     batches = list(dataset)
     assert batches[1].resets == [False], "the fixture must have a continuing chunk"
     with pytest.raises(KeyError, match="no carry"):
@@ -202,7 +211,7 @@ def test_epoch_batches_survives_a_streaming_loader(track):
 
     items, cache, _ = track
     streaming = DataLoader(
-        ChunkedSequenceDataset(
+        ChunkDataset(
             items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
             stride=STRIDE, batch_size=1,
         ),

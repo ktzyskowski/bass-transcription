@@ -1,17 +1,11 @@
-"""``ChunkedSemiCRFLoss``: the semi-CRF NLL under truncated BPTT.
+"""``SemiCRFLoss``: the semi-CRF's structured NLL, over ordered chunks of a track.
 
-The same objective as ``SemiCRFLoss`` -- ``log Z - score(gold)`` over a whole track --
-but paid for one chunk at a time, so a track never has to fit in memory at once. That
-is what buys the gradient steps: whole tracks force B=2 and 17 steps/epoch on this
-corpus, of which ~40% of the compute is padding to the longest track in the batch;
-fixed chunks fit B=8+ with no padding at all and give ~13x the steps for the same DP
-work.
-
-**Why this is a separate ``Loss`` and not a flag on ``SemiCRFLoss``.** It is stateful.
-The alpha window from chunk *k* is what chunk *k+1* resumes from, so ``compute`` is no
-longer a pure function of its batch -- it carries state between calls, keyed by stream.
-Bolting that onto the whole-track loss would make the stateless path pay for a
-concept it does not have, and the two change for different reasons.
+``log Z - score(gold)`` over a whole track, paid for one chunk at a time, so a track
+never has to fit in memory at once. That is what buys the gradient steps: whole tracks
+force B=2 and 17 steps/epoch on this corpus, of which ~40% of the compute is padding to
+the longest track in the batch; fixed chunks fit B=8+ with no padding at all and give
+~13x the steps for the same DP work. There used to be a separate whole-track ``Loss``
+and dataset for the padded form; ``detach_carry`` is what remains of it.
 
 **The telescoping identity** (see ``forward.chunk_log_partition``) is what makes this
 exact rather than an approximation. With ``A_0 = 0`` and the carry detached between
@@ -21,14 +15,15 @@ chunks::
 
 so the per-chunk losses sum to the true whole-track NLL, while each term's gradient
 reaches only its own chunk's encoder activations. Detaching the carry is precisely
-what makes it *truncated*: passing the window through undetached reproduces
-whole-track backprop and the memory saving with it.
+what makes it *truncated*: passing the window through undetached reproduces whole-track
+backprop, and gives back the memory saving with it. That is the one axis on which the
+deleted path differed, so it is a flag here rather than a second module.
 
 **Why the carry is keyed by stream and not by batch row.** With ``num_workers > 1``
 consecutive batches come from different workers, so row *b* of one batch is not the
-continuation of row *b* of the last. ``ChunkedSequenceDataset`` stamps a globally
-unique ``stream`` on every chunk for exactly this reason. Entries are reset by the
-chunk's own ``reset`` flag, which the dataset raises on each track's first chunk --
+continuation of row *b* of the last. ``ChunkDataset`` stamps a globally unique
+``stream`` on every chunk for exactly this reason. Entries are reset by the chunk's
+own ``reset`` flag, which the dataset raises on each track's first chunk --
 so a fresh pass over the loader (a new epoch, or the val loader) rebuilds every carry
 before reading it, and no epoch resumes from the last one's state.
 """
@@ -39,28 +34,37 @@ from torch import nn
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.window import initial_window
 from stemify.training.base import Loss
-from stemify.training.semicrf.tbptt.dataset import ChunkBatch
+from stemify.training.semicrf.dataset import ChunkBatch
 
 
-class ChunkedSemiCRFLoss(Loss):
+class SemiCRFLoss(Loss):
     """The semi-CRF NLL over ordered chunks, carrying alpha between them."""
 
-    def __init__(self, decoder: SemiCRFDecoder) -> None:
+    def __init__(self, decoder: SemiCRFDecoder, detach_carry: bool = True) -> None:
+        """``detach_carry=False`` stops truncating: the alpha window is passed to the
+        next chunk with its graph intact, which reproduces whole-track backprop and
+        whole-track activation memory. Only sensible for short tracks -- it is why the
+        padded whole-track path was removed rather than kept as a second module."""
         self.decoder = decoder
+        self.detach_carry = detach_carry
         # stream id -> (alpha window, cumulative A) at that stream's current position.
-        # Detached: this is resumption state, never a gradient path.
+        # Resumption state; a gradient path only when detach_carry is False.
         self._carry: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
     def parameters(self):
         return self.decoder.parameters()
 
     def state_dict(self):
+        # The ~15 potentials ARE the decoder. Without them a checkpoint restores an
+        # encoder paired with an untrained CRF -- w_on=1, dur=zeros, i.e. no duration
+        # preference at all, which is precisely the mechanism this objective exists
+        # to learn.
         return {k: v.detach().cpu().clone() for k, v in self.decoder.state_dict().items()}
 
     def load_state_dict(self, state):
         self.decoder.load_state_dict(state)
 
-    def to(self, device: torch.device) -> "ChunkedSemiCRFLoss":
+    def to(self, device: torch.device) -> "SemiCRFLoss":
         self.decoder.to(device)
         return self
 
@@ -124,13 +128,16 @@ class ChunkedSemiCRFLoss(Loss):
         A, gold, window = self.decoder.nll_chunk(
             cues_list, batch.golds, carry, batch.context, batch.right
         )
-        # The telescoping term. Mean over rows so the scale matches the whole-track
-        # loss and the learning rate carries over between the two paths.
+        # The telescoping term. Mean over rows so the loss is per-track rather than
+        # per-batch, and the learning rate carries over from the frame path.
         nll = ((A - prev_A) - gold).mean()
 
-        detached_A, detached_window = A.detach(), window.detach()
+        # Detaching here is the truncation itself: it severs chunk k+1's gradient from
+        # chunk k's encoder activations, which is what bounds memory to one chunk.
+        carried_A = A.detach() if self.detach_carry else A
+        carried_window = window.detach() if self.detach_carry else window
         for b, stream in enumerate(batch.streams):
-            self._carry[stream] = (detached_window[b], detached_A[b])
+            self._carry[stream] = (carried_window[b], carried_A[b])
 
         scalar = float(nll.item())
         return nll, {"nll": scalar, "total": scalar}

@@ -1,10 +1,12 @@
-"""Fixed-size chunks of tracks, in order, for truncated-BPTT semi-CRF training.
+"""Fixed-size chunks of tracks, in order, for semi-CRF training.
 
-``SequenceDataset`` yields whole tracks and pads a batch to the longest -- 16,617
-frames padded to 23,355 on a real batch, and 54 GiB of activations at B=16, which does
-not fit. This yields fixed-size *chunks* instead, and the alpha window carried between
-them (``forward.chunk_log_partition``) is what keeps the objective the true whole-track
-``log Z`` rather than a per-window approximation.
+The obvious alternative -- yield whole tracks and pad a batch to the longest -- was
+tried and removed: 16,617 frames padded to 23,355 on a real batch, 54 GiB of
+activations at B=16, which does not fit. This yields fixed-size *chunks* instead, and
+the alpha window carried between them (``forward.chunk_log_partition``) is what keeps
+the objective the true whole-track ``log Z`` rather than a per-window approximation.
+Untruncated whole-track backprop is still reachable -- it is ``SemiCRFLoss``'s
+``detach_carry=False``, not a second dataset.
 
 Chunks must arrive **in order, per track**, which a shuffling ``DataLoader`` cannot do.
 The classic answer from RNN language modelling: run ``batch_size`` parallel *streams*,
@@ -15,7 +17,7 @@ this is an ``IterableDataset`` that emits whole ``ChunkBatch`` objects (use
 Each row carries a ``stream`` id and a ``reset`` flag rather than relying on position,
 because with ``num_workers > 1`` consecutive batches come from *different* workers, so
 row ``b`` of one batch is not the continuation of row ``b`` of the last. The trainer
-keys its carries by ``stream``; see ``semicrf/loss.py``.
+keys its carries by ``stream``; see ``loss.py`` beside this.
 """
 
 from collections.abc import Iterator
@@ -155,7 +157,7 @@ class _Track:
         return window, times, gold
 
 
-class ChunkedSequenceDataset(IterableDataset):
+class ChunkDataset(IterableDataset):
     """Chunks of tracks over ``batch_size`` parallel streams, in track order.
 
     Streams are independent: each takes every ``n``-th track, walks it chunk by chunk,

@@ -1,4 +1,4 @@
-"""ChunkedSequenceDataset: chunk geometry, stream ordering, and the property that
+"""ChunkDataset: chunk geometry, stream ordering, and the property that
 matters -- chunks fed through the carry reproduce the whole-track log Z.
 
 No audio and no model: a fake Slakh-like dataset writes synthetic CQTs into a tmp
@@ -24,7 +24,8 @@ from stemify.decoders.semicrf.spans import Grid
 from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
-from stemify.training.semicrf.tbptt.dataset import ChunkedSequenceDataset, collate
+from stemify.training.semicrf.dataset import ChunkDataset, collate
+from stemify.training.semicrf.tracks import channel_window
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
@@ -89,7 +90,7 @@ def cache(tmp_path):
 
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
     ds = _FakeDataset(tmp_path, cache, lengths)
-    return ChunkedSequenceDataset(
+    return ChunkDataset(
         ds, cache, CONDITIONS["clean"], chunk_frames=chunk, dmax=dmax, stride=STRIDE,
         batch_size=batch_size, right_context=right,
     )
@@ -117,6 +118,30 @@ def test_a_tracks_first_chunk_is_left_padded_with_zeros(tmp_path, cache):
     assert all(first.resets)
     assert torch.count_nonzero(first.features[:, :, :, : 30 * STRIDE]) == 0
     assert torch.count_nonzero(first.features[:, :, :, 30 * STRIDE :]) > 0
+
+
+def test_channel_window_stacks_channels_in_order_and_pads_with_zeros():
+    # The structured path's peer of test_frame's bichannel check. Constant-valued
+    # channels so a swap or a duplicated channel is visible: channel 0 is the bass,
+    # the channel the labels describe, and nothing downstream re-derives that.
+    n = 10
+    examples = tuple(
+        TrackExample(f"c{v}", np.full((N_BINS, n), float(v)), {}, np.arange(n) * HOP_S)
+        for v in (1, 2)
+    )
+    window = channel_window(examples, 0, n)
+    assert window.shape == (2, N_BINS, n)
+    assert (window[0] == 1.0).all()
+    assert (window[1] == 2.0).all()
+
+    # Off both ends: a chunk's context margins run past the track, and the pad must be
+    # zeros on *every* channel, not just the one the slice happened to start from.
+    overhang = channel_window(examples, -2, n + 4)
+    assert overhang.shape == (2, N_BINS, n + 4)
+    assert (overhang[:, :, :2] == 0.0).all()
+    assert (overhang[:, :, -2:] == 0.0).all()
+    assert (overhang[0, :, 2:-2] == 1.0).all()
+    assert (overhang[1, :, 2:-2] == 2.0).all()
 
 
 def test_reset_is_flagged_exactly_at_track_boundaries(tmp_path, cache):
@@ -168,7 +193,7 @@ def test_streams_interleave_distinct_tracks(tmp_path, cache):
 def test_collate_rejects_mixed_widths(tmp_path, cache):
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
     a, b = list(ds)[:2]
-    from stemify.training.semicrf.tbptt.dataset import Chunk
+    from stemify.training.semicrf.dataset import Chunk
 
     wide = Chunk(
         np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, a.contours[0], [], 30, 0,
@@ -187,7 +212,7 @@ def test_collate_rejects_mixed_margins(tmp_path, cache):
     # scanned as chunk -- silently, since the widths still match.
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
     a = next(iter(ds))
-    from stemify.training.semicrf.tbptt.dataset import Chunk
+    from stemify.training.semicrf.dataset import Chunk
 
     lhs = Chunk(a.features[0].numpy(), a.frame_times[0], a.contours[0], [], 30, 0,
                 0, False)

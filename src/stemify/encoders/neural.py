@@ -160,6 +160,11 @@ class NeuralEncoder(Encoder):
             onset=onset,
             frame_times=features.frame_times,
             voicing=voicing,
+            # Carried, not just consumed. The contour above is one *reading* of these
+            # logits; a segmental decoder scores the distribution itself (path length,
+            # spread), so collapsing to the contour here would silently zero those
+            # potentials at decode while training saw them.
+            pitch_logits=pitch_logits,
         )
 
     def contour_from(

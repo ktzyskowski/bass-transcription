@@ -31,49 +31,27 @@ from stemify.encoders.base import Encoder
 from stemify.encoders.dsp import DSPEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.segmenter import Segmenter
+from stemify.training.checkpoint import Checkpoint
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity
 
 ENCODERS = ("pyin", "learned")
 
 # Decoders available to the note harness. The heuristic is the DSP floor; semicrf is
-# the learned global decoder (untrained potentials unless a checkpoint carries them).
+# the learned global decoder, whose potentials must be restored from the checkpoint --
+# see ``build_decoder``.
 DECODERS = {"heuristic": HeuristicDecoder, "semicrf": SemiCRFDecoder}
 
 
 def load_tagger(checkpoint: Path):
-    """Rebuild a ``FrameTagger`` from a saved checkpoint (state_dict + head list).
+    """The trained ``FrameTagger`` a checkpoint holds.
 
-    ``in_channels`` is architecture, not a hyperparameter -- a mix-conditioned model
-    has a wider first conv -- so it comes from the checkpoint. Defaulted to 1 for
-    checkpoints written before the field existed, which were all single-channel.
-
-    The pitch branch is rebuilt from ``heads`` the same way, and ``load_state_dict``
-    runs strict: a checkpoint whose saved weights include a branch this rebuild left
-    out would otherwise load *silently*, and the model would go on producing onset and
-    voicing exactly as before while quietly having no pitch head at all. That is the
-    failure mode this repo keeps hitting -- a run that exits 0 having done less than it
-    reported -- so it is worth the explicitness here.
+    Kept as a name because eight callers across ``scripts/`` use it, but it no longer
+    rebuilds anything itself: it used to re-derive the architecture from ``heads`` and
+    ``in_channels``, which is a second implementation of what the training recipe
+    already knows. ``Checkpoint`` records the recipe instead, so the model comes back
+    the way it was built rather than the way a reader guessed.
     """
-    import torch
-
-    from stemify.models.heads import onset_head, pitch_head, voicing_head
-    from stemify.models.networks import TCN
-    from stemify.models.tagger import FrameTagger
-
-    ckpt = torch.load(checkpoint, map_location="cpu")
-    backbone = TCN(in_channels=ckpt.get("in_channels", 1))
-    saved = list(ckpt["heads"])
-    builders = {"onset": onset_head, "voicing": voicing_head}
-    heads = {h: builders[h](backbone.hidden) for h in saved if h in builders}
-    unknown = [h for h in saved if h not in builders and h != "pitch"]
-    if unknown:
-        raise ValueError(f"checkpoint names head(s) this cannot rebuild: {unknown}")
-    model = FrameTagger(
-        backbone, heads,
-        frequency_heads={"pitch": pitch_head()} if "pitch" in saved else None,
-    )
-    model.load_state_dict(ckpt["state_dict"])  # strict: shape and membership must match
-    return model
+    return Checkpoint.load(checkpoint).model()
 
 
 def build_encoder(args: argparse.Namespace) -> Encoder:
@@ -103,11 +81,32 @@ def build_decoder(args: argparse.Namespace):
     onset with a ~58 ms-late pitch transition, which is why it defaults off; see
     ``heuristic.PITCH_SPLIT_SEMITONES``.
 
-    Only the heuristic decoder has the setting, so the semicrf path is untouched.
+    The semicrf path does not have that setting, but it has a harder requirement: its
+    potentials *are* the model. A default-constructed ``SemiCRFDecoder`` has ``w_on=1``
+    and ``dur=zeros`` -- no duration preference at all, which is the mechanism the
+    objective exists to learn -- and it still emits notes, so scoring through one
+    produces plausible numbers for a model nobody trained. They are restored from the
+    checkpoint here, and their absence is an error rather than a silent default.
     """
-    if args.decoder == "heuristic" and args.encoder == "pyin":
-        return HeuristicDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
-    return DECODERS[args.decoder]()
+    if args.decoder == "heuristic":
+        if args.encoder == "pyin":
+            return HeuristicDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
+        return HeuristicDecoder()
+
+    if args.checkpoint is None:
+        raise ValueError(
+            "--decoder semicrf needs --checkpoint: its potentials are trained "
+            "parameters, and a decoder built without them is not a model that was fit."
+        )
+    checkpoint = Checkpoint.load(args.checkpoint)
+    if not checkpoint.objective_state:
+        raise ValueError(
+            f"{args.checkpoint} carries no objective parameters, so it was not trained "
+            "with a structured objective -- most likely --objective frame. Scoring it "
+            "through the semi-CRF would report an untrained CRF over its cues; use "
+            "--decoder heuristic, or a checkpoint from --objective semicrf."
+        )
+    return checkpoint.decoder()
 
 
 # Each entry is (default root, factory). Adding a dataset is one line here plus the
