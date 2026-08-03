@@ -36,6 +36,7 @@ from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
 from stemify.training.conditions import CONDITIONS
+from stemify.training.semicrf.tracks import track_inputs
 from stemify.training.semicrf.dataset import Chunk, ChunkDataset, collate
 from stemify.training.semicrf.loss import SemiCRFLoss
 
@@ -138,7 +139,8 @@ def _whole_track_nll(model, cache, items, feats) -> float:
 def _chunked_nll(model, cache, items, right: int) -> float:
     """The sum of per-chunk telescoping losses over the same track."""
     dataset = ChunkDataset(
-        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
+        track_inputs(items, CONDITIONS["clean"], cache),
+        chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=right,
     )
     loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -170,7 +172,8 @@ def test_a_second_epoch_gives_the_same_losses(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkDataset(
-        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
+        track_inputs(items, CONDITIONS["clean"], cache),
+        chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
     loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -191,7 +194,8 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
     items, cache, _ = track
     model = _Pointwise()
     dataset = ChunkDataset(
-        items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
+        track_inputs(items, CONDITIONS["clean"], cache),
+        chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
     loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
@@ -212,7 +216,8 @@ def test_epoch_batches_survives_a_streaming_loader(track):
     items, cache, _ = track
     streaming = DataLoader(
         ChunkDataset(
-            items, cache, CONDITIONS["clean"], chunk_frames=CHUNK, dmax=DMAX,
+            track_inputs(items, CONDITIONS["clean"], cache),
+            chunk_frames=CHUNK, dmax=DMAX,
             stride=STRIDE, batch_size=1,
         ),
         batch_size=None,

@@ -33,6 +33,7 @@ from stemify.training.frame.recipe import FrameRecipe
 from stemify.training.semicrf import dataset as chunked_ds
 from stemify.training.semicrf.dataset import ChunkBatch
 from stemify.training.semicrf.loss import SemiCRFLoss
+from stemify.training.semicrf.tracks import TrackInputs, track_inputs
 
 # Chunk length in DP frames. ~4.5 s at the decimated hop -- comfortably longer than
 # dmax (115 frames, 4 s), so most spans are scored entirely inside one chunk and only
@@ -212,22 +213,35 @@ class SemiCRFRecipe(Recipe):
         config: TrainConfig,
         limit: int | None,
     ) -> chunked_ds.ChunkDataset:
+        """One dataset over the union of ``conditions`` -- domain randomisation.
+
+        This used to build one ``ChunkDataset`` per condition and then refuse any set
+        but a singleton, on the grounds that "streams from different conditions would
+        interleave in a batch and share a carry keyspace". The keyspace collision was
+        real *for that shape*: each dataset numbered its streams from the same base, so
+        stream 0 of one condition and stream 0 of another indexed the same carry. It is
+        not a property of mixing conditions. One dataset over the concatenated items has
+        a single keyspace and no collision, and the interleaving it warned about is
+        precisely what domain randomisation is.
+
+        Nothing below ``track_inputs`` knows a track's condition -- a ``TrackInputs`` is
+        feature paths plus notes -- and ``resolve()`` has already rejected a mixed-width
+        set, so the windows stack identically. The frame path has always trained on the
+        union this way; the structured objective was the odd one out, which made any
+        comparison against a frame baseline vary two things at once.
+        """
         dmax, right = self._geometry
-        parts = [
-            chunked_ds.ChunkDataset(
-                c.dataset(root, split, limit), cache, c,
-                chunk_frames=CHUNK_FRAMES, dmax=dmax, stride=self.decoder.stride,
-                batch_size=config.batch_size, right_context=right,
-                heads=self.aux_heads,
+        items: list[TrackInputs] = []
+        for c in conditions:
+            items += track_inputs(
+                c.dataset(root, split, limit), c, cache, heads=self.aux_heads
             )
-            for c in conditions
-        ]
-        if len(parts) != 1:
-            raise ValueError(
-                "chunked training runs one condition at a time: streams from different "
-                "conditions would interleave in a batch and share a carry keyspace"
-            )
-        return parts[0]
+        return chunked_ds.ChunkDataset(
+            items,
+            chunk_frames=CHUNK_FRAMES, dmax=dmax, stride=self.decoder.stride,
+            batch_size=config.batch_size, right_context=right,
+            heads=self.aux_heads,
+        )
 
     def _loader(self, dataset: chunked_ds.ChunkDataset) -> DataLoader[ChunkBatch]:
         # batch_size=None: the dataset emits whole ChunkBatch objects, because chunks

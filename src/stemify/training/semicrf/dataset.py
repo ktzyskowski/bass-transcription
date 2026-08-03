@@ -20,6 +20,7 @@ row ``b`` of one batch is not the continuation of row ``b`` of the last. The tra
 keys its carries by ``stream``; see ``loss.py`` beside this.
 """
 
+import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
@@ -27,13 +28,9 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
-from stemify.cache import Cache
-from stemify.contour import Contour
-from stemify.data.base import Dataset as SlakhLikeDataset
 from stemify.decoders.semicrf.gold import gold_segments
-from stemify.training.conditions import Condition
 from stemify.training.semicrf.tracks import (
-    TrackInputs, channel_window, target_windows, track_inputs,
+    TrackInputs, channel_window, target_windows,
 )
 
 # Segmentation of one chunk in *window-local* DP indices: (label, start, end).
@@ -188,13 +185,20 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
 
     With ``num_workers > 1`` each worker owns a disjoint slice of the tracks and emits
     complete batches of its own; ``stream`` ids stay globally unique so the trainer's
-    carries never collide."""
+    carries never collide.
+
+    **Domain randomisation.** ``items`` may come from several input conditions at once,
+    and nothing below this line knows which condition a track came from -- a
+    ``TrackInputs`` is feature paths plus notes, and ``resolve()`` guarantees every
+    condition in a run has the same channel width, so the windows stack identically.
+    Building the item list is therefore the recipe's job, not this class's; it used to
+    take a ``(dataset, condition, cache)`` triple and resolve one condition itself,
+    which is what limited the structured objective to a single condition while the frame
+    path trained on the union."""
 
     def __init__(
         self,
-        dataset: SlakhLikeDataset,
-        cache: Cache,
-        condition: Condition,
+        items: Sequence[TrackInputs],
         *,
         chunk_frames: int,
         dmax: int,
@@ -202,13 +206,30 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         batch_size: int,
         right_context: int = 0,
         heads: Sequence[str] = (),
+        seed: int = 0,
     ) -> None:
-        """``heads`` are the per-frame targets to serve beside each chunk, for the
+        """``heads`` are the per-frame targets served beside each chunk, for the
         auxiliary losses stacked on the NLL. Empty by default: the structured
         objective reads notes, so a head appears here only once something scores it
-        per frame."""
+        per frame.
+
+        ``items`` are **shuffled once** here, and that shuffle is load-bearing rather
+        than cosmetic. Streams take ``items[b::batch_size]`` and advance in near
+        lockstep, so the incoming order decides what a batch contains:
+
+        - concatenated by condition (``[...clean..., ...separated...]``) every stream
+          sits in the clean block at the same time, so batches come out
+          condition-*homogeneous* -- and the TCN's BatchNorm then sees one condition's
+          statistics at a time, which is the thing domain randomisation exists to avoid;
+        - interleaved (``clean, separated, clean, ...``) stream ``b`` only ever draws
+          items of one parity, so each stream is permanently one condition.
+
+        Both train on the union and report the right ``--sources`` while never mixing
+        conditions in a batch. Seeded so a run is still reproducible.
+        """
         self.heads = list(heads)
-        self._items = track_inputs(dataset, condition, cache, heads=self.heads)
+        self._items = list(items)
+        random.Random(seed).shuffle(self._items)
         self.chunk_frames = chunk_frames
         self.dmax = dmax
         self.stride = stride

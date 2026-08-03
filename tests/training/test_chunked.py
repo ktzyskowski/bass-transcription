@@ -25,7 +25,7 @@ from stemify.notes import NoteEvent
 from stemify.serde import TrackExample
 from stemify.sources import Sources
 from stemify.training.semicrf.dataset import ChunkDataset, collate
-from stemify.training.semicrf.tracks import channel_window
+from stemify.training.semicrf.tracks import channel_window, track_inputs
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
@@ -91,7 +91,8 @@ def cache(tmp_path):
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
     ds = _FakeDataset(tmp_path, cache, lengths)
     return ChunkDataset(
-        ds, cache, CONDITIONS["clean"], chunk_frames=chunk, dmax=dmax, stride=STRIDE,
+        track_inputs(ds, CONDITIONS["clean"], cache),
+        chunk_frames=chunk, dmax=dmax, stride=STRIDE,
         batch_size=batch_size, right_context=right,
     )
 
