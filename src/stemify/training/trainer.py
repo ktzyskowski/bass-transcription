@@ -135,6 +135,28 @@ class Trainer(Generic[B]):
             f"{GRAD_NORM!r} metric for what the norm was doing before this step)."
         )
 
+    def _monitored(
+        self, val_losses: Mapping[str, float], scores: Mapping[str, float]
+    ) -> float:
+        """The one number early stopping and best-checkpoint selection compare.
+
+        Inline losses are namespaced ``loss/<head>/val`` so they cannot collide with a
+        harness metric, and so ``monitor`` reads the same way it does on an MLflow
+        chart. A missing key raises listing what *is* available, because the reachable
+        cause is a typo or a harness that was never wired up -- and defaulting to the
+        loss there would silently select on a different quantity than the run claims.
+        """
+        pool = {f"loss/{k}/val": v for k, v in val_losses.items()} | dict(scores)
+        try:
+            return pool[self.config.monitor]
+        except KeyError:
+            raise KeyError(
+                f"monitor {self.config.monitor!r} is not among this epoch's metrics. "
+                f"Available: {sorted(pool)}. A harness metric (note/*, cues/*) needs "
+                "the loop to be given a `score_fn`, since the async validator delivers "
+                "too late to choose a checkpoint with."
+            ) from None
+
     def _run_epoch(
         self,
         loader: DataLoader[B],
@@ -221,10 +243,29 @@ class Trainer(Generic[B]):
         train_loader: DataLoader[B],
         val_loader: DataLoader[B] | None = None,
         callbacks: Iterable[Callback] = (),
+        score_fn: Callable[[dict[str, dict[str, torch.Tensor]], int], Mapping[str, float]]
+        | None = None,
     ) -> History:
+        """``score_fn`` scores a checkpoint *synchronously*, once per epoch, and its
+        metrics join the pool ``config.monitor`` selects from.
+
+        Synchronous on purpose, and it is the only way to select on a harness metric.
+        The async validator delivers a score for epoch N partway through epoch N+1, by
+        which time the best-checkpoint decision for N has already been made -- so a
+        checkpoint can only be chosen on a number that exists when it is chosen. The
+        cost is one harness pass per epoch on the critical path; the alternative is
+        selecting on a proxy that has been caught disagreeing with the real metric by
+        half its own value.
+        """
         callbacks = list(callbacks)
         history = History()
-        best_val = float("inf")
+        if self.config.monitor_mode not in ("min", "max"):
+            raise ValueError(
+                f"monitor_mode must be 'min' or 'max', got "
+                f"{self.config.monitor_mode!r}"
+            )
+        maximise = self.config.monitor_mode == "max"
+        best_val = -float("inf") if maximise else float("inf")
         best_state = None
         stale = 0
 
@@ -239,11 +280,19 @@ class Trainer(Generic[B]):
                 if val_loader is not None
                 else train_losses
             )
-            train_loss, monitored = train_losses["total"], val_losses["total"]
+            train_loss = train_losses["total"]
+            # Scored before the selection, not after: the whole point is that the
+            # number deciding the checkpoint exists when the checkpoint is chosen.
+            scores = dict(score_fn(self.state_cpu(), epoch)) if score_fn else {}
+            monitored = self._monitored(val_losses, scores)
             history.train_loss.append(train_loss)
-            history.val_loss.append(monitored)
+            history.val_loss.append(val_losses["total"])
 
-            if monitored < best_val - 1e-5:
+            better = (
+                monitored > best_val + 1e-5 if maximise
+                else monitored < best_val - 1e-5
+            )
+            if better:
                 best_val, best_state, history.best_epoch, stale = (
                     monitored, self.state_cpu(), epoch, 0
                 )
@@ -251,9 +300,10 @@ class Trainer(Generic[B]):
                 stale += 1
 
             logs = EpochLogs(
-                epoch=epoch, train_loss=train_loss, val_loss=monitored,
+                epoch=epoch, train_loss=train_loss, val_loss=val_losses["total"],
                 train_losses=train_losses, val_losses=val_losses,
                 best_epoch=history.best_epoch, snapshot=self.state_cpu,
+                scores=scores, monitored=monitored, monitor=self.config.monitor,
             )
             for callback in callbacks:
                 callback.on_epoch_end(logs)

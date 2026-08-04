@@ -50,6 +50,7 @@ from stemify.models.cuenet import CueNet
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
+    BestCheckpointCallback,
     Callback,
     ConsoleCallback,
     MLflowCallback,
@@ -164,8 +165,24 @@ def train(
 
     trainer = Trainer(model, recipe.build_loss(), config)
 
-    callbacks: list[Callback] = [ConsoleCallback()]
+    # A harness metric (note/*, cues/*) can only drive selection if it is scored on the
+    # critical path: the async validator delivers epoch N's score partway through epoch
+    # N+1, by which time N's checkpoint decision is made. So the monitor key decides
+    # which way the harness runs, rather than being a second flag that can disagree
+    # with it.
+    sync_scoring = not config.monitor.startswith("loss/")
+    if sync_scoring and val_every != 1:
+        raise ValueError(
+            f"--monitor {config.monitor!r} is scored by the harness, so it must run "
+            f"every epoch, but --val-every is {val_every}. On a skipped epoch the "
+            "monitored metric would not exist and the run would die mid-training."
+        )
+
+    # Written on every improvement, not once at the end: `fit` restores the best
+    # weights when it *returns*, so a Ctrl-C, a SIGKILL or an OOM loses the whole run.
+    callbacks: list[Callback] = [ConsoleCallback(), BestCheckpointCallback(out, recipe)]
     mlflow = None
+    eval_fn = None
     if tracking_uri:
         # Run names are labels, not keys -- MLflow mints a fresh run_id per launch,
         # so two runs can share a name. Suffix a UTC timestamp so relaunching with
@@ -223,12 +240,32 @@ def train(
             build_decoder=recipe.decoder_from,
             build_model=recipe.build_model,
         )
-        callbacks += [
-            mlflow,
-            AsyncValidationCallback(eval_fn, mlflow.sink, every=val_every),
-        ]
+        callbacks.append(mlflow)
+        if not sync_scoring:
+            # Off the critical path, delivering to its own sink. Only sound when the
+            # score is not what picks the checkpoint.
+            callbacks.append(
+                AsyncValidationCallback(eval_fn, mlflow.sink, every=val_every)
+            )
 
-    trainer.fit(train_loader, val_loader, callbacks=callbacks)
+    if sync_scoring and eval_fn is None:
+        # Reachable: --monitor names a harness metric on a run with no tracking URI, so
+        # nothing built the validators. Failing here beats failing at the first epoch
+        # boundary an hour in.
+        logger.info(
+            "caching val contours for %d tracks x conditions %s (for --monitor %s)...",
+            val_limit, val_conditions, config.monitor,
+        )
+        eval_fn = _eval_fn(
+            build_validators(root, val_limit, val_conditions, cache=cache),
+            build_decoder=recipe.decoder_from,
+            build_model=recipe.build_model,
+        )
+
+    trainer.fit(
+        train_loader, val_loader, callbacks=callbacks,
+        score_fn=eval_fn if sync_scoring else None,
+    )
 
     # fit() restores the best-val checkpoint into trainer.model; persist it so the
     # trained heads survive the process (a LearnedEncoder loads them) rather than

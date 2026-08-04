@@ -93,6 +93,17 @@ def main() -> None:
                          "Onsets are ~7%% of frames after +-1 widening, so >1 trades "
                          "precision for recall -- the candidate-generator setting for a "
                          "two-stage decoder. Unset (the default) is plain unweighted BCE")
+    ap.add_argument("--monitor", default=TrainConfig.monitor,
+                    help="which metric picks the best checkpoint and drives early "
+                         "stopping. 'loss/<head>/val' is an inline validation loss; "
+                         "anything else (note/separated/f1, cues/clean/onset_ap, ...) "
+                         "is scored by the harness, which then runs *synchronously* "
+                         "because a checkpoint cannot be chosen on a number that does "
+                         "not exist yet. The default is the cheap proxy and has been "
+                         "caught disagreeing with note F1 by half its value")
+    ap.add_argument("--monitor-mode", default=None, choices=["min", "max"],
+                    help="whether lower or higher is better. Inferred from --monitor "
+                         "when unset: losses minimise, f1/ap/auroc maximise")
     ap.add_argument("--patience", type=int, default=8,
                     help="early-stop after this many epochs with no val gain. Worth "
                          "raising for a structured objective, whose val curve is "
@@ -203,6 +214,13 @@ def main() -> None:
         max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
         learning_rate=args.learning_rate,
+        monitor=args.monitor,
+        # Inferred rather than required: every metric we log is either a loss (lower
+        # is better) or a score in [0,1] (higher is). Making it explicit-or-nothing
+        # would mean a run that silently early-stops backwards on a typo'd mode.
+        monitor_mode=args.monitor_mode or (
+            "min" if args.monitor.startswith("loss/") else "max"
+        ),
         accumulate_steps=args.accumulate_steps,
         # 0 rather than a bare --no-clip flag: the value and its off switch stay one
         # thing, so the run's params record "clipping was off" as a value rather than

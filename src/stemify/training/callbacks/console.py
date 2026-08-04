@@ -18,9 +18,16 @@ class ConsoleCallback(Callback):
         heads = " ".join(
             f"{h} {v:.4f}" for h, v in logs.train_losses.items() if h != "total"
         )
+        # The monitored value is printed beside the losses because it is no longer
+        # necessarily one of them: a run selecting on note/separated/f1 would otherwise
+        # show a val loss that had nothing to do with which epoch it kept.
+        monitor = (
+            f"  {logs.monitor} {logs.monitored:.4f}"
+            if logs.monitor and logs.monitor != "loss/total/val" else ""
+        )
         logger.info(
-            "epoch %3d  train %.4f  val %.4f  [%s]  (best %d)",
-            logs.epoch, logs.train_loss, logs.val_loss, heads, logs.best_epoch,
+            "epoch %3d  train %.4f  val %.4f  [%s]%s  (best %d)",
+            logs.epoch, logs.train_loss, logs.val_loss, heads, monitor, logs.best_epoch,
         )
 
     def on_train_end(self, best_epoch: int) -> None:

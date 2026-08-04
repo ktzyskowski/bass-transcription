@@ -103,6 +103,11 @@ class MLflowCallback(Callback):
         # "loss" section, one chart per head (total, onset, voicing) x phase.
         metrics = {_metric_key(h, "train"): v for h, v in logs.train_losses.items()}
         metrics.update({_metric_key(h, "val"): v for h, v in logs.val_losses.items()})
+        # Harness scores when the loop ran them inline. Already namespaced
+        # (note/<cond>/f1, cues/<cond>/onset_ap) so they pass through untouched -- the
+        # async path sends the identical keys straight to `sink`, so a run reads the
+        # same whichever way it was scored.
+        metrics.update(logs.scores)
         self.sink(metrics, logs.epoch)
 
     def on_train_end(self, best_epoch: int) -> None:

@@ -26,6 +26,22 @@ class TrainConfig:
     max_epochs: int = 50
     patience: int = 8  # early-stop after this many epochs without val gain
 
+    # Which number picks the best checkpoint and drives early stopping.
+    #
+    # ``loss/<head>/val`` names an inline validation loss; anything else names a metric
+    # from the note-level harness (``note/separated/f1``, ``cues/clean/onset_ap``, ...),
+    # which the loop then has to score *synchronously*, because a checkpoint cannot be
+    # chosen on a number that does not exist yet.
+    #
+    # The default is not the right choice, only the cheap one, and it has been caught
+    # being wrong: a semi-CRF run scored `note/clean/f1` 0.8175 at epoch 0 and 0.4086 at
+    # epoch 1, while `loss/total/val` went 20.04 -> 16.25 and called epoch 1 *better*.
+    # A finished run would have restored the worse model and reported success. The
+    # deployment number is `note/separated/f1`; monitoring it costs one harness pass per
+    # epoch and removes that whole failure mode.
+    monitor: str = "loss/total/val"
+    monitor_mode: str = "min"  # "min" for losses, "max" for F1/AP/AUROC
+
     # Gradient-norm clip applied over the model *and* the objective's parameters,
     # i.e. everything the one optimiser moves. A safety net rather than a tuned
     # regulariser: a single unclipped outlier step sends the weights to inf
