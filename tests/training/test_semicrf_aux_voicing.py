@@ -91,13 +91,24 @@ def test_each_head_carries_its_own_weight(batch):
     assert m["total"] == pytest.approx(b["total"] + 2.0 * b["voicing"], rel=1e-5)
 
 
-def test_a_zero_weight_still_declares_nothing(batch):
-    """`voicing_weight=0` must remove the head from `aux_heads` entirely, not multiply
-    its term by zero -- otherwise the dataset still caches and serves a target for a
-    term that contributes nothing."""
-    assert "voicing" not in RECIPES["semicrf"](["clean"], pitch=True,
-                                               voicing_weight=0.0).aux_heads
-    assert "voicing" in RECIPES["semicrf"](["clean"], pitch=True).aux_heads
+@pytest.mark.parametrize("head", ["voicing", "onset"])
+def test_a_zero_weight_drops_the_head_rather_than_scaling_it(head):
+    """Weight 0 must remove the head from `aux_heads` entirely, not multiply its term
+    by zero -- otherwise the dataset still caches and serves a target for a term that
+    contributes nothing, and the run pays for a label it never reads."""
+    off = RECIPES["semicrf"](["clean"], pitch=True, **{f"{head}_weight": 0.0})
+    assert head not in off.aux_heads
+    off.build_loss()          # the weights dict must not name it either
+    assert head in RECIPES["semicrf"](["clean"], pitch=True).aux_heads
+
+
+def test_both_binary_heads_are_supervised_by_default():
+    """Measured: the structured NLL leaves onset AP at 0.20-0.53 and voicing AUROC at
+    ~0.51, where frame BCE reaches 0.994 and 0.995 for the same heads through the same
+    validator. Neither is adequately supervised by the segmentation alone."""
+    assert RECIPES["semicrf"](["clean"], pitch=True).aux_heads == [
+        "pitch", "onset", "voicing"
+    ]
 
 
 def test_a_weight_for_an_undeclared_head_is_refused():

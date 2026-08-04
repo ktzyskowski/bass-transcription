@@ -48,9 +48,20 @@ CHUNK_FRAMES = 128
 # 0.69 -- and both are recorded in `config` so a checkpoint says what produced it.
 PITCH_WEIGHT = 1.0
 
-# 0 disables the voicing term, reproducing the structured-only objective that measured
-# voicing AUROC 0.516 (chance) against frame BCE's 0.984 for the same head.
+# 0 disables the corresponding term, reproducing the structured-only objective. Both
+# binary heads need one, and the measurement is unambiguous -- the same validator over
+# the same targets, frame BCE against semi-CRF:
+#
+#     onset AP        frame 0.994-0.996   semi-CRF 0.20-0.53
+#     voicing AUROC   frame 0.995-0.996   semi-CRF 0.510-0.522
+#
+# across five frame runs and three semi-CRF runs, so it is structural rather than an
+# early-epoch artefact. The NLL is discriminative over segmentations: a feature earns
+# gradient only in proportion to how much it helps rank gold above the alternatives,
+# and every feature carries a learned scalar that can shrink toward zero. Nothing in
+# the objective asks a head to be *calibrated*, only to be useful for ranking.
 VOICING_WEIGHT = 1.0
+ONSET_WEIGHT = 1.0
 
 
 class SemiCRFRecipe(Recipe):
@@ -69,6 +80,7 @@ class SemiCRFRecipe(Recipe):
         pitch: bool = False,
         pitch_weight: float = PITCH_WEIGHT,
         voicing_weight: float = VOICING_WEIGHT,
+        onset_weight: float = ONSET_WEIGHT,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -81,6 +93,7 @@ class SemiCRFRecipe(Recipe):
         self.pitch = pitch
         self.pitch_weight = pitch_weight
         self.voicing_weight = voicing_weight
+        self.onset_weight = onset_weight
 
     @property
     def heads(self) -> list[str]:
@@ -124,6 +137,7 @@ class SemiCRFRecipe(Recipe):
             "pitch": self.pitch,
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
+            "onset_weight": self.onset_weight,
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
@@ -164,30 +178,35 @@ class SemiCRFRecipe(Recipe):
             # before this existed was trained *without* the term, and rebuilding it with
             # one would misreport how it was trained.
             voicing_weight=config_field(config, "voicing_weight", float, 0.0),
+            onset_weight=config_field(config, "onset_weight", float, 0.0),
         )
 
     @property
     def aux_heads(self) -> list[str]:
         """Heads needing a *per-frame* target, so the dataset caches and serves one.
 
-        Still deliberately not ``self.heads`` -- onset is left out, because ``w_on``
-        reads the boundary signal and boundaries *are* the objective, so that head gets
-        strong gradient from the NLL alone (its AP sits in the same range as the
-        whole-track POC's).
+        This used to exclude both binary heads, on the reasoning that the structured
+        NLL supervises them through the segmentation itself. **That was wrong for both,
+        and measurably so** -- see the weight constants for the numbers. Onset was the
+        worse of the two despite the intuition that ``w_on`` reads the boundary signal
+        and boundaries *are* the objective: AP 0.20-0.53 against frame BCE's 0.994.
 
-        This used to say voicing was redundant here for the same reason. **That was
-        wrong, and measurably so:** voicing AUROC came back at 0.516 -- chance --
-        against 0.984 for the same head under frame BCE. The NLL is discriminative over
-        segmentations, so a feature earns gradient only in proportion to how much it
-        helps rank gold above the alternatives, and ``LinearSpanScorer`` gives every
-        feature a learned scalar. Voicing's unique contribution is spotting rests, which
-        are rare, so ``w_v``/``w_u`` can shrink toward zero and leave the head with no
-        signal at all. Set ``voicing_weight=0`` to reproduce the old behaviour.
+        The mechanism is that the NLL is discriminative over *segmentations*, so a
+        feature earns gradient only in proportion to how much it helps rank gold above
+        the alternatives, and ``LinearSpanScorer`` gives every one a learned scalar that
+        can shrink toward zero. Nothing asks a head to be *calibrated*, only to be
+        useful for ranking -- and a head can be a useful feature channel while being a
+        poor detector of the thing it is named for.
 
-        Pitch remains the stronger case: the span features are invariant to which pitch
-        is named, so the NLL *cannot* supervise its values however large the weight.
+        Pitch is the strongest case of all: the span features are invariant to which
+        pitch is named, so the NLL *cannot* supervise its values however large the
+        weight.
+
+        Set the corresponding weight to 0 to drop a head from this list.
         """
         heads = ["pitch"] if self.pitch else []
+        if self.onset_weight:
+            heads.append("onset")
         if self.voicing_weight:
             heads.append("voicing")
         return heads
@@ -199,6 +218,7 @@ class SemiCRFRecipe(Recipe):
             "chunk_frames": CHUNK_FRAMES,
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
+            "onset_weight": self.onset_weight,
         }
 
     def build_model(self) -> CueNet:
@@ -211,7 +231,16 @@ class SemiCRFRecipe(Recipe):
         return SemiCRFLoss(
             self.decoder,
             aux_heads=self.aux_heads,
-            aux_weights={"pitch": self.pitch_weight, "voicing": self.voicing_weight},
+            # Filtered to the declared heads: a zero weight drops the head from
+            # `aux_heads` entirely, and naming a weight for an undeclared head is
+            # refused by the loss (a setting that silently does nothing).
+            aux_weights={
+                h: w for h, w in (
+                    ("pitch", self.pitch_weight),
+                    ("voicing", self.voicing_weight),
+                    ("onset", self.onset_weight),
+                ) if h in self.aux_heads
+            },
         )
 
     @property

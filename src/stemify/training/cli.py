@@ -19,7 +19,11 @@ from typing import Any
 from stemify.training.conditions import CONDITIONS
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES
-from stemify.training.semicrf.recipe import PITCH_WEIGHT, VOICING_WEIGHT
+from stemify.training.semicrf.recipe import (
+    ONSET_WEIGHT,
+    PITCH_WEIGHT,
+    VOICING_WEIGHT,
+)
 from stemify.training.train import train
 
 
@@ -132,6 +136,12 @@ def main() -> None:
                          "scorer can shrink its weight to zero and orphan the head "
                          f"(measured AUROC 0.516 vs frame BCE's 0.984). Default "
                          f"{VOICING_WEIGHT}; 0 restores the structured-only objective.")
+    ap.add_argument("--onset-weight", type=float, default=None,
+                    help="semicrf only: weight on the auxiliary onset BCE. Measured, "
+                         "the structured NLL leaves onset AP at 0.20-0.53 where frame "
+                         "BCE reaches 0.994 for the same head -- the larger of the two "
+                         f"binary gaps. Default {ONSET_WEIGHT}; 0 restores the "
+                         "structured-only objective for this head.")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
     args = ap.parse_args()
@@ -154,7 +164,8 @@ def main() -> None:
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
         for flag, value in (("--pitch-weight", args.pitch_weight),
-                            ("--voicing-weight", args.voicing_weight)):
+                            ("--voicing-weight", args.voicing_weight),
+                            ("--onset-weight", args.onset_weight)):
             if value is not None:
                 raise SystemExit(
                     f"{flag} applies to --objective semicrf, not 'frame'. The frame "
@@ -176,6 +187,8 @@ def main() -> None:
             strategy_kwargs["pitch_weight"] = args.pitch_weight
         if args.voicing_weight is not None:
             strategy_kwargs["voicing_weight"] = args.voicing_weight
+        if args.onset_weight is not None:
+            strategy_kwargs["onset_weight"] = args.onset_weight
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,
