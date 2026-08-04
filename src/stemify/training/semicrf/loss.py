@@ -161,8 +161,23 @@ class SemiCRFLoss(Loss[ChunkBatch]):
             cues_list, batch.golds, carry, batch.context, batch.right
         )
         # The telescoping term. Mean over rows so the loss is per-track rather than
-        # per-batch, and the learning rate carries over from the frame path.
-        nll = ((A - prev_A) - gold).mean()
+        # per-batch, then divided by the frames it scored so it is a *rate*.
+        #
+        # The division is what makes this composable. `log Z - score(gold)` is the
+        # surprisal of one structured object -- a whole chunk's segmentation -- while
+        # every per-frame head reports a mean. Adding a total to an average is
+        # dimensionally incoherent, and no choice of weight repairs it: the weight just
+        # absorbs the frame count, which is why the measured gradient ratio into the
+        # shared trunk was ~1200:1 and the pitch term contributed under 0.1% of it.
+        # Per scored feature frame, both sides are nats about the same 11.6 ms of
+        # audio, so a weight is a ratio of information rates and `1.0` is a claim
+        # someone can argue with.
+        #
+        # Feature frames rather than DP frames on purpose: the heads emit on the
+        # feature grid, so normalising the NLL to the DP grid would leave a factor of
+        # `stride` hidden inside every head weight.
+        scored = self.scored_frames(batch, batch.features.shape[-1])
+        nll = ((A - prev_A) - gold).mean() / scored
 
         # Detaching here is the truncation itself: it severs chunk k+1's gradient from
         # chunk k's encoder activations, which is what bounds memory to one chunk.
@@ -214,8 +229,28 @@ class SemiCRFLoss(Loss[ChunkBatch]):
                 f"target (has {sorted(batch.y)}). `SemiCRFRecipe.aux_heads` drives both "
                 "what the dataset caches and what this scores; they have drifted."
             )
-        stride = self.decoder.stride
-        lo = batch.context * stride
-        hi = pitch.shape[1] - batch.right * stride
+        lo, hi = self.scored_slice(batch, pitch.shape[1])
         return pitch_ce(pitch[:, lo:hi], batch.y[head][:, lo:hi].to(device))
+
+    def scored_slice(self, batch: ChunkBatch, frames: int) -> tuple[int, int]:
+        """The feature-frame half-open range the NLL actually scores.
+
+        One place, because every auxiliary term must use *this* range and nothing else.
+        A term that averaged over the whole window would divide by a different frame
+        count than the NLL does, so the shared "nats per frame" unit -- the only thing
+        that makes the head weights interpretable -- would silently stop holding
+        between the terms. It would also supervise the margins twice per epoch, since
+        one chunk's context is the previous chunk's scored region.
+
+        ``stride`` converts the DP grid (where ``context``/``right`` are counted) to
+        the feature grid the heads emit on.
+        """
+        stride = self.decoder.stride
+        return batch.context * stride, frames - batch.right * stride
+
+    def scored_frames(self, batch: ChunkBatch, frames: int) -> int:
+        """How many feature frames ``scored_slice`` covers -- the denominator that puts
+        the structured NLL on the same per-frame footing as the per-frame heads."""
+        lo, hi = self.scored_slice(batch, frames)
+        return max(hi - lo, 1)
 

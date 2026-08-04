@@ -129,11 +129,12 @@ def _whole_track_nll(model, cache, items, feats) -> float:
         reset=True,
     )
     loss = SemiCRFLoss(decoder)
+    batch = collate([chunk], context=0, right=0)
     with torch.no_grad():
-        _, metrics = loss.compute(
-            model, collate([chunk], context=0, right=0), torch.device("cpu")
-        )
-    return metrics["total"]
+        _, metrics = loss.compute(model, batch, torch.device("cpu"))
+    # Multiplied back out of nats-per-frame into the structured NLL, which is the
+    # quantity the telescoping identity is about.
+    return metrics["total"] * loss.scored_frames(batch, batch.features.shape[-1])
 
 
 def _chunked_nll(model, cache, items, right: int) -> float:
@@ -144,12 +145,14 @@ def _chunked_nll(model, cache, items, right: int) -> float:
         stride=STRIDE, batch_size=1, right_context=right,
     )
     loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
-    total = 0.0
+    total, divisors = 0.0, []
     with torch.no_grad():
         for batch in dataset:
             _, metrics = loss.compute(model, batch, torch.device("cpu"))
-            total += metrics["total"]
-    return total
+            scored = loss.scored_frames(batch, batch.features.shape[-1])
+            divisors.append(scored)
+            total += metrics["total"] * scored      # back out of the per-frame rate
+    return total, divisors
 
 
 @pytest.mark.parametrize("right", [0, 4])
@@ -157,10 +160,19 @@ def test_chunk_losses_sum_to_the_whole_track_nll(track, right):
     items, cache, feats = track
     model = _Pointwise()
     whole = _whole_track_nll(model, cache, items, feats)
-    chunked = _chunked_nll(model, cache, items, right)
+    chunked, divisors = _chunked_nll(model, cache, items, right)
     assert chunked == pytest.approx(whole, abs=1e-2), (
         f"chunked {chunked} != whole-track {whole}; the telescoping loss is not the "
         "objective it claims to be"
+    )
+    # The per-frame normalisation is only a *uniform* rescale of that objective while
+    # every chunk scores the same number of frames. If chunks ever differ -- a padded
+    # tail, a per-track right margin -- dividing each by its own count silently
+    # reweights the track by where its chunk boundaries happened to fall, which is a
+    # data-dependent reweighting rather than a change of units.
+    assert len(set(divisors)) == 1, (
+        f"chunks scored differing frame counts {sorted(set(divisors))}; per-chunk "
+        "normalisation is no longer a uniform rescale of the whole-track NLL"
     )
 
 
