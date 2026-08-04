@@ -173,11 +173,20 @@ def main() -> None:
                     "balance an auxiliary term against."
                 )
     else:
+        # This used to refuse --pos-weight outright, on the then-true grounds that a
+        # structured NLL takes no class weights. It does now: the auxiliary onset and
+        # voicing terms are the *same* BCE the frame path runs, so the same imbalance
+        # applies and the same knob corrects it.
         if args.pos_weight:
-            raise SystemExit(
-                "--pos-weight applies to --objective frame, not "
-                f"{args.objective!r}: a structured NLL takes no class weights."
-            )
+            weights = _parse_pos_weight(args.pos_weight)
+            binary = [h for h in weights if h != "pitch"]
+            if len(binary) != len(weights):
+                raise SystemExit(
+                    "--pos-weight is a *binary* class weight; 'pitch' is a categorical "
+                    "cross-entropy over CQT bins and has no positive class. Use "
+                    "--pitch-weight to scale that term."
+                )
+            strategy_kwargs["pos_weight"] = weights
         if args.pitch_weight is not None:
             if not args.pitch:
                 raise SystemExit(

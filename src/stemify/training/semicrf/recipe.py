@@ -64,6 +64,30 @@ VOICING_WEIGHT = 1.0
 ONSET_WEIGHT = 1.0
 
 
+def _config_weights(config: Mapping[str, object], key: str) -> dict[str, float]:
+    """A ``{head: float}`` field off a checkpoint's config, checked.
+
+    Its own helper rather than ``config_field(..., dict, {})`` for the reason
+    ``config_str_list`` exists: ``isinstance(x, dict)`` says nothing about what is
+    *in* it, and this arrives as plain data off disk written by an older version.
+    """
+    value = config.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"recipe config field {key!r} should be a mapping of head to weight, got "
+            f"{type(value).__name__}"
+        )
+    bad = [k for k, v in value.items() if not isinstance(k, str)
+           or isinstance(v, bool) or not isinstance(v, (int, float))]
+    if bad:
+        raise ValueError(
+            f"recipe config field {key!r} has non-(str, number) entries: {bad!r}"
+        )
+    return {str(k): float(v) for k, v in value.items()}
+
+
 class SemiCRFRecipe(Recipe):
     """The structured NLL: encoder and segmental decoder, trained jointly.
 
@@ -81,6 +105,7 @@ class SemiCRFRecipe(Recipe):
         pitch_weight: float = PITCH_WEIGHT,
         voicing_weight: float = VOICING_WEIGHT,
         onset_weight: float = ONSET_WEIGHT,
+        pos_weight: Mapping[str, float] | None = None,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -94,6 +119,7 @@ class SemiCRFRecipe(Recipe):
         self.pitch_weight = pitch_weight
         self.voicing_weight = voicing_weight
         self.onset_weight = onset_weight
+        self.pos_weight = dict(pos_weight or {})
 
     @property
     def heads(self) -> list[str]:
@@ -138,6 +164,7 @@ class SemiCRFRecipe(Recipe):
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
             "onset_weight": self.onset_weight,
+            "pos_weight": self.pos_weight,
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
@@ -179,6 +206,7 @@ class SemiCRFRecipe(Recipe):
             # one would misreport how it was trained.
             voicing_weight=config_field(config, "voicing_weight", float, 0.0),
             onset_weight=config_field(config, "onset_weight", float, 0.0),
+            pos_weight=_config_weights(config, "pos_weight"),
         )
 
     @property
@@ -241,6 +269,7 @@ class SemiCRFRecipe(Recipe):
                     ("onset", self.onset_weight),
                 ) if h in self.aux_heads
             },
+            pos_weight=self.pos_weight,
         )
 
     @property

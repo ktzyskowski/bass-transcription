@@ -55,6 +55,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         detach_carry: bool = True,
         aux_heads: Sequence[str] = (),
         aux_weights: Mapping[str, float] | None = None,
+        pos_weight: Mapping[str, float] | None = None,
     ) -> None:
         """``detach_carry=False`` stops truncating: the alpha window is passed to the
         next chunk with its graph intact, which reproduces whole-track backprop and
@@ -81,6 +82,12 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         head under frame BCE. Nothing here forces voicing to *be* voicing; the
         auxiliary term does.
 
+        ``pos_weight`` is the binary terms' class weight, exactly as on the frame path:
+        an auxiliary onset BCE is the *same term* there and here, so the imbalance it
+        corrects (onsets are ~7% of frames after +-1 widening) is the same imbalance.
+        This objective refused the flag outright until the binary terms existed, on the
+        true-at-the-time grounds that a structured NLL takes no class weights.
+
         ``aux_weights`` is per head because the terms are not interchangeable: pitch is
         a categorical CE over 216 bins scored on voiced frames, the binary heads are
         BCE over every frame. One shared coefficient would mean whichever head was
@@ -94,6 +101,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         self.decoder = decoder
         self.detach_carry = detach_carry
         self.aux_heads = tuple(aux_heads)
+        self.pos_weight = dict(pos_weight or {})
         weights = dict(aux_weights or {})
         self.aux_weights = {h: float(weights.get(h, 1.0)) for h in self.aux_heads}
         unsupported = [h for h in self.aux_heads if h not in AUX_TERMS]
@@ -268,7 +276,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         target = batch.y[head][:, lo:hi].to(device)
         if AUX_TERMS[head] == "categorical":
             return pitch_ce(logits[:, lo:hi], target)
-        return frame_bce(logits[:, lo:hi], target)
+        return frame_bce(logits[:, lo:hi], target, self.pos_weight.get(head))
 
     def scored_slice(self, batch: ChunkBatch, frames: int) -> tuple[int, int]:
         """The feature-frame half-open range the NLL actually scores.
