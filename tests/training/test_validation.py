@@ -144,3 +144,43 @@ def test_score_cues_no_voicing_channel_for_onset_only_model():
     names = {r.name for r in score_cues_examples(_encode(_FakeOnsetModel([0])), [ex])}
     assert "voicing_auroc" not in names  # no voicing head -> channel dropped
     assert "onset_pr" in names
+
+
+# --------------------------------------------------------------------------- #
+# The report has to say which pitch source produced its numbers                #
+# --------------------------------------------------------------------------- #
+def _cuenet(pitch: bool):
+    """Built through the recipe, not by hand: the pitch head is a *frequency* head
+    living in its own collection (it taps the front-end before the temporal stack, so
+    the frequency axis still exists), and hand-assembly gets that wrong silently --
+    the encoder then reports "pyin" for a model that has a head."""
+    from stemify.training.recipes import RECIPES
+
+    return RECIPES["frame"](["clean"], pitch=pitch).build_model()
+
+
+def test_the_encoder_reports_which_pitch_source_it_used():
+    assert LearnedEncoder(_cuenet(pitch=True), device="cpu").pitch_source == "learned"
+    assert LearnedEncoder(_cuenet(pitch=False), device="cpu").pitch_source == "pyin"
+    # ...and asking for pyin explicitly overrides a head that exists.
+    forced = LearnedEncoder(_cuenet(pitch=True), device="cpu", use_pyin=True)
+    assert forced.pitch_source == "pyin"
+
+
+def test_the_validation_report_records_the_pitch_source(tmp_path):
+    """A learned-pitch report and a pyin report are otherwise identical in shape, for
+    a choice worth ~5 F1. Unrecorded, a saved artifact cannot say which made it."""
+    import json
+
+    from stemify.training.validation import _eval_fn
+
+    def report_for(pitch: bool) -> dict:
+        out = tmp_path / ("learned" if pitch else "pyin")
+        model = _cuenet(pitch)
+        fn = _eval_fn({}, report_dir=out, log_artifact=lambda p, e: None,
+                      build_model=lambda: _cuenet(pitch))
+        fn({"model": model.state_dict(), "loss": {}}, 0)
+        return json.loads((out / "validation_epoch000.json").read_text())
+
+    assert report_for(True)["pitch_source"] == "learned"
+    assert report_for(False)["pitch_source"] == "pyin"

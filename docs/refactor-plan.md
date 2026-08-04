@@ -239,3 +239,71 @@ Two findings there correct things believed elsewhere in the repo's history: the
 segmental DP is **launch-bound, not CPU-bound** (an earlier sweep stopped one notch below
 the CPU/CUDA crossover), and **`gold_score` — not the DP — is the largest single cost**
 at 7-70x the graphed DP step, because it loops in Python over gold segments.
+
+---
+
+## Encoder owns its own cues — the `encode_features` inversion (opened 2026-08-04)
+
+**The defect.** `encoders/base.py` states the rule plainly: the encoder *produces* the
+pitch contour rather than receiving it, "never in as a parameter", with pyin memoisation
+"behind the encoder, not in its signature". `LearnedEncoder.encode_features(contour,
+features)` breaks both halves of that sentence, and `encode()` is implemented in terms
+of it — so the contract-compliant method wraps the contract-violating one.
+
+**Why it is not cosmetic.**
+
+1. `encode_features` is **not on the `Encoder` ABC** — `ClassicalEncoder` has only
+   `encode`. The validator calls `encode_features`, so its `SegmentFn`/`EncodeFn` types
+   hard-code the leaked signature and **the in-training validator cannot score a
+   `ClassicalEncoder` at all.** The DSP-floor-vs-learned comparison that `base.py`
+   advertises as "a change of one composed object" is unreachable from validation, so
+   the floor cannot be tracked as a live baseline during a run.
+2. **Dead work.** With a pitch head, `encode_features` *discards* the contour it is
+   handed (`if pitch_logits is not None and not self.use_pyin: contour = ...`). The
+   validator computes pyin for 40 tracks x 3 conditions on every cold cache, then
+   throws it away. Warm cache makes it ~seconds; a fresh box or a new val set pays in
+   full, on the critical path before training starts.
+3. The comment at `validation.py:48` claims the shape keeps the validator
+   "model-agnostic". True of the *model*; it is welded to `LearnedEncoder`'s signature.
+
+**The shape.**
+
+- `LearnedEncoder(model, device, cache=None)`; `encode(sources) -> Cues` memoises the
+  CQT and computes pyin **only when it has no pitch head**. `Cache` is already
+  content-addressed on the resolved audio path, which is exactly the memoisation
+  `base.py` describes.
+- validator holds `Sources`, calls `encode`; `SegmentFn` becomes
+  `Callable[[Sources], list[NoteEvent]]`, `EncodeFn` `Callable[[Sources], Cues]`.
+- `encode_features` goes private or disappears. ~10 test call sites move.
+
+**Explicitly not the fix:** making `Cues.contour` optional. It was made required
+deliberately in the mypy pass because no encoder can produce cues without a pitch
+source, and that reasoning still holds — every `encode` yields one, from a head or from
+pyin. Only the *justification* written in `cues.py` is stale (it cites
+`encode_features` taking a required `Contour`, a method `ClassicalEncoder` lacks).
+
+**Sequencing.** Not mid-run: it changes scoring semantics, which would make
+epoch-to-epoch F1 non-comparable *within* a run. Do it once the accumulation run has
+reported.
+
+### Smaller items found alongside
+
+- **`--num-workers` is silently ignored by the semi-CRF loader.** `_loader` hardcodes
+  `num_workers=0` (legitimately — chunks must arrive in per-stream order), but the flag
+  is still accepted and does nothing, while the comment above it describes workers
+  owning disjoint slices. Same family as `--pos-weight` being accepted and ignored:
+  either wire it or refuse it.
+- **`pitch_source` was computed and never read.** ✅ DONE — now in the per-epoch
+  validation report and as an MLflow param. It decides ~5 F1 and the two reports were
+  otherwise identical in shape.
+- **Per-frame NLL normalisation / the loss is dimensionally malformed.** `NLL + w *
+  pitch_ce` adds a per-chunk *total* to a per-frame *mean*; measured gradient ratio into
+  the shared trunk is ~1200:1 at init, so the pitch term contributes ~0.08%. Two
+  principled repairs converge: divide the NLL by scanned frames (rate form), or make
+  `pitch_ce` a sum (joint-likelihood form, where `w = 1` is forced rather than chosen).
+- **`path` is blind to pitch *distance*.** `1 - Bhattacharyya` is ~1 for a semitone step
+  and for an octave leap alike, so the CRF cannot use interval structure. A cumsum of
+  frame-to-frame |Δ expected bin| is additive, O(1) per span, and adds "how far did
+  pitch move" to the existing "did it move". Considered and **rejected**: folding pitch
+  into the CRF label/likelihood — a joint likelihood allocates capacity by entropy and
+  216 pitch bins would swamp the segmentation, inverting the current imbalance.

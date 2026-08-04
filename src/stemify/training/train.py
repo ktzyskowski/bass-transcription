@@ -179,7 +179,12 @@ def train(
             batch_log_every=batch_log_every,
             # Loop-level settings here; strategy knobs come from ``recipe.params``,
             # which is the only thing that knows which of them this run even has.
+            # ``pitch_source`` mirrors what the validator records per epoch, hoisted to
+            # a param so the UI answers "was this scored on the learned head or pyin?"
+            # without opening an artifact. Derived from the heads this run trains,
+            # which is what decides whether the encoder has a branch to read.
             params={"encoder": "tcn", "sources": ",".join(sources),
+                    "pitch_source": "learned" if "pitch" in recipe.heads else "pyin",
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate,
                     "batch_size": config.batch_size,

@@ -344,7 +344,16 @@ def _eval_fn(
             return decoder.decode(encoder.encode_features(contour, features))
 
         metrics: dict[str, float] = {}
-        report: dict[str, Any] = {"epoch": epoch, "conditions": {}}
+        # ``pitch_source`` is recorded because it silently decides ~5 F1: an encoder
+        # with a ``FrequencyHead`` names its notes from that head, one without falls
+        # back to pyin, and the two produce byte-identical report shapes. Without this
+        # a saved report cannot say which pipeline made it -- the same defect as a run
+        # whose name did not describe the run.
+        report: dict[str, Any] = {
+            "epoch": epoch,
+            "pitch_source": encoder.pitch_source,
+            "conditions": {},
+        }
         for tag, validator in validators.items():
             note = validator.score(segment)
             for key, value in note.items():
