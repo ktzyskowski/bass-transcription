@@ -71,12 +71,23 @@ class MLflowCallback(Callback):
             self._client.log_metric(self._run_id, key, float(value), step=step)
 
     def on_batch_end(self, step: int, losses: Mapping[str, float]) -> None:
-        smoothed = {
-            h: self._emas.setdefault(h, EMA(self._ema_beta)).update(v)
-            for h, v in losses.items()
-        }
+        for head, value in losses.items():
+            self._emas.setdefault(head, EMA(self._ema_beta)).update(value)
         if self._batch_log_every and step % self._batch_log_every == 0:
-            self.sink({_metric_key(h, "step"): v for h, v in smoothed.items()}, step)
+            # Every EMA seen so far, not just the keys on *this* batch. Under gradient
+            # accumulation `grad_norm` exists only on optimiser steps, so keying off
+            # the current batch would log it solely when the two periods coincide --
+            # every lcm(accumulate_steps, batch_log_every) steps, which for 53 and 100
+            # is three points an epoch. The EMA already holds the last value; that is
+            # what it is for.
+            self.sink(
+                {
+                    _metric_key(h, "step"): e.value
+                    for h, e in self._emas.items()
+                    if e.value is not None
+                },
+                step,
+            )
 
     def log_artifact(
         self, path: os.PathLike[str] | str, artifact_path: str | None = None

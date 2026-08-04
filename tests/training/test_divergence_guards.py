@@ -136,26 +136,44 @@ def test_a_finite_run_is_untouched():
 # --------------------------------------------------------------------------- #
 # The clip: the ordinary cause, caught before it reaches the weights           #
 # --------------------------------------------------------------------------- #
+
+def _applied_grad(trainer, loss, batches=1) -> float:
+    """The gradient norm the optimiser was actually handed, i.e. post-clip.
+
+    Captured at `step` rather than read off `.grad` afterwards, because the loop zeroes
+    the accumulator once a step is applied. Distinct from the reported GRAD_NORM, which
+    is deliberately the *pre*-clip norm.
+    """
+    real = trainer.optimizer.step
+    seen: list[float] = []
+
+    def spy(*a, **k):
+        seen.append(float(loss.w.grad.norm()))
+        return real(*a, **k)
+
+    trainer.optimizer.step = spy
+    trainer.fit(_batches(batches))
+    assert seen, "the optimiser never stepped"
+    return seen[0]
+
+
 def test_an_outsized_gradient_is_clipped_to_the_limit():
     # d(w * 1000)/dw = 1000, an order of magnitude past any sane step.
     trainer, loss = _trainer([1000.0], max_grad_norm=5.0)
-    trainer.fit(_batches(1))
     # Adam's first step is ~lr regardless of magnitude, so assert on the gradient the
     # optimiser was handed, which is what clipping actually changes.
-    assert float(loss.w.grad.norm()) == pytest.approx(5.0, rel=1e-4)
+    assert _applied_grad(trainer, loss) == pytest.approx(5.0, rel=1e-4)
 
 
 def test_an_ordinary_gradient_passes_through_untouched():
     # The clip is a safety net, not a regulariser: below the limit it must do nothing.
     trainer, loss = _trainer([2.0], max_grad_norm=5.0)
-    trainer.fit(_batches(1))
-    assert float(loss.w.grad.norm()) == pytest.approx(2.0, rel=1e-4)
+    assert _applied_grad(trainer, loss) == pytest.approx(2.0, rel=1e-4)
 
 
 def test_clipping_can_be_disabled_and_then_does_not_clip():
     trainer, loss = _trainer([1000.0], max_grad_norm=None)
-    trainer.fit(_batches(1))
-    assert float(loss.w.grad.norm()) == pytest.approx(1000.0, rel=1e-4)
+    assert _applied_grad(trainer, loss) == pytest.approx(1000.0, rel=1e-4)
 
 
 def test_the_norm_is_still_measured_when_clipping_is_off():

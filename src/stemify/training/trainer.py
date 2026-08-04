@@ -89,6 +89,24 @@ class Trainer(Generic[B]):
         )
         return float(norm.item())
 
+    def _step(self) -> float:
+        """Clip, check, apply one optimiser step, and reset the accumulator.
+
+        Everything that must happen exactly once per *weight update* rather than once
+        per micro-batch lives here, so accumulation cannot silently half-apply it --
+        clipping a window's accumulated gradient is the whole point, and clipping each
+        micro-batch instead would bound the sum of N clipped vectors rather than the
+        gradient actually taken. Returns the pre-clip norm of the accumulated gradient.
+        """
+        norm = self._clip()
+        # A finite loss can still backward into a non-finite gradient, and clipping
+        # cannot rescue one -- scaling inf or NaN leaves it. Check between clip and
+        # step, the last point at which the weights are still good.
+        self._require_finite({GRAD_NORM: norm}, True, "gradient")
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+        return norm
+
     def _require_finite(
         self, values: Mapping[str, float], train: bool, kind: str
     ) -> None:
@@ -129,14 +147,27 @@ class Trainer(Generic[B]):
 
         Train epochs carry one key the objective did not produce, ``GRAD_NORM``; its
         epoch mean answers whether the clip is binding at all, which is what makes
-        ``max_grad_norm`` a number chosen from the run rather than a guess."""
+        ``max_grad_norm`` a number chosen from the run rather than a guess. It appears
+        once per *optimiser step*, so under accumulation it is present on only one
+        micro-batch in ``accumulate_steps`` -- hence the per-key ``counts``."""
         self.model.train(train)
         totals: dict[str, float] = {}
+        # Per key, because not every metric appears on every batch: GRAD_NORM exists
+        # only on optimiser steps, so dividing it by the batch count would under-report
+        # it by exactly `accumulate_steps`.
+        counts: dict[str, float] = {}
         n = 0
+        accumulate = max(1, self.config.accumulate_steps)
+        pending = 0        # micro-batches accumulated into the current step
+        if train:
+            self.optimizer.zero_grad()
         with torch.set_grad_enabled(train):
             for batch in loader:
                 # Counted for every train batch, not only when someone is listening:
                 # the step is where the loop is, and the divergence guard names it.
+                # Micro-batches, not optimiser steps -- it is the compute axis, and
+                # keeping it that way leaves step-matched comparisons against runs
+                # recorded before accumulation existed meaningful.
                 if train:
                     self._global_step += 1
                 loss_t, metrics = self.loss.compute(self.model, batch, self.device)
@@ -145,24 +176,33 @@ class Trainer(Generic[B]):
                 # already materialises these to Python floats, so the sync is paid.
                 self._require_finite(metrics, train, "loss")
                 if train:
-                    self.optimizer.zero_grad()
+                    # Scaled so the accumulated gradient is the window's *mean* rather
+                    # than its sum, which keeps gradient magnitude -- and therefore the
+                    # clip threshold and the learning rate -- independent of the dial.
+                    # The reported metrics stay unscaled: they are the real per-chunk
+                    # loss, and rescaling them would make two runs incomparable.
                     # torch ships `Tensor.backward` unannotated, so --strict calls this
                     # an untyped call in typed context. Nothing to fix on our side.
-                    loss_t.backward()  # type: ignore[no-untyped-call]
-                    norm = self._clip()
-                    metrics = {**metrics, GRAD_NORM: norm}
-                    # A finite loss can still backward into a non-finite gradient, and
-                    # clipping cannot rescue one -- scaling inf or NaN leaves it. Check
-                    # between clip and step, the last point where the weights are good.
-                    self._require_finite({GRAD_NORM: norm}, train, "gradient")
-                    self.optimizer.step()
+                    (loss_t / accumulate).backward()  # type: ignore[no-untyped-call]
+                    pending += 1
+                    if pending == accumulate:
+                        metrics = {**metrics, GRAD_NORM: self._step()}
+                        pending = 0
                 bs = len(batch)
                 for k, v in metrics.items():
                     totals[k] = totals.get(k, 0.0) + v * bs
+                    counts[k] = counts.get(k, 0.0) + bs
                 n += bs
                 # Only train batches carry a step; val batches are averaged, not logged.
                 if train and on_batch is not None:
                     on_batch(self._global_step, metrics)
+            if train and pending:
+                # A short final window. Applied rather than dropped: discarding the
+                # gradient of a partial window would silently throw away up to
+                # `accumulate_steps - 1` micro-batches of every epoch, and silently
+                # discarding work is the failure mode this file exists to refuse. It is
+                # under-scaled by `pending / accumulate`, which is one step per epoch.
+                self._step()
         if n == 0:
             # A loader that yields nothing returns no metrics, so the caller's
             # `losses["total"]` raises a bare KeyError with no hint that the *loader*
@@ -174,7 +214,7 @@ class Trainer(Generic[B]):
                 "so this epoch has nothing to average. Usual causes: the split is "
                 "empty, or a --limit/--val-limit is smaller than the batch size."
             )
-        return {k: v / n for k, v in totals.items()}
+        return {k: v / counts[k] for k, v in totals.items()}
 
     def fit(
         self,

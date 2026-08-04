@@ -49,6 +49,31 @@ class TrainConfig:
     # does. ``None`` disables clipping while still measuring.
     max_grad_norm: float | None = 1000.0
 
+    # Micro-batches accumulated into one optimiser step. Exists for a *correctness*
+    # reason, not a memory one -- the usual motive for accumulation is fitting a large
+    # effective batch on a small card, and that is not what this is for.
+    #
+    # A recurrent objective carries state between micro-batches (the semi-CRF's alpha
+    # window). That state is computed by whatever the weights were at the time, so when
+    # the weights move every step the state a chunk consumes is stale -- the same
+    # representational drift R2D2 describes for stored recurrent states. Here it is
+    # unusually bad: the carry resets only at a track's first chunk, and a track is a
+    # median of 53 chunks, so by a track's end the alpha state is ~53 updates old. And
+    # unlike a GRU, alpha is an unnormalised accumulator rather than a contractive
+    # state, so it never forgets its way back -- there is no cheap burn-in that heals
+    # it, and recomputing it honestly is O(N^2) in chunks per track.
+    #
+    # Holding the weights still for N micro-batches makes the state *exact* within the
+    # window and one update stale across a boundary, at no compute cost at all. The
+    # price is N-fold fewer optimiser steps, which is why this is a dial rather than a
+    # constant. It also makes the telescoping identity the loss is built on
+    # (``SemiCRFLoss``) hold within a window, where today it holds only under frozen
+    # weights -- which is why the reported train loss is inflated relative to val.
+    #
+    # 1 reproduces the un-accumulated loop exactly. Harmless for a stateless objective
+    # like frame BCE, where it is just a larger effective batch.
+    accumulate_steps: int = 1
+
     # DataLoader worker subprocesses. 0 loads batches on the main thread, which
     # can starve a fast model's GPU step; >0 prefetches batches across CPU cores
     # so the device stays fed. A few below the physical core count leaves headroom

@@ -94,6 +94,15 @@ def main() -> None:
                          "raising for a structured objective, whose val curve is "
                          "noisier than frame BCE's")
     ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--accumulate-steps", type=int,
+                    default=TrainConfig.accumulate_steps,
+                    help="micro-batches per optimiser step. For --objective semicrf "
+                         "this is a correctness dial, not a memory one: the alpha "
+                         "carry is computed under the weights of the step that made "
+                         "it, so moving the weights every step leaves the state a "
+                         "chunk consumes ~53 updates stale by a track's end. Holding "
+                         "them still for N batches costs nothing and cuts that N-fold, "
+                         "at N-fold fewer updates per epoch")
     ap.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate,
                     help="Adam learning rate, over the model and the objective's own "
                          "parameters alike. The default came from the frame path; a "
@@ -161,6 +170,7 @@ def main() -> None:
         max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
         learning_rate=args.learning_rate,
+        accumulate_steps=args.accumulate_steps,
         # 0 rather than a bare --no-clip flag: the value and its off switch stay one
         # thing, so the run's params record "clipping was off" as a value rather than
         # as an absent flag nobody logged.

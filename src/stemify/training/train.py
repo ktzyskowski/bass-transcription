@@ -183,6 +183,7 @@ def train(
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate,
                     "batch_size": config.batch_size,
+                    "accumulate_steps": config.accumulate_steps,
                     "max_grad_norm": config.max_grad_norm,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
