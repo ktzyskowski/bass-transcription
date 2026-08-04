@@ -831,6 +831,35 @@ exist.
 
 ## Future experiments
 
+### Learned similarity for the span features (idea, 2026-08-04)
+
+`path` (`1 - Bhattacharyya`) and `spread` (generalised JSD) are **hand-crafted
+similarity metrics** over the pitch distribution. Two limits are known:
+
+- `path` is blind to pitch *distance*. Two sharp distributions a semitone apart and two
+  an octave apart both give `BC ~ 0`, so the CRF cannot use interval structure at all --
+  and for bass lines (root-fifth, octave jumps, walking steps) interval is among the
+  most informative things pitch knows about where notes begin.
+- Both read a distribution the pitch head produces for a *different* purpose, so the
+  features are only as good as that head's shape.
+
+**The idea:** replace the hand-designed metric with a *learned* one -- a small
+projection trained contrastively so frames of the same note embed close and frames
+across a boundary embed far. The span feature becomes a learned distance rather than a
+fixed divergence, and semitone-vs-octave falls out for free.
+
+**Why it is parked, not scheduled.** We have dense per-frame supervision, and
+contrastive objectives earn their keep mainly where labels are scarce or the target
+genuinely is a similarity structure. Nothing in the current evidence says the span
+features are the bottleneck -- voicing AUROC at chance (0.516 vs frame BCE's 0.984) and
+a dimensionally malformed composite loss are. Revisit only once those are fixed and the
+span features are the thing left standing between the model and the metric.
+
+Cheaper first step that captures part of the same gain without any representation
+learning: a cumsum of frame-to-frame `|delta expected bin|`, which is additive, O(1)
+per span, and adds "how far did pitch move" to the existing "did it move".
+
+
 ### Priority order — revised 2026-07-29
 
 The staging below was written CRF-first, on the reasoning that Config A had validated
