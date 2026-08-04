@@ -103,9 +103,17 @@ def train(
     # at final test. Independent of train sources: monitor the full breakdown.
     # The default tracks the model's input width, since a validator has to feed
     # the same channels the model was built for.
+    #
+    # `mixture` is deliberately *not* in the default. It is the un-separated negative
+    # control, and it has been settled since July -- bass buried in a full mix scores
+    # 0.18-0.27 whatever the model, which is the finding that made separation
+    # non-negotiable. Scoring it every epoch costs a third of validation to re-derive a
+    # conclusion no run has moved. It is still one flag away (`--val-sources
+    # clean,mixture,separated`) for when the question is reopened. The bichannel
+    # default already omitted its equivalent, so this also makes the two symmetric.
     val_conditions = val_conditions or (
         ["bichannel-clean", "bichannel-separated"] if recipe.in_channels == 2
-        else ["clean", "mixture", "separated"]
+        else ["clean", "separated"]
     )
     # Through `canonical` for the same reason `--sources` is: a run given retired tags
     # otherwise resolves its training conditions and then dies looking up the val ones.
