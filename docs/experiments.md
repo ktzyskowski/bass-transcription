@@ -780,6 +780,55 @@ much smaller scale (BCE loss ~0.2 against the CRF's ~44), so it does not disturb
 comparability with the recorded `tcn-*` rows. The per-batch norm is logged as
 `grad_norm`, so the threshold is tunable from the run instead of guessed.
 
+### Root cause: a NaN gradient from a finite forward (2026-08-04)
+
+Neither divergence was the missing clip, and neither was the learning rate. Re-running
+with clipping reproduced the failure at step 6548 — and the guard reported the thing
+that localised it: **a non-finite `gradient`, with a finite loss.**
+
+Three facts pin it. `grad_norm=nan` not `inf`, so a singularity rather than overflow.
+The loss guard did not fire that step, so the forward was finite and the backward was
+not. And the two runs blew up at *different* steps (4400, 6548) from **identical loss
+curves through step 4300**, so it is data-dependent.
+
+`pitch_cumsums` built the Bhattacharyya coefficient as `p.sqrt()` on a softmax.
+`d(√p)/dp = 1/(2√p)` is unbounded as `p → 0`, and a softmax over 216 bins underflows
+to *exactly* 0.0 in float32 once the logit spread passes ~104 — which a pitch head
+reaches by simply becoming confident. Backward computes `1/0 → inf`, softmax's own
+backward turns that into `0 · inf → NaN`, and every forward value stays finite.
+
+**This also explains the slow death, which is the part clipping and lr could not.**
+Both runs learn to ~step 1000 and then *unlearn*:
+
+| step | 100 | 500 | 1000 | 2000 | 3000 | 4300 |
+|---|---|---|---|---|---|---|
+| `nll` | 70.5 | 39 | **23.3** | 27.7 | 38.9 | 28.2 |
+| `pitch` | 1.50 | 0.933 | **0.456** | 2.25 | 3.52 | 3.01 |
+
+`pitch` climbs from 0.456 back to ~3.5–4.0 against a uniform-head value of
+ln(216) ≈ 5.38 — most of the way back to untrained. The exact
+zero is only where it tips over — the whole region below ~1e-20 already contributes
+gradients of order 1e10 into the shared trunk, growing as the head sharpens. **The
+pitch branch was punished precisely for becoming confident.** A feedback loop, not an
+optimisation problem.
+
+Fix: `p.clamp_min(1e-9).sqrt()`, the idiom already on the adjacent line where `log`
+got the same treatment. `clamp_min` pins the underflowed tail's derivative at zero,
+where it belongs. The BC value moves <3e-7 on ordinary logits.
+
+**Audit — `sqrt` was the only unguarded singular op.** `torch.log(voicing)` and
+`torch.logit(onset)` are clamped to `[1e-6, 1-1e-6]`, `p.log()` in `pitch_spread` to
+1e-9, and `log2` in `models/heads/pitch.py` runs on targets carrying no gradient.
+Related non-bug, now pinned by a test: those clamps also *zero* the derivative once
+onset/voicing saturate, so the CRF stops teaching them on those frames.
+
+**Lesson for the test suite.** Assertions on returned values cannot catch this class —
+the forward was correct throughout, so 300+ passing tests and every guard watching the
+loss were blind. Only a gradient assertion sees it, and it has to run at the
+confidence a *trained* encoder reaches: an untrained head is diffuse and safe, so a
+suite exercising only initialisation tests the one regime where the bug does not
+exist.
+
 ## Future experiments
 
 ### Priority order — revised 2026-07-29
