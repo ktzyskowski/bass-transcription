@@ -182,6 +182,7 @@ def train(
             params={"encoder": "tcn", "sources": ",".join(sources),
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate,
+                    "max_grad_norm": config.max_grad_norm,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
                     "train_batches": _epoch_batches(train_loader),

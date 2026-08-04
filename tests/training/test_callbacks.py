@@ -159,6 +159,28 @@ def test_mlflow_callback_logs_metrics(tmp_path):
     assert run.data.metrics["best_epoch"] >= 0
 
 
+def test_the_gradient_norm_is_not_filed_under_loss(tmp_path):
+    """It rides in the same metrics mapping as the loss terms but is not one.
+
+    Under ``loss/`` it would share a chart section -- and an axis -- with numbers two
+    orders of magnitude smaller, which is how a norm gets read as a diverging head.
+    """
+    pytest.importorskip("mlflow")
+    from mlflow.tracking import MlflowClient
+
+    from stemify.training.base import GRAD_NORM
+
+    uri = f"file://{tmp_path}/mlruns"
+    cb = MLflowCallback(run_name="t", tracking_uri=uri, batch_log_every=1)
+    cb.on_batch_end(1, {"total": 0.5, GRAD_NORM: 12.0})
+
+    client = MlflowClient(tracking_uri=uri)
+    assert client.get_metric_history(cb._run_id, f"{GRAD_NORM}/step")
+    assert client.get_metric_history(cb._run_id, f"loss/{GRAD_NORM}/step") == []
+    # ...while the actual loss terms keep their namespace.
+    assert client.get_metric_history(cb._run_id, "loss/total/step")
+
+
 def test_mlflow_callback_logs_smoothed_loss_on_throttle_boundary(tmp_path):
     pytest.importorskip("mlflow")
     from mlflow.tracking import MlflowClient

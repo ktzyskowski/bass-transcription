@@ -12,10 +12,21 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
+from stemify.training.base import GRAD_NORM
 from stemify.training.callbacks.base import Callback, EpochLogs, Metrics
 from stemify.training.ema import EMA
 
 logger = logging.getLogger(__name__)
+
+
+def _metric_key(key: str, phase: str) -> str:
+    """Slash-namespace one batch/epoch metric for MLflow's chart grouping.
+
+    Loss terms go under ``loss/`` so the heads share a section; the loop's gradient
+    norm gets its own, because filing a norm under ``loss`` puts a number that is not
+    a loss on the same axis as the ones that are.
+    """
+    return f"{key}/{phase}" if key == GRAD_NORM else f"loss/{key}/{phase}"
 
 
 class MLflowCallback(Callback):
@@ -65,7 +76,7 @@ class MLflowCallback(Callback):
             for h, v in losses.items()
         }
         if self._batch_log_every and step % self._batch_log_every == 0:
-            self.sink({f"loss/{h}/step": v for h, v in smoothed.items()}, step)
+            self.sink({_metric_key(h, "step"): v for h, v in smoothed.items()}, step)
 
     def log_artifact(
         self, path: os.PathLike[str] | str, artifact_path: str | None = None
@@ -79,8 +90,8 @@ class MLflowCallback(Callback):
     def on_epoch_end(self, logs: EpochLogs) -> None:
         # Slash-namespaced so MLflow groups them: loss/<head>/{train,val} sit under a
         # "loss" section, one chart per head (total, onset, voicing) x phase.
-        metrics = {f"loss/{h}/train": v for h, v in logs.train_losses.items()}
-        metrics.update({f"loss/{h}/val": v for h, v in logs.val_losses.items()})
+        metrics = {_metric_key(h, "train"): v for h, v in logs.train_losses.items()}
+        metrics.update({_metric_key(h, "val"): v for h, v in logs.val_losses.items()})
         self.sink(metrics, logs.epoch)
 
     def on_train_end(self, best_epoch: int) -> None:

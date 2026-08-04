@@ -12,7 +12,9 @@ class ConsoleCallback(Callback):
 
     def on_epoch_end(self, logs: EpochLogs) -> None:
         # Break out the per-head train loss (onset/voicing/...) beside the total, so
-        # the log shows which head is still moving; total drives early stopping.
+        # the log shows which head is still moving; total drives early stopping. The
+        # loop's grad_norm rides along in the same mapping and is worth seeing here for
+        # the same reason -- it is the term that moves first when a run is about to go.
         heads = " ".join(
             f"{h} {v:.4f}" for h, v in logs.train_losses.items() if h != "total"
         )

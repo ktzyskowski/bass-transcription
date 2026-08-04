@@ -94,6 +94,12 @@ def main() -> None:
                          "raising for a structured objective, whose val curve is "
                          "noisier than frame BCE's")
     ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--max-grad-norm", type=float, default=TrainConfig.max_grad_norm,
+                    help="clip the total gradient norm over the model and the "
+                         "objective's parameters. A safety net against the single bad "
+                         "step that sends the weights to inf -- not a tuned "
+                         "regulariser, so it should sit above the run's ordinary norm "
+                         "(logged per epoch as 'grad_norm'). 0 disables it")
     ap.add_argument("--num-workers", type=int, default=8,
                     help="DataLoader worker subprocesses (0 = main thread)")
     ap.add_argument("--pitch", action="store_true",
@@ -149,6 +155,10 @@ def main() -> None:
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
+        # 0 rather than a bare --no-clip flag: the value and its off switch stay one
+        # thing, so the run's params record "clipping was off" as a value rather than
+        # as an absent flag nobody logged.
+        max_grad_norm=args.max_grad_norm or None,
     )
     train(
         args.root, args.cache_dir, config,

@@ -734,6 +734,52 @@ same size of move the 1-channel run showed (0.090 → 0.058).
 - Single run per arm, no seed variance. A ~2 point gap on 40 test tracks is larger than
   the decoder-constant deltas that were treated as boundary-riding, but it is one draw.
 
+## Divergence: the first semi-CRF + pitch run (2026-08-03)
+
+The first run of the composite loss (`--objective semicrf --pitch --sources
+clean,separated`, batch 8, `pitch_weight 1.0`, lr 1e-3) **went NaN and kept training.**
+
+| step | 100 | 800 | 4400 | 6900 |
+|---|---|---|---|---|
+| `nll` | 70.5 | 25.5 | **nan** | nan |
+| `pitch` | 1.50 | 0.40 | **nan** | nan |
+
+Both terms failed on the *same* step, which implicates the shared trunk rather than
+either loss term — the composite loss itself had 4300 healthy steps behind it, and
+`pitch_ce` 1.50 → 0.40 says the pitch head does train at `pitch_weight=1.0` despite
+the scale gap. Two defects, and the second cost far more than the first:
+
+1. **No gradient clipping existed anywhere.** `zero_grad → backward → step` with
+   nothing between, Adam at 1e-3.
+2. **Nothing checked that the loss was finite.** `nan < best_val` is False, so early
+   stopping never fires and never checkpoints; the run would have reached
+   `--epochs 50` and saved NaN weights through the ordinary success path. It burned
+   ~30 min of 5090 time on NaN before being killed by hand.
+
+### Gradient-norm scale, measured (2026-08-03)
+
+Both are fixed: the loop now clips and refuses to continue past a non-finite loss or
+gradient. Picking the threshold needed the norm scale, which nothing had ever
+measured — a 1-epoch smoke run (12 tracks, batch 4, same objective) gives:
+
+| step | 10 | 50 | 100 | 200 | 270 |
+|---|---|---|---|---|---|
+| `grad_norm` (EMA) | 5380 | 2680 | 1300 | 465 | 485 |
+| `nll` | 151 | 95 | 62 | 39 | 39 |
+
+So the semi-CRF settles around **~500**, from ~5000 at initialisation. The first
+default tried was 5.0 — which would have clipped *every* step by ~100x. That is worth
+recording because it is not a harmless mistake in a way Adam hides: Adam normalises by
+the second moment, so uniform clipping barely changes the update and the run still
+descends convincingly. What it destroys is the *relative* magnitude between steps,
+which is the only thing distinguishing a divergent step from a normal one. A clip
+below the ordinary norm looks fine and protects nothing.
+
+Default is now **1000** — above the semi-CRF's steady state, inert at the frame path's
+much smaller scale (BCE loss ~0.2 against the CRF's ~44), so it does not disturb
+comparability with the recorded `tcn-*` rows. The per-batch norm is logged as
+`grad_norm`, so the threshold is tunable from the run instead of guessed.
+
 ## Future experiments
 
 ### Priority order — revised 2026-07-29

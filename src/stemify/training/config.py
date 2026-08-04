@@ -26,6 +26,24 @@ class TrainConfig:
     max_epochs: int = 50
     patience: int = 8  # early-stop after this many epochs without val gain
 
+    # Gradient-norm clip applied over the model *and* the objective's parameters,
+    # i.e. everything the one optimiser moves. A safety net rather than a tuned
+    # regulariser: a single unclipped outlier step sends the weights to inf
+    # permanently, taking every head with it because they share a trunk, and a
+    # structured NLL is the objective that produces those -- the log-partition over a
+    # chunk whose evidence is unusual.
+    #
+    # The threshold has to sit *above* the run's ordinary norm, and that scale is a
+    # property of the objective, not of this loop: a per-frame BCE and a per-chunk
+    # structured NLL differ by orders of magnitude in loss and so in gradient. A
+    # threshold below the ordinary norm does not protect anything -- it clips every
+    # step to the same length, which discards exactly the magnitude difference that
+    # distinguishes a divergent step from a normal one. So the default is chosen high
+    # enough to be inert at either objective's normal scale, and the number to tune it
+    # with is the ``grad_norm`` metric the loop logs (see docs/experiments.md for the
+    # measured scales). ``None`` disables clipping while still measuring.
+    max_grad_norm: float | None = 1000.0
+
     # DataLoader worker subprocesses. 0 loads batches on the main thread, which
     # can starve a fast model's GPU step; >0 prefetches batches across CPU cores
     # so the device stays fed. A few below the physical core count leaves headroom

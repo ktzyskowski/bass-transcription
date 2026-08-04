@@ -26,6 +26,15 @@ from stemify.training.config import TrainConfig
 
 HEADS = ["onset", "voicing"]
 
+GRAD_NORM = "grad_norm"
+"""The one batch-metric key contributed by the training loop rather than a ``Loss``.
+
+Lives beside the ``compute`` contract because it is part of it: everything else in that
+mapping is a term of the objective, and a consumer treating the whole mapping as a
+per-head loss breakdown (the console log, the MLflow ``loss/`` namespace) needs to know
+which key is not. ``Trainer`` fills it with the pre-clip gradient norm.
+"""
+
 T = TypeVar("T")
 
 
