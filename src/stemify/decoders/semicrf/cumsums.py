@@ -71,7 +71,17 @@ def pitch_cumsums(
     spread, so a dot product would report a quiet passage the head is unsure about as
     constant pitch movement. The first frame has no predecessor and contributes 0."""
     p = torch.softmax(logits, dim=-1)
-    sq = p.sqrt()
+    # Clamped for the *gradient*, not the value. d(sqrt p)/dp = 1/(2 sqrt p) is
+    # unbounded as p -> 0, and a softmax over this many bins underflows to exactly 0
+    # in float32 once the head is confident (a logit spread past ~104 does it), so
+    # the backward pass hits 1/0 -> inf and then 0 * inf -> NaN while the forward
+    # stays perfectly finite. Clamping pins the derivative of the underflowed tail at
+    # zero, where it belongs: those bins carry no probability and should not steer
+    # anything. Without it the failure is not merely the eventual NaN -- the whole
+    # region below ~1e-20 contributes gradients of order 1e10 that swamp the shared
+    # trunk, and they grow as the head sharpens, so the pitch branch is punished for
+    # becoming confident and is driven back toward uniform.
+    sq = p.clamp_min(1e-9).sqrt()
     bc = (sq[1:] * sq[:-1]).sum(-1)                       # (T-1,)
     path = torch.cat([bc.new_zeros(1), 1.0 - bc])         # (T,)
     entropy = -(p.clamp_min(1e-9) * p.clamp_min(1e-9).log()).sum(-1)   # (T,)
