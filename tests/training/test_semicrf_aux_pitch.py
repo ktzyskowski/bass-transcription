@@ -118,8 +118,8 @@ def test_the_aux_term_is_added_and_reported_separately():
 
 def test_the_weight_scales_only_the_aux_term():
     model, batch = _HeadsWithPitch(), _batch()
-    _, one = _loss(aux_heads=["pitch"], aux_weight=1.0).compute(model, batch, CPU)
-    _, three = _loss(aux_heads=["pitch"], aux_weight=3.0).compute(model, batch, CPU)
+    _, one = _loss(aux_heads=["pitch"], aux_weights={"pitch": 1.0}).compute(model, batch, CPU)
+    _, three = _loss(aux_heads=["pitch"], aux_weights={"pitch": 3.0}).compute(model, batch, CPU)
     assert three["nll"] == pytest.approx(one["nll"], rel=1e-6)
     assert three["pitch"] == pytest.approx(one["pitch"], rel=1e-6)
     assert three["total"] == pytest.approx(one["nll"] + 3 * one["pitch"], rel=1e-6)
@@ -186,7 +186,7 @@ def test_nan_padding_past_a_tracks_end_contributes_nothing():
 def test_a_model_without_a_pitch_head_is_refused_by_name():
     # Silently skipping the term is the failure this guards: the head would not exist,
     # the loss would look healthy, and the run would report a pitch model it never had.
-    with pytest.raises(ValueError, match="no pitch branch"):
+    with pytest.raises(ValueError, match="no such branch"):
         _loss(aux_heads=["pitch"]).compute(_HeadsNoPitch(), _batch(), CPU)
 
 

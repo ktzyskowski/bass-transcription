@@ -28,16 +28,22 @@ so a fresh pass over the loader (a new epoch, or the val loader) rebuilds every 
 before reading it, and no epoch resumes from the last one's state.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 import torch
 from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.window import initial_window
-from stemify.models.heads import pitch_ce
+from stemify.models.heads import frame_bce, pitch_ce
 from stemify.training.base import Loss
 from stemify.training.semicrf.dataset import ChunkBatch
+
+# Which per-frame loss each auxiliary head is scored with. A table rather than an
+# if-chain so that "is there a term for this head?" and "which one?" are the same
+# lookup -- the constructor validates against exactly the keys `_aux_term` dispatches
+# on, so a head can never be declared, accepted, and then silently not scored.
+AUX_TERMS = {"pitch": "categorical", "onset": "binary", "voicing": "binary"}
 
 
 class SemiCRFLoss(Loss[ChunkBatch]):
@@ -48,19 +54,37 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         decoder: SemiCRFDecoder,
         detach_carry: bool = True,
         aux_heads: Sequence[str] = (),
-        aux_weight: float = 1.0,
+        aux_weights: Mapping[str, float] | None = None,
     ) -> None:
         """``detach_carry=False`` stops truncating: the alpha window is passed to the
         next chunk with its graph intact, which reproduces whole-track backprop and
         whole-track activation memory. Only sensible for short tracks -- it is why the
         padded whole-track path was removed rather than kept as a second module.
 
-        ``aux_heads`` are heads the NLL cannot supervise and an auxiliary per-frame
-        term must. Today that is ``pitch`` alone: the span features read how far the
-        distribution *moves* across a span and how much its frames disagree, both of
-        which are invariant to what pitch it actually names -- so nothing in the
-        structured objective constrains the head's *values*, and without this term the
-        head would train on no signal at all.
+        ``aux_heads`` are heads the NLL supervises too weakly, each needing a
+        per-frame term. Two reasons a head lands here, and they are different:
+
+        ``pitch`` -- the NLL *cannot* supervise it. The span features read how far the
+        distribution moves across a span and how much its frames disagree, both
+        invariant to what pitch it actually names, so nothing constrains the head's
+        values and without this term it trains on no signal at all.
+
+        ``voicing`` (and ``onset``, available but not declared by default) -- the NLL
+        *can* supervise it, but only competitively. The objective is discriminative
+        over segmentations, so a feature earns gradient in proportion to how much it
+        helps rank gold above the alternatives, and ``LinearSpanScorer`` weights every
+        feature with a learned scalar. Voicing is largely redundant given onset
+        evidence, the duration prior and the transition table -- its unique
+        contribution is spotting rests, which are rare -- so ``w_v``/``w_u`` can shrink
+        toward zero and the head is left orphaned. Measured: voicing AUROC **0.516**
+        (chance) under the structured objective alone, against **0.984** for the same
+        head under frame BCE. Nothing here forces voicing to *be* voicing; the
+        auxiliary term does.
+
+        ``aux_weights`` is per head because the terms are not interchangeable: pitch is
+        a categorical CE over 216 bins scored on voiced frames, the binary heads are
+        BCE over every frame. One shared coefficient would mean whichever head was
+        tuned last.
 
         Declared rather than inferred from what the batch happens to carry. "Score it
         if a pitch target turns up" is the same shape as the bug where ``Cues`` lacked
@@ -70,12 +94,20 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         self.decoder = decoder
         self.detach_carry = detach_carry
         self.aux_heads = tuple(aux_heads)
-        self.aux_weight = aux_weight
-        unsupported = [h for h in self.aux_heads if h != "pitch"]
+        weights = dict(aux_weights or {})
+        self.aux_weights = {h: float(weights.get(h, 1.0)) for h in self.aux_heads}
+        unsupported = [h for h in self.aux_heads if h not in AUX_TERMS]
         if unsupported:
             raise NotImplementedError(
-                f"no auxiliary term for head(s) {unsupported}; only 'pitch' has one "
-                "(see models.heads.pitch_ce)"
+                f"no auxiliary term for head(s) {unsupported}; have {sorted(AUX_TERMS)}"
+            )
+        stray = sorted(set(weights) - set(self.aux_heads))
+        if stray:
+            raise ValueError(
+                f"aux_weights names head(s) {stray} that are not in aux_heads "
+                f"{sorted(self.aux_heads)}. A weight for a term that is never computed "
+                "is a setting that silently does nothing -- the failure this file's "
+                "`aux_heads` docstring exists to refuse."
             )
         # stream id -> (alpha window, cumulative A) at that stream's current position.
         # Resumption state; a gradient path only when detach_carry is False.
@@ -189,8 +221,8 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         total = nll
         metrics = {"nll": float(nll.item())}
         for head in self.aux_heads:
-            term = self._aux_term(head, pitch, batch, device)
-            total = total + self.aux_weight * term
+            term = self._aux_term(head, out, batch, device)
+            total = total + self.aux_weights[head] * term
             metrics[head] = float(term.item())
         metrics["total"] = float(total.item())
         return total, metrics
@@ -198,7 +230,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
     def _aux_term(
         self,
         head: str,
-        pitch: torch.Tensor | None,
+        out: Mapping[str, torch.Tensor],
         batch: ChunkBatch,
         device: torch.device,
     ) -> torch.Tensor:
@@ -214,14 +246,16 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         fall -- which is a data-dependent reweighting, not a regulariser.
 
         NaN padding past a track's end needs no handling here: ``target_windows`` writes
-        NaN there and ``pitch_ce`` masks on it.
+        NaN there and both terms mask on it -- ``pitch_ce`` because unvoiced frames have
+        no pitch to learn, ``frame_bce`` because unmasked NaN makes the whole term NaN.
         """
-        if pitch is None:
+        if head not in out:
             raise ValueError(
-                f"auxiliary head {head!r} was requested but the model has no pitch "
-                "branch, so there are no logits to score. The recipe builds the head "
-                "from the same `pitch` flag that adds it here -- a checkpoint or recipe "
-                "config where the two disagree is the cause."
+                f"auxiliary head {head!r} was requested but the model has no such "
+                f"branch (has {sorted(out)}), so there are no logits to score. The "
+                "recipe builds the branches from the same flags that declare the "
+                "auxiliary terms -- a checkpoint or recipe config where the two "
+                "disagree is the cause."
             )
         if head not in batch.y:
             raise KeyError(
@@ -229,8 +263,12 @@ class SemiCRFLoss(Loss[ChunkBatch]):
                 f"target (has {sorted(batch.y)}). `SemiCRFRecipe.aux_heads` drives both "
                 "what the dataset caches and what this scores; they have drifted."
             )
-        lo, hi = self.scored_slice(batch, pitch.shape[1])
-        return pitch_ce(pitch[:, lo:hi], batch.y[head][:, lo:hi].to(device))
+        logits = out[head]
+        lo, hi = self.scored_slice(batch, logits.shape[1])
+        target = batch.y[head][:, lo:hi].to(device)
+        if AUX_TERMS[head] == "categorical":
+            return pitch_ce(logits[:, lo:hi], target)
+        return frame_bce(logits[:, lo:hi], target)
 
     def scored_slice(self, batch: ChunkBatch, frames: int) -> tuple[int, int]:
         """The feature-frame half-open range the NLL actually scores.

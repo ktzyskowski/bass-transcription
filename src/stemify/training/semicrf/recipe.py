@@ -40,12 +40,17 @@ from stemify.training.semicrf.tracks import TrainItem, train_items
 # a boundary-crossing minority relies on the carry.
 CHUNK_FRAMES = 128
 
-# Weight on the auxiliary pitch cross-entropy in `NLL + w * pitch_ce`. 1.0 is a
-# starting point, not a tuned value: `pitch_ce` opens near ln(216) ~ 5.4 while the
-# per-chunk NLL is on a scale set by the track and the potentials, so the two are not
-# guaranteed comparable and this is the first knob to sweep. Recorded in `config` so a
-# checkpoint says which value produced it.
+# Weights on the auxiliary per-frame terms in `NLL/frames + sum_h w_h * term_h`.
+# Both default to 1.0, which means something now that the NLL is a per-frame rate: all
+# three terms are nats about the same 11.6 ms of audio, so a weight is a ratio of
+# information rates rather than a number absorbing a frame count. Still starting points
+# rather than tuned values -- `pitch_ce` opens near ln(216) ~ 5.4 against BCE's ln 2 ~
+# 0.69 -- and both are recorded in `config` so a checkpoint says what produced it.
 PITCH_WEIGHT = 1.0
+
+# 0 disables the voicing term, reproducing the structured-only objective that measured
+# voicing AUROC 0.516 (chance) against frame BCE's 0.984 for the same head.
+VOICING_WEIGHT = 1.0
 
 
 class SemiCRFRecipe(Recipe):
@@ -63,6 +68,7 @@ class SemiCRFRecipe(Recipe):
         decoder: SemiCRFDecoder | None = None,
         pitch: bool = False,
         pitch_weight: float = PITCH_WEIGHT,
+        voicing_weight: float = VOICING_WEIGHT,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -74,6 +80,7 @@ class SemiCRFRecipe(Recipe):
         self.decoder = decoder or SemiCRFDecoder()
         self.pitch = pitch
         self.pitch_weight = pitch_weight
+        self.voicing_weight = voicing_weight
 
     @property
     def heads(self) -> list[str]:
@@ -116,6 +123,7 @@ class SemiCRFRecipe(Recipe):
             **super().config,
             "pitch": self.pitch,
             "pitch_weight": self.pitch_weight,
+            "voicing_weight": self.voicing_weight,
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
@@ -152,19 +160,37 @@ class SemiCRFRecipe(Recipe):
             decoder=decoder,
             pitch=config_field(config, "pitch", bool, False),
             pitch_weight=config_field(config, "pitch_weight", float, PITCH_WEIGHT),
+            # Defaults to 0 rather than VOICING_WEIGHT when absent: a checkpoint written
+            # before this existed was trained *without* the term, and rebuilding it with
+            # one would misreport how it was trained.
+            voicing_weight=config_field(config, "voicing_weight", float, 0.0),
         )
 
     @property
     def aux_heads(self) -> list[str]:
         """Heads needing a *per-frame* target, so the dataset caches and serves one.
 
-        Deliberately not ``self.heads``. The structured NLL supervises onset and
-        voicing through the segmentation itself -- their frame targets would be
-        redundant. Pitch is the exception: the span features read how far the
-        distribution *moves* and how much it disagrees, never whether it is right, so
-        nothing in the NLL constrains the head's values and an auxiliary term has to.
+        Still deliberately not ``self.heads`` -- onset is left out, because ``w_on``
+        reads the boundary signal and boundaries *are* the objective, so that head gets
+        strong gradient from the NLL alone (its AP sits in the same range as the
+        whole-track POC's).
+
+        This used to say voicing was redundant here for the same reason. **That was
+        wrong, and measurably so:** voicing AUROC came back at 0.516 -- chance --
+        against 0.984 for the same head under frame BCE. The NLL is discriminative over
+        segmentations, so a feature earns gradient only in proportion to how much it
+        helps rank gold above the alternatives, and ``LinearSpanScorer`` gives every
+        feature a learned scalar. Voicing's unique contribution is spotting rests, which
+        are rare, so ``w_v``/``w_u`` can shrink toward zero and leave the head with no
+        signal at all. Set ``voicing_weight=0`` to reproduce the old behaviour.
+
+        Pitch remains the stronger case: the span features are invariant to which pitch
+        is named, so the NLL *cannot* supervise its values however large the weight.
         """
-        return ["pitch"] if self.pitch else []
+        heads = ["pitch"] if self.pitch else []
+        if self.voicing_weight:
+            heads.append("voicing")
+        return heads
 
     @property
     def params(self) -> dict[str, object]:
@@ -172,6 +198,7 @@ class SemiCRFRecipe(Recipe):
             "pitch": self.pitch,
             "chunk_frames": CHUNK_FRAMES,
             "pitch_weight": self.pitch_weight,
+            "voicing_weight": self.voicing_weight,
         }
 
     def build_model(self) -> CueNet:
@@ -182,7 +209,9 @@ class SemiCRFRecipe(Recipe):
 
     def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:
         return SemiCRFLoss(
-            self.decoder, aux_heads=self.aux_heads, aux_weight=self.pitch_weight
+            self.decoder,
+            aux_heads=self.aux_heads,
+            aux_weights={"pitch": self.pitch_weight, "voicing": self.voicing_weight},
         )
 
     @property

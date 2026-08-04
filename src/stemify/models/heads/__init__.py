@@ -19,7 +19,12 @@ Everything is re-exported here, so ``from stemify.models.heads import onset_head
 keeps working exactly as it did when this was a single module.
 """
 
-from stemify.models.heads.frame import FrameHead, onset_head, voicing_head
+from stemify.models.heads.frame import (
+    FrameHead,
+    frame_bce,
+    onset_head,
+    voicing_head,
+)
 from stemify.models.heads.pitch import (
     CONTOUR_VOICING_THRESHOLD,
     FrequencyHead,
@@ -31,6 +36,7 @@ from stemify.models.heads.pitch import (
 )
 
 __all__ = [
+    "frame_bce",
     "CONTOUR_VOICING_THRESHOLD",
     "FrameHead",
     "FrequencyHead",

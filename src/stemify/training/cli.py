@@ -19,7 +19,7 @@ from typing import Any
 from stemify.training.conditions import CONDITIONS
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES
-from stemify.training.semicrf.recipe import PITCH_WEIGHT
+from stemify.training.semicrf.recipe import PITCH_WEIGHT, VOICING_WEIGHT
 from stemify.training.train import train
 
 
@@ -125,6 +125,13 @@ def main() -> None:
                          "cross-entropy in 'NLL + w * pitch_ce'. Defaults to "
                          f"{PITCH_WEIGHT}, which is a starting point rather than a "
                          "tuned value -- the two terms are on unrelated scales.")
+    ap.add_argument("--voicing-weight", type=float, default=None,
+                    help="semicrf only: weight on the auxiliary voicing BCE. The "
+                         "structured NLL supervises voicing only competitively -- it is "
+                         "redundant given onset evidence and the duration prior, so the "
+                         "scorer can shrink its weight to zero and orphan the head "
+                         f"(measured AUROC 0.516 vs frame BCE's 0.984). Default "
+                         f"{VOICING_WEIGHT}; 0 restores the structured-only objective.")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
     args = ap.parse_args()
@@ -146,12 +153,14 @@ def main() -> None:
     strategy_kwargs: dict[str, Any] = {"pitch": args.pitch}
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
-        if args.pitch_weight is not None:
-            raise SystemExit(
-                "--pitch-weight applies to --objective semicrf, not 'frame'. The frame "
-                "objective sums its head terms unweighted; there is no NLL to balance "
-                "the pitch term against."
-            )
+        for flag, value in (("--pitch-weight", args.pitch_weight),
+                            ("--voicing-weight", args.voicing_weight)):
+            if value is not None:
+                raise SystemExit(
+                    f"{flag} applies to --objective semicrf, not 'frame'. The frame "
+                    "objective sums its head terms unweighted; there is no NLL to "
+                    "balance an auxiliary term against."
+                )
     else:
         if args.pos_weight:
             raise SystemExit(
@@ -165,6 +174,8 @@ def main() -> None:
                     "auxiliary pitch term, and without the head there is no such term."
                 )
             strategy_kwargs["pitch_weight"] = args.pitch_weight
+        if args.voicing_weight is not None:
+            strategy_kwargs["voicing_weight"] = args.voicing_weight
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,
