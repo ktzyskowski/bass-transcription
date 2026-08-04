@@ -38,10 +38,15 @@ class TrainConfig:
     # structured NLL differ by orders of magnitude in loss and so in gradient. A
     # threshold below the ordinary norm does not protect anything -- it clips every
     # step to the same length, which discards exactly the magnitude difference that
-    # distinguishes a divergent step from a normal one. So the default is chosen high
-    # enough to be inert at either objective's normal scale, and the number to tune it
-    # with is the ``grad_norm`` metric the loop logs (see docs/experiments.md for the
-    # measured scales). ``None`` disables clipping while still measuring.
+    # distinguishes a divergent step from a normal one.
+    #
+    # The default is *not* yet inert for the semi-CRF: measured at ~1500 on the full
+    # corpus, so this clips most steps. Kept anyway because a step-matched comparison
+    # showed it changing the loss trajectory not at all (docs/experiments.md), and
+    # raising it is a second variable in a run that is still diverging for another
+    # reason. Tune from the ``grad_norm`` metric the loop logs, and beware sizing it
+    # off a small smoke run -- 12 tracks put the norm 3x lower than the full corpus
+    # does. ``None`` disables clipping while still measuring.
     max_grad_norm: float | None = 1000.0
 
     # DataLoader worker subprocesses. 0 loads batches on the main thread, which

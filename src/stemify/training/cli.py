@@ -94,6 +94,11 @@ def main() -> None:
                          "raising for a structured objective, whose val curve is "
                          "noisier than frame BCE's")
     ap.add_argument("--batch-size", type=int, default=16)
+    ap.add_argument("--learning-rate", type=float, default=TrainConfig.learning_rate,
+                    help="Adam learning rate, over the model and the objective's own "
+                         "parameters alike. The default came from the frame path; a "
+                         "structured NLL trains the encoder and the potentials jointly "
+                         "and is not obliged to want the same one")
     ap.add_argument("--max-grad-norm", type=float, default=TrainConfig.max_grad_norm,
                     help="clip the total gradient norm over the model and the "
                          "objective's parameters. A safety net against the single bad "
@@ -155,6 +160,7 @@ def main() -> None:
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,
+        learning_rate=args.learning_rate,
         # 0 rather than a bare --no-clip flag: the value and its off switch stay one
         # thing, so the run's params record "clipping was off" as a value rather than
         # as an absent flag nobody logged.
