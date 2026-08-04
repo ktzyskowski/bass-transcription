@@ -859,6 +859,38 @@ Cheaper first step that captures part of the same gain without any representatio
 learning: a cumsum of frame-to-frame `|delta expected bin|`, which is additive, O(1)
 per span, and adds "how far did pitch move" to the existing "did it move".
 
+### Soft onset targets (idea, 2026-08-04)
+
+`onset_targets` widens each onset by `tolerance_frames=1` into a flat 3-frame plateau.
+That is **temporal label smoothing**, and it exists for a real reason: the true onset
+falls *between* frames, so which frame is "the" onset is a quantisation artifact, and a
+single hard frame is both too sparse to learn (<1% positives) and asserts a precision
+the data does not have.
+
+But a *flat* plateau asserts something else false -- that three frames are equally
+correct -- so its argmax is ambiguous across ~35 ms, which is exactly what blunts
+localisation. It also disagrees with the semi-CRF, whose gold boundary is exact: with
+an auxiliary onset BCE, the BCE would teach "onset is a plateau" while the NLL teaches
+"the boundary is here".
+
+**The principled version is a soft target** -- triangular or Gaussian, centred on the
+*exact* onset time. The centre of mass is then the true onset, neighbours still get
+gradient in proportion to proximity, nothing claims a plateau, and the target's
+centroid **agrees with the CRF's boundary**, so the disagreement dissolves rather than
+being traded for another.
+
+Ranking: **soft > flat +-1 > 0**. Do not set `tolerance_frames=0`; it is strictly worse
+on every axis.
+
+**Why it is parked.** The plateau spans ~35 ms, *inside* the note metric's +-50 ms
+tolerance; peak-picking collapses it and the CRF's duration priors disambiguate
+further. So the gap between "soft" and "flat +-1" is currently below the metric's
+resolution. Revisit if boundary sharpness ever measures as the bottleneck.
+
+**If it is ever done:** apply it to the auxiliary term only. Changing the frame path's
+targets silently breaks comparability with `tcn-v1`/`tcn-v2`, which every row in "the
+comparison that matters" depends on.
+
 
 ### Priority order — revised 2026-07-29
 
