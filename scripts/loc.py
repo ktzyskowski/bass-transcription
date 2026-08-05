@@ -74,7 +74,7 @@ def report(label: str, root: Path) -> Counter:
 
 
 if __name__ == "__main__":
-    roots = sys.argv[1:] or ["src/stemify", "tests"]
+    roots = sys.argv[1:] or ["src/stemify", "tests", "scripts"]
     grand: Counter = Counter()
     for r in roots:
         grand += report(r, Path(r))

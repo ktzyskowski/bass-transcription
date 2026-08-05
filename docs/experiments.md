@@ -1008,6 +1008,72 @@ re-run before being quoted. And the semi-CRF at its best bias (0.7916 separated 
 clean) still trails `rung1-bichannel-pitch` and `rung4-pitch` — closer than 0.7236 made
 it look, not ahead.
 
+## Posterior decoding is closed: the typical set is worse than the mode (2026-08-05)
+
+The entry above predicted "the fix is marginal / MBR decoding". It is not. Five
+decision rules were built on the same epoch-4 checkpoint and all five lost to
+`MAP + note_bias 1.5`. The first four were maximum-expected-accuracy rules, each a guess
+at which **additively decomposable** proxy stands in for the note metric:
+
+| rule | emitted / gold | why it failed |
+|---|---|---|
+| `sum log P(span)` | 0.26 | scores a segmentation by its *probability*, so each extra span multiplies in another factor < 1 — the length bias, reintroduced |
+| `sum (P(span) − ½)` | 0.31 | only 63 of ~584 expected spans clear ½; the rest cost ½ and earn nothing, so the DP minimises span count |
+| `sum (P(boundary) − ½)` | 0.27 | aggregating over starts gives 253 confident boundaries, 4× better and still not enough |
+| windowed over ±1 frame | 1.28 | count finally right; **precision 0.41, fragmentation 1834** |
+
+Read on their own these look like four bad guesses, and they invite a fifth. They are
+not. The fifth rule — **sampled MBR** — has no proxy in it at all: draw whole
+segmentations, score candidates against the real matcher, keep the most central one. It
+was the one member of the family whose loss could not be the wrong choice.
+
+### The oracle probe
+
+`scripts/mbr_oracle_probe.py` does not build MBR, it *bounds* it. Forward-filtering
+backward-sampling draws K=32 exact posterior samples per track, and four rules are scored
+side by side over identical evidence: MAP+bias, the mean sample, the unlabelled consensus
+pick, and the **oracle** — the best sample per track, chosen with labels. The oracle is
+the ceiling of any selection rule over that pool, so it can return a verdict rather than
+a fifth ambiguous null.
+
+Separated, 11 val tracks, macro-averaged per-track F1:
+
+| rule | F1 | notes/gold |
+|---|---|---|
+| MAP + bias 1.5 | **0.7634** | 0.91 |
+| sample mean | 0.5383 | 1.02 |
+| MBR consensus (K=32) | 0.5771 | 1.05 |
+| **ORACLE best of 32** | 0.5883 | 1.03 |
+
+The oracle loses by **0.175 F1**, and loses on **11 tracks out of 11**. Nothing selects
+its way out of that: no larger K, no better utility, no cleverer consensus. And the
+consensus pick sits within 0.011 of the oracle, so the sampler is not the problem either
+— MBR is *working*, and working perfectly still loses.
+
+### The finding, which explains all five at once
+
+**The samples have the right note count and are still much worse.** That was the entire
+premise of this line of work — the posterior knows there are ~14,000 notes, Viterbi emits
+0.38 of them — and it is true (1.02 of gold, against MAP+bias's 0.91) and it does not
+help. Getting the count right is not getting the notes right.
+
+So the posterior's mass is spread across many mediocre segmentations while its **mode is
+genuinely the good one**. Any rule that integrates over the distribution gets dragged
+toward the typical set; only maximisation finds the mode; and `note_bias` works because
+it moves the mode to the right granularity without integrating over anything. That is one
+explanation for five failures rather than five explanations, and it is what makes this a
+closed branch instead of a losing streak.
+
+It does not touch the diagnosis in the entry above, which stands: the collapse *was* the
+readout. It says the crude fix is the fix.
+
+**Still open, and unaffected:** max-margin training, which does not correct the readout
+but makes training and decoding the same operation — it optimises the argmax the decode
+actually uses. Costs a retrain, an L2 term (the hinge is satisfiable by inflating score
+scale, which `log Z` self-normalises against), a re-derived aux-term balance (a hinge is
+in score units, not nats/frame), and permanently loses probabilistic outputs — including
+the per-note confidence column and the `E[count]` diagnostic that found this bug.
+
 ## Future experiments
 
 ### Learned similarity for the span features (idea, 2026-08-04)
