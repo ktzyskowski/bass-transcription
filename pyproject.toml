@@ -30,6 +30,7 @@ dependencies = [
 [project.scripts]
 stemify-train = "stemify.training.cli:main"
 stemify-eval = "stemify.evaluation.cli:main"
+stemify-transcribe = "stemify.serving.cli:main"
 
 [build-system]
 requires = ["hatchling"]
