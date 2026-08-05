@@ -30,8 +30,8 @@ from typing import cast
 
 import torch
 
-from stemify.decoders.semicrf.constants import NEG
 from stemify.decoders.semicrf.evidence import Evidence
+from stemify.decoders.semicrf.semiring import LOG, Semiring
 from stemify.decoders.semicrf.spans import Grid, SpanScorer
 from stemify.decoders.semicrf.window import initial_window, push
 
@@ -88,8 +88,18 @@ def scan(
     captured: list[torch.Tensor | None] | None = None,
     start: int = 0,
     stop: int | None = None,
+    *,
+    semiring: Semiring = LOG,
+    bias: torch.Tensor | None = None,
+    witness: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """The forward recurrence from ``window``; returns the final alpha window.
+    """The segmental recurrence from ``window``; returns the final alpha window.
+
+    **The only loop over the recurrence.** ``semiring`` decides what the alternatives
+    at each step combine into -- ``LOG`` sums them into ``log Z``, ``MAX_PLUS`` keeps
+    the best -- and everything else here (candidate enumeration, the window slide, the
+    ragged readout, the context trimming) is identical either way. Viterbi used to carry
+    a second copy of this loop for the sake of one differing line.
 
     ``ends`` maps a step index to the batch rows whose track truly ends there; those
     rows' alpha are written into ``captured``. Only the whole-track path needs it -- a
@@ -100,6 +110,13 @@ def scan(
     accounted for by the incoming ``window``. ``stop`` ends the scan early -- its mirror
     image, trailing frames that exist so the *encoder's* receptive field does not see
     zero-padding at the chunk's right edge, and which the DP must not consume.
+
+    ``bias`` is added to every step's terms before the reduction, broadcast against
+    ``(B, dmax, 3, 2)``. ``witness`` is a ``(stop+1, B, 2)`` int64 table filled with the
+    index of each step's surviving alternative -- backpointers, for a caller that means
+    to reconstruct the path. Requesting one from a semiring that has no survivor to
+    point at is an error rather than a silent no-op, because the traceback that follows
+    would read zeros and return a plausible wrong segmentation.
     """
     if (ends is None) != (captured is None):
         raise ValueError(
@@ -109,10 +126,24 @@ def scan(
         )
     B = ev.B
     stop = ev.T if stop is None else stop
-    neg_col = ev.onset_logit.new_full((B, 1), NEG)
+    neg_col = ev.onset_logit.new_full((B, 1), semiring.zero)
     for j in range(start + 1, stop + 1):
         term = step_terms(scorer, ev, grid, window, j)
-        val = torch.logsumexp(term.reshape(B, -1, 2), dim=1)   # (B, 2)
+        if bias is not None:
+            term = term + bias
+        flat = term.reshape(B, -1, 2)
+        if witness is None:
+            val = semiring.reduce(flat, dim=1)                 # (B, 2)
+        else:
+            survivor = semiring.reduce_with_witness(flat, dim=1)
+            if survivor is None:
+                raise ValueError(
+                    f"{type(semiring).__name__} combines alternatives without keeping "
+                    "one, so it has no backpointer to record; a traceback over this "
+                    "semiring would read an all-zero table and return a wrong "
+                    "segmentation that looks like a right one"
+                )
+            val, witness[j] = survivor
         new = torch.cat([val, neg_col], dim=1)                 # (B, 3)
         if ends is not None and captured is not None:
             for b in ends.get(j, ()):

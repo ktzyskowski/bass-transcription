@@ -1,23 +1,23 @@
 """Segmental Viterbi: the single best segmentation.
 
-The same recurrence as ``forward`` -- literally the same ``step_terms`` -- reduced with
-``max`` instead of ``logsumexp``, plus backpointers to trace the argmax path.
+The *recurrence* is ``scan`` under the max-plus semiring -- not a second loop. What is
+left here is the half no semiring can supply: a semiring reduces alternatives to a
+score, and a score is not a path. Turning backpointers back into spans is Viterbi's own
+job, and it is the only thing in this file.
 
-The *reduction* stays separate rather than being folded into a shared semiring, because
-the two differ in cost rather than in logic. This one is ``no_grad`` (it is a decode,
-never an objective), keeps a backpointer table, reads an argmax back to the host every
-step, and ends in a Python traceback loop. Routing the forward pass through a common
-reducer would make it pay for an argmax it discards and give up the static shapes its
-CUDA-graph capture needs.
+That traceback stays a sequential Python loop because it is inherently one -- each
+step's segment start decides where the next lookup lands -- but it runs once per
+*segment*, not per frame, over CPU-resident data.
 """
 
 import torch
 
-from stemify.decoders.semicrf.constants import NEG, NOTE, REST, START
+from stemify.decoders.semicrf.constants import NOTE, REST, START
 from stemify.decoders.semicrf.evidence import Evidence
-from stemify.decoders.semicrf.forward import candidate_starts, step_terms
+from stemify.decoders.semicrf.forward import candidate_starts, scan
+from stemify.decoders.semicrf.semiring import MAX_PLUS
 from stemify.decoders.semicrf.spans import Grid, SpanScorer
-from stemify.decoders.semicrf.window import initial_window, push
+from stemify.decoders.semicrf.window import initial_window
 
 
 @torch.no_grad()
@@ -29,7 +29,7 @@ def viterbi(
     ``note_bias`` is added once per ``note`` span, so a segmentation with ``k`` notes
     is shifted by ``k * note_bias``. It exists because this reduction and the objective
     that trained the scorer disagree about what they are computing. Training minimises
-    ``log Z - score(gold)``, and ``log Z`` sums over *every* segmentation -- so it
+    ``log Z − score(gold)``, and ``log Z`` sums over *every* segmentation -- so it
     counts the combinatorially many ways to place ``k`` boundaries, and the scorer is
     fit knowing each individual fine segmentation must therefore score low to leave the
     right total mass on "``k`` notes". ``max`` sees one segmentation at a time. It feels
@@ -41,37 +41,28 @@ def viterbi(
     set, and a decode silently applying someone else's constant is worse than one that
     does not correct at all.
 
-    The backpointers accumulate as **one device tensor**, read back after the scan
-    rather than element by element inside it: converting an argmax to a Python ``int``
-    mid-loop is a device-to-host sync, and a sync drains the queue. A ``(T+1, 2)``
-    int64 table buys one transfer in place of O(T) of them, which is the whole reason
-    it is not a list of dicts.
+    ``no_grad`` because this is a decode, never an objective. Learning happens through
+    the *forward* semiring, which is differentiable; ``max`` has no useful gradient.
 
-    The traceback stays a sequential Python loop because it is inherently one -- each
-    step's segment start decides where the next lookup lands -- but it runs once per
-    *segment*, not per frame, over CPU-resident data.
+    Backpointers accumulate as **one device tensor**, read back after the scan rather
+    than element by element inside it: converting an argmax to a Python ``int`` mid-loop
+    is a device-to-host sync, and a sync drains the queue. A ``(T+1, B, 2)`` int64 table
+    buys one transfer in place of O(T) of them.
     """
     T = ev.lengths[0]
     if T == 0:
         return []
-    window = initial_window(ev.onset_logit, 1, grid.dmax)
-    last = window[:, -1]
-    back = ev.onset_logit.new_zeros((T + 1, 2), dtype=torch.long)
-    # Added to the *next-label* axis, so it lands once per span closed as a note and
-    # never on a rest. Built once, outside the scan.
     bias = ev.onset_logit.new_zeros(2)
     bias[NOTE] = note_bias
-    for j in range(1, T + 1):
-        term = step_terms(scorer, ev, grid, window, j)      # (1, dmax, 3, 2)
-        val, arg = (term + bias).reshape(-1, 2).max(dim=0)  # (2,), (2,)
-        back[j] = arg
-        # NEG rather than -inf: START is unreachable after position 0, and a finite
-        # sentinel cannot produce a NaN when it meets the potentials added to it.
-        last = torch.cat([val, val.new_full((1,), NEG)]).unsqueeze(0)
-        window = push(window, last)
+    back = ev.onset_logit.new_zeros((T + 1, ev.B, 2), dtype=torch.long)
+    window = scan(
+        scorer, ev, grid, initial_window(ev.onset_logit, ev.B, grid.dmax),
+        stop=T, semiring=MAX_PLUS, bias=bias, witness=back,
+    )
 
+    last = window[:, -1]
     label = int(torch.stack([last[0, NOTE], last[0, REST]]).argmax())
-    back = back.cpu()                                       # the one transfer
+    cpu_back = back[:, 0].cpu()                             # the one transfer
     cpu = torch.device("cpu")
     j, segs = T, []
     while j > 0:
@@ -79,10 +70,7 @@ def viterbi(
         # (window offset, previous label) -- and the offset maps back to a frame
         # through the *same* clamped start table the recurrence scored against,
         # rather than through a second copy of that arithmetic.
-        # `flat`, not `arg`: the forward loop above already binds `arg` to the batched
-        # argmax *tensor*, and reusing the name here for one scalar backpointer made
-        # two different things read as one.
-        flat = int(back[j, label])
+        flat = int(cpu_back[j, label])
         i = int(candidate_starts(grid, j, cpu)[flat // 3])
         prev = flat % 3
         segs.append((label, i, j))

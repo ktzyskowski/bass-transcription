@@ -19,8 +19,11 @@ from stemify.decoders.semicrf.constants import NOTE, REST, START
 from stemify.decoders.semicrf.forward import (
     chunk_log_partition,
     log_partitions,
+    scan,
 )
+from stemify.decoders.semicrf.semiring import MAX_PLUS
 from stemify.decoders.semicrf.spans import Grid
+from stemify.decoders.semicrf.window import initial_window
 from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
 from stemify.decoders.semicrf.evidence import Evidence, build_evidence
@@ -316,6 +319,45 @@ def test_viterbi_equals_brute_force_argmax():
         f"viterbi scored {got_score}, best possible {best_score}"
     )
     assert got == best, f"viterbi returned {got}, brute force says {best}"
+
+
+def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
+    """The merged loop, checked at the *scan* level rather than through the traceback.
+
+    `test_viterbi_equals_brute_force_argmax` above exercises the same path but can only
+    fail once backpointers are also wrong; this pins the reduction alone. Ground truth
+    is enumeration, not our other recurrence -- one loop now serves both semirings, so a
+    mistake in it would move `log Z` and Viterbi together and stay invisible to any test
+    that compares them to each other."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T, seed=1)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    best = max(
+        _score_by_loop(dec.scorer, e, s, grid).item()
+        for s in _all_segmentations(T, dmax)
+    )
+    window = scan(
+        dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax),
+        stop=T, semiring=MAX_PLUS,
+    )
+    got = float(window[0, -1, :2].max())
+    assert abs(got - best) < 1e-4, f"max-plus scan says {got}, enumeration says {best}"
+
+
+def test_asking_the_log_semiring_for_backpointers_is_refused():
+    """The silent version returns an all-zero table, and a traceback over zeros walks
+    a real-looking path that no reduction ever chose."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 6, 3
+    e = _random_emissions(T, seed=2)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+    with pytest.raises(ValueError, match="backpointer"):
+        scan(
+            dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax), stop=T,
+            witness=e.onset_logit.new_zeros((T + 1, 1, 2), dtype=torch.long),
+        )
 
 
 # --------------------------------------------------------------------------- #
