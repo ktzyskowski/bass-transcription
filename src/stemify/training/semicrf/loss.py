@@ -35,15 +35,11 @@ from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
 from stemify.decoders.semicrf.window import initial_window
-from stemify.models.heads import frame_bce, pitch_ce
 from stemify.training.base import Loss
 from stemify.training.semicrf.dataset import ChunkBatch
+from stemify.training.semicrf.terms import AUX_TERMS
 
-# Which per-frame loss each auxiliary head is scored with. A table rather than an
-# if-chain so that "is there a term for this head?" and "which one?" are the same
-# lookup -- the constructor validates against exactly the keys `_aux_term` dispatches
-# on, so a head can never be declared, accepted, and then silently not scored.
-AUX_TERMS = {"pitch": "categorical", "onset": "binary", "voicing": "binary"}
+
 
 _SCALARS_MAX = 32
 """Entries above which ``scalars`` summarises a potential instead of naming each one.
@@ -124,6 +120,31 @@ class SemiCRFLoss(Loss[ChunkBatch]):
                 "is a setting that silently does nothing -- the failure this file's "
                 "`aux_heads` docstring exists to refuse."
             )
+        # The same refusal for `pos_weight`, which had none at all -- it was stored and
+        # read only where a binary term happened to look for it, so a weight naming an
+        # unknown head, a categorical term, or a head this run does not score was
+        # accepted and did nothing. Three different mistakes, one silent outcome. Each
+        # is now answerable because a term declares whether a class weight means
+        # anything to it, instead of the caller comparing against the string "pitch".
+        for head in sorted(self.pos_weight):
+            term = AUX_TERMS.get(head)
+            if term is None:
+                raise ValueError(
+                    f"pos_weight names {head!r}, which has no auxiliary term; have "
+                    f"{sorted(AUX_TERMS)}"
+                )
+            if not term.takes_pos_weight:
+                raise ValueError(
+                    f"pos_weight names {head!r}, scored by "
+                    f"{type(term).__name__}, which has no positive class to weight. "
+                    "Scale the whole term instead (aux_weights)."
+                )
+            if head not in self.aux_heads:
+                raise ValueError(
+                    f"pos_weight names {head!r}, which this run does not score "
+                    f"(aux_heads {sorted(self.aux_heads)}), so the weight would be "
+                    "carried into the checkpoint and never applied."
+                )
         # stream id -> (alpha window, cumulative A) at that stream's current position.
         # Resumption state; a gradient path only when detach_carry is False.
         self._carry: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -309,9 +330,9 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         logits = out[head]
         lo, hi = self.scored_slice(batch, logits.shape[1])
         target = batch.y[head][:, lo:hi].to(device)
-        if AUX_TERMS[head] == "categorical":
-            return pitch_ce(logits[:, lo:hi], target)
-        return frame_bce(logits[:, lo:hi], target, self.pos_weight.get(head))
+        return AUX_TERMS[head](
+            logits[:, lo:hi], target, self.pos_weight.get(head)
+        )
 
     def scored_slice(self, batch: ChunkBatch, frames: int) -> tuple[int, int]:
         """The feature-frame half-open range the NLL actually scores.

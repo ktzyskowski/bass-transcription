@@ -24,6 +24,7 @@ from stemify.training.semicrf.recipe import (
     PITCH_WEIGHT,
     VOICING_WEIGHT,
 )
+from stemify.training.semicrf.terms import AUX_TERMS
 from stemify.training.train import train
 
 
@@ -195,13 +196,21 @@ def main() -> None:
         # voicing terms are the *same* BCE the frame path runs, so the same imbalance
         # applies and the same knob corrects it.
         if args.pos_weight:
+            # Asked of the term rather than compared against the string "pitch". That
+            # comparison was a second copy of a fact `AUX_TERMS` already holds, and it
+            # would keep passing for a *second* categorical head while doing nothing.
+            # `SemiCRFLoss` repeats the check -- a CLI is not the only caller -- but
+            # raising here is the difference between a usage error and a traceback.
             weights = _parse_pos_weight(args.pos_weight)
-            binary = [h for h in weights if h != "pitch"]
-            if len(binary) != len(weights):
+            unweightable = sorted(
+                h for h in weights
+                if h in AUX_TERMS and not AUX_TERMS[h].takes_pos_weight
+            )
+            if unweightable:
                 raise SystemExit(
-                    "--pos-weight is a *binary* class weight; 'pitch' is a categorical "
-                    "cross-entropy over CQT bins and has no positive class. Use "
-                    "--pitch-weight to scale that term."
+                    f"--pos-weight is a *binary* class weight, and {unweightable} "
+                    "is scored by a categorical cross-entropy over CQT bins, which "
+                    "has no positive class. Use --pitch-weight to scale that term."
                 )
             strategy_kwargs["pos_weight"] = weights
         if args.pitch_weight is not None:
