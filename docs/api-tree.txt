@@ -1,0 +1,644 @@
+
+src/stemify/
+├── __init__.py
+├── atomic.py
+│   └─ atomic_write()
+├── cache.py
+│   ├─ content_key()
+│   └─ Cache
+│      ├─ __init__()
+│      ├─ __repr__()
+│      ├─ @features_dir()
+│      ├─ @contours_dir()
+│      ├─ @transforms_dir()
+│      ├─ separator()
+│      ├─ feature_path()
+│      ├─ ensure_features()
+│      └─ contour()
+├── contour.py
+│   └─ Contour
+│      ├─ __post_init__()
+│      ├─ __len__()
+│      ├─ @voiced()
+│      ├─ @is_silent()
+│      ├─ empty()  [cls]
+│      └─ constant()  [cls]
+├── cues.py
+│   └─ Cues
+│      └─ __post_init__()
+├── device.py
+│   └─ best_device()
+├── features.py
+│   ├─ load_audio()
+│   ├─ cqt()
+│   ├─ harmonic_shifts()
+│   ├─ midi_to_bin()
+│   ├─ frame_times_for()
+│   ├─ FrameFeatures
+│   ├─ stack_channels()
+│   └─ extract_features()
+├── grids.py
+│   ├─ nearest_frame()
+│   └─ resample_mask()
+├── notes.py
+│   └─ NoteEvent
+├── parallel.py
+│   └─ parallel_map()
+├── serde.py
+│   ├─ _write_npy()
+│   ├─ write_npz()
+│   ├─ features_npy()
+│   ├─ CachedItem
+│   │  ├─ save()
+│   │  └─ load()  [cls]
+│   ├─ migrate_example_cache()
+│   ├─ save_contour()
+│   └─ load_contour()
+├── sources.py
+│   └─ Sources
+│      └─ role()
+├── transcriber.py
+│   └─ Transcriber
+│      ├─ __init__()
+│      ├─ @name()
+│      └─ transcribe()
+├── transforms.py
+│   ├─ AudioTransform (ABC)
+│   │  ├─ __init__()
+│   │  ├─ @*name()
+│   │  ├─ *_run()
+│   │  ├─ cache_path()
+│   │  └─ apply()
+│   ├─ Identity (AudioTransform)
+│   │  ├─ @name()
+│   │  ├─ _run()
+│   │  ├─ cache_path()
+│   │  └─ apply()
+│   └─ DemucsSeparator (AudioTransform)
+│      ├─ __init__()
+│      ├─ @name()
+│      ├─ _load()
+│      └─ _run()
+├── data/
+│   ├── __init__.py
+│   ├── base.py
+│   │   ├─ EvalItem (ABC)
+│   │   │  ├─ @*name()
+│   │   │  ├─ *audio()
+│   │   │  ├─ sources()
+│   │   │  ├─ *reference()
+│   │   │  ├─ reference_notes()
+│   │   │  └─ @groups()
+│   │   └─ Dataset (ABC)
+│   │      ├─ @*name()
+│   │      ├─ *__iter__()
+│   │      └─ *__len__()
+│   ├── idmt_smt_bass.py
+│   │   ├─ Note (EvalItem)
+│   │   │  ├─ @name()
+│   │   │  ├─ audio()
+│   │   │  ├─ @groups()
+│   │   │  ├─ @expression_parent()
+│   │   │  ├─ @midi_pitch()
+│   │   │  └─ reference()
+│   │   ├─ parse_filename()
+│   │   ├─ index()
+│   │   └─ IdmtDataset (Dataset)
+│   │      ├─ __init__()
+│   │      ├─ @name()
+│   │      ├─ __iter__()
+│   │      └─ __len__()
+│   ├── mdb_bass_synth.py
+│   │   ├─ Track (EvalItem)
+│   │   │  ├─ @name()
+│   │   │  ├─ @groups()
+│   │   │  ├─ audio()
+│   │   │  ├─ reference()
+│   │   │  └─ duration()
+│   │   ├─ index()
+│   │   └─ MdbDataset (Dataset)
+│   │      ├─ __init__()
+│   │      ├─ @name()
+│   │      ├─ __iter__()
+│   │      └─ __len__()
+│   └── slakh/
+│       ├── __init__.py
+│       ├── dataset.py
+│       │   └─ SlakhDataset (Dataset)
+│       │      ├─ __init__()
+│       │      ├─ @name()
+│       │      ├─ __iter__()
+│       │      └─ __len__()
+│       ├── index.py
+│       │   ├─ resolve_root()
+│       │   ├─ read_metadata()
+│       │   ├─ bass_stem_ids()
+│       │   ├─ _bass_stems()
+│       │   └─ index()
+│       └── item.py
+│           └─ BassStem (EvalItem)
+│              ├─ @name()
+│              ├─ @groups()
+│              ├─ @unambiguous()
+│              ├─ audio()
+│              ├─ sources()
+│              ├─ @_notes()
+│              ├─ reference()
+│              ├─ reference_notes()
+│              └─ polyphony_rate()
+├── decoders/
+│   ├── __init__.py
+│   ├── base.py
+│   │   └─ Decoder (ABC)
+│   │      ├─ *decode()
+│   │      └─ decode_batch()
+│   ├── greedy.py
+│   │   ├─ onset_times_from_probs()
+│   │   ├─ group_contour()
+│   │   ├─ _merge_same_pitch()
+│   │   └─ GreedyDecoder (Decoder)
+│   │      ├─ __init__()
+│   │      └─ decode()
+│   └── semicrf/
+│       ├── __init__.py
+│       ├── constants.py
+│       ├── cumsums.py
+│       │   ├─ voiced_logcumsum()
+│       │   └─ pitch_cumsums()
+│       ├── decoder.py
+│       │   └─ SemiCRFDecoder (Decoder, Module)
+│       │      ├─ __init__()
+│       │      ├─ @device()
+│       │      ├─ _prepare()
+│       │      ├─ nll()
+│       │      ├─ nll_batch()
+│       │      ├─ nll_chunk()
+│       │      ├─ decode()
+│       │      └─ _segs_to_notes()
+│       ├── evidence.py
+│       │   ├─ Evidence
+│       │   │  ├─ __post_init__()
+│       │   │  ├─ @B()
+│       │   │  ├─ @T()
+│       │   │  ├─ @device()
+│       │   │  ├─ one()
+│       │   │  ├─ onset_at()
+│       │   │  ├─ voiced_mass()
+│       │   │  ├─ rest_mass()
+│       │   │  ├─ _zeros_like_span()
+│       │   │  ├─ path_length()
+│       │   │  ├─ mean_entropy()
+│       │   │  ├─ pitch_mean()
+│       │   │  └─ pitch_spread()
+│       │   ├─ _track_tensors()
+│       │   └─ build_evidence()
+│       ├── forward.py
+│       │   ├─ candidate_starts()
+│       │   ├─ step_terms()
+│       │   ├─ scan()
+│       │   ├─ log_partitions()
+│       │   └─ chunk_log_partition()
+│       ├── gold.py
+│       │   └─ gold_segments()
+│       ├── marginals.py
+│       │   ├─ span_marginals()
+│       │   └─ segment_confidence()
+│       ├── score.py
+│       │   ├─ _prev_labels()
+│       │   ├─ segmentation_scores()
+│       │   └─ segmentation_score()
+│       ├── semiring.py
+│       │   ├─ Semiring (Protocol)
+│       │   │  ├─ reduce()
+│       │   │  └─ reduce_with_witness()
+│       │   ├─ _Log
+│       │   │  ├─ reduce()
+│       │   │  └─ reduce_with_witness()
+│       │   └─ _MaxPlus
+│       │      ├─ reduce()
+│       │      └─ reduce_with_witness()
+│       ├── spans.py
+│       │   ├─ Grid
+│       │   ├─ SpanScorer (Module, ABC)
+│       │   │  ├─ *unary()
+│       │   │  ├─ *transitions()
+│       │   │  └─ *grid()
+│       │   └─ LinearSpanScorer (SpanScorer)
+│       │      ├─ __init__()
+│       │      ├─ @dur_edges()
+│       │      ├─ grid()
+│       │      ├─ transitions()
+│       │      └─ unary()
+│       ├── tensor_cues.py
+│       │   ├─ check_one_device()
+│       │   ├─ on_device()
+│       │   ├─ cues_device()
+│       │   └─ TensorCues
+│       │      └─ from_logits()  [cls]
+│       ├── viterbi.py
+│       │   └─ viterbi()
+│       └── window.py
+│           ├─ initial_window()
+│           └─ push()
+├── encoders/
+│   ├── __init__.py
+│   ├── base.py
+│   │   └─ Encoder (ABC)
+│   │      └─ *encode()
+│   ├── classical.py
+│   │   ├─ detect_onsets()
+│   │   └─ ClassicalEncoder (Encoder)
+│   │      ├─ __init__()
+│   │      └─ encode()
+│   └── learned.py
+│       └─ LearnedEncoder (Encoder)
+│          ├─ __init__()
+│          ├─ @has_pitch_head()
+│          ├─ @pitch_source()
+│          ├─ @in_channels()
+│          ├─ _forward()
+│          ├─ encode()
+│          ├─ encode_features()
+│          └─ contour_from()
+├── evaluation/
+│   ├── __init__.py
+│   ├── alignment.py
+│   │   └─ align()
+│   ├── cli.py
+│   │   ├─ build_encoder()
+│   │   ├─ build_decoder()
+│   │   ├─ build_dataset()
+│   │   └─ main()
+│   ├── cues.py
+│   │   ├─ aligned_pairs()
+│   │   ├─ CuesReport (Report)
+│   │   │  ├─ scalar()
+│   │   │  ├─ to_dict()
+│   │   │  └─ render()
+│   │   └─ CuesEvaluation
+│   │      ├─ __init__()
+│   │      ├─ _channels()
+│   │      └─ run()
+│   ├── note.py
+│   │   ├─ _per_item_prf()
+│   │   ├─ NoteReport (Report)
+│   │   │  ├─ scalar()
+│   │   │  ├─ to_dict()
+│   │   │  └─ render()
+│   │   └─ NoteEvaluation
+│   │      ├─ __init__()
+│   │      ├─ _estimate_notes()
+│   │      └─ run()
+│   └── report.py
+│       ├─ jsonable()
+│       └─ Report (ABC)
+│          ├─ *render()
+│          ├─ *to_dict()
+│          └─ write_json()
+├── metrics/
+│   ├── __init__.py
+│   ├── base.py
+│   │   └─ MetricResult
+│   │      └─ render()
+│   ├── frame/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   │   └─ FrameMetric (ABC)
+│   │   │      ├─ *compute()
+│   │   │      └─ _check()
+│   │   ├── confusion.py
+│   │   │   ├─ ConfusionResult (MetricResult)
+│   │   │   │  └─ render()
+│   │   │   └─ PitchConfusion (FrameMetric)
+│   │   │      ├─ __init__()
+│   │   │      └─ compute()
+│   │   ├── onset.py
+│   │   │   ├─ OnsetPR (FrameMetric)
+│   │   │   │  └─ compute()
+│   │   │   └─ _best_f1_threshold()
+│   │   ├── pitch.py
+│   │   │   ├─ PitchAccuracyResult (MetricResult)
+│   │   │   │  └─ render()
+│   │   │   └─ PitchAccuracy (FrameMetric)
+│   │   │      ├─ __init__()
+│   │   │      ├─ compute()
+│   │   │      └─ _median_chroma_cents()
+│   │   ├── scoring.py
+│   │   │   ├─ AlignedPairs
+│   │   │   ├─ _pool()
+│   │   │   └─ score_cues()
+│   │   └── voicing.py
+│   │       ├─ VoicingAUROC (FrameMetric)
+│   │       │  └─ compute()
+│   │       └─ _best_f1_threshold()
+│   └── note/
+│       ├── __init__.py
+│       ├── base.py
+│       │   ├─ _to_arrays()
+│       │   ├─ matched_pairs()
+│       │   ├─ count_matches()
+│       │   └─ NoteMetric (ABC)
+│       │      ├─ __init__()
+│       │      └─ *compute()
+│       ├── fragmentation.py
+│       │   ├─ FragmentationResult (MetricResult)
+│       │   │  └─ render()
+│       │   └─ Fragmentation (NoteMetric)
+│       │      └─ compute()
+│       ├── prf.py
+│       │   ├─ prf_rates()
+│       │   ├─ PRFResult (MetricResult)
+│       │   │  └─ render()
+│       │   └─ PRF (NoteMetric)
+│       │      └─ compute()
+│       └── scoring.py
+│           └─ score_notes()
+├── models/
+│   ├── __init__.py
+│   ├── cuenet.py
+│   │   └─ CueNet (Module)
+│   │      ├─ __init__()
+│   │      ├─ @in_channels()
+│   │      └─ forward()
+│   ├── networks.py
+│   │   ├─ _ConvFrontend (Module)
+│   │   │  ├─ __init__()
+│   │   │  ├─ stack()
+│   │   │  ├─ conv_features()
+│   │   │  └─ forward()
+│   │   ├─ tcn_receptive_field()
+│   │   ├─ _TCNBlock (Module)
+│   │   │  ├─ __init__()
+│   │   │  └─ forward()
+│   │   └─ TCN (Module)
+│   │      ├─ __init__()
+│   │      ├─ @receptive_field()
+│   │      ├─ _temporal()
+│   │      ├─ forward()
+│   │      └─ frequency_and_frame()
+│   └── heads/
+│       ├── __init__.py
+│       ├── frame.py
+│       │   ├─ FrameHead (Module)
+│       │   │  ├─ __init__()
+│       │   │  └─ forward()
+│       │   ├─ onset_head()
+│       │   ├─ voicing_head()
+│       │   └─ frame_bce()
+│       └── pitch.py
+│           ├─ FrequencyHead (Module)
+│           │  ├─ __init__()
+│           │  └─ forward()
+│           ├─ two_hot()
+│           ├─ pitch_ce()
+│           ├─ decode_bins()
+│           ├─ decode_contour()
+│           ├─ pitch_head()
+│           └─ bin_of()
+├── pitch/
+│   ├── __init__.py
+│   ├── base.py
+│   │   └─ PitchEstimator (ABC)
+│   │      └─ *estimate()
+│   ├── neural.py
+│   │   └─ NeuralPitch (PitchEstimator)
+│   │      ├─ __init__()
+│   │      └─ estimate()
+│   └── pyin.py
+│       └─ PyinPitch (PitchEstimator)
+│          ├─ __init__()
+│          └─ estimate()
+├── serving/
+│   ├── __init__.py
+│   ├── audio.py
+│   │   └─ sources_from()
+│   ├── cli.py
+│   │   ├─ transcribe()
+│   │   └─ main()
+│   └── export.py
+│       ├─ note_name()
+│       ├─ notes_csv()
+│       ├─ render()
+│       └─ preview_wav()
+└── training/
+    ├── __init__.py
+    ├── base.py
+    │   ├─ config_field()
+    │   ├─ config_str_list()
+    │   ├─ config_int_list()
+    │   ├─ epoch_batches()
+    │   ├─ Batch (Protocol)
+    │   │  └─ __len__()
+    │   ├─ Loss (ABC, Generic)
+    │   │  ├─ *compute()
+    │   │  ├─ parameters()
+    │   │  ├─ scalars()
+    │   │  ├─ state_dict()
+    │   │  ├─ load_state_dict()
+    │   │  └─ to()
+    │   └─ Recipe (ABC)
+    │      ├─ __init__()
+    │      ├─ @heads()
+    │      ├─ @config()
+    │      ├─ *from_config()  [cls]
+    │      ├─ @params()
+    │      ├─ *build_model()
+    │      ├─ *build_loss()
+    │      ├─ *train_loader()
+    │      ├─ *val_loader()
+    │      └─ *decoder_from()
+    ├── checkpoint.py
+    │   ├─ Checkpoint
+    │   │  ├─ save()
+    │   │  ├─ load()  [cls]
+    │   │  ├─ _from_v1()  [cls]
+    │   │  ├─ model()
+    │   │  ├─ decoder()
+    │   │  ├─ encoder()
+    │   │  └─ transcriber()
+    │   └─ load_cuenet()
+    ├── cli.py
+    │   ├─ _parse_pos_weight()
+    │   ├─ _parse_harmonics()
+    │   └─ main()
+    ├── condition_types.py
+    │   ├─ Channel
+    │   │  └─ audio()
+    │   └─ Condition
+    │      ├─ @in_channels()
+    │      ├─ @primary()
+    │      ├─ @unambiguous_only()
+    │      ├─ dataset()
+    │      └─ channel_paths()
+    ├── conditions.py
+    │   ├─ _mono()
+    │   ├─ canonical()
+    │   └─ resolve()
+    ├── config.py
+    │   └─ TrainConfig
+    ├── ema.py
+    │   └─ EMA
+    │      ├─ __init__()
+    │      └─ update()
+    ├── examples.py
+    │   ├─ build_example()
+    │   ├─ prepare_examples()
+    │   ├─ ensure_targets()
+    │   └─ _ensure_targets()
+    ├── labels.py
+    │   ├─ onset_targets()
+    │   ├─ voicing_targets()
+    │   └─ pitch_targets()
+    ├── recipes.py
+    ├── train.py
+    │   └─ train()
+    ├── trainer.py
+    │   ├─ History
+    │   ├─ _nonfinite()
+    │   └─ Trainer (Generic)
+    │      ├─ __init__()
+    │      ├─ _clip()
+    │      ├─ _step()
+    │      ├─ _require_finite()
+    │      ├─ _monitored()
+    │      ├─ _run_epoch()
+    │      ├─ fit()
+    │      ├─ state_cpu()
+    │      └─ load_state()
+    ├── validation.py
+    │   ├─ ValItem
+    │   │  └─ load_features()
+    │   ├─ score_examples()
+    │   ├─ score_cues_examples()
+    │   ├─ CheckpointValidator
+    │   │  ├─ __init__()
+    │   │  ├─ score()
+    │   │  └─ score_cues()
+    │   ├─ build_validators()
+    │   └─ build_eval_fn()
+    ├── callbacks/
+    │   ├── __init__.py
+    │   ├── async_validation.py
+    │   │   └─ AsyncValidationCallback (Callback)
+    │   │      ├─ __init__()
+    │   │      ├─ _deliver()
+    │   │      ├─ _check_delivery()
+    │   │      ├─ on_epoch_end()
+    │   │      └─ on_train_end()
+    │   ├── base.py
+    │   │   ├─ EpochLogs
+    │   │   └─ Callback
+    │   │      ├─ on_batch_end()
+    │   │      ├─ on_epoch_end()
+    │   │      └─ on_train_end()
+    │   ├── checkpoint.py
+    │   │   ├─ BestCheckpointCallback (Callback)
+    │   │   │  ├─ __init__()
+    │   │   │  └─ on_epoch_end()
+    │   │   └─ EveryEpochCheckpointCallback (Callback)
+    │   │      ├─ __init__()
+    │   │      └─ on_epoch_end()
+    │   ├── console.py
+    │   │   └─ ConsoleCallback (Callback)
+    │   │      ├─ on_epoch_end()
+    │   │      └─ on_train_end()
+    │   └── mlflow.py
+    │       ├─ _metric_key()
+    │       └─ MLflowCallback (Callback)
+    │          ├─ __init__()
+    │          ├─ sink()
+    │          ├─ on_batch_end()
+    │          ├─ log_artifact()
+    │          ├─ on_epoch_end()
+    │          └─ on_train_end()
+    ├── frame/
+    │   ├── __init__.py
+    │   ├── dataset.py
+    │   │   ├─ FrameWindowDataset (Dataset)
+    │   │   │  ├─ __init__()
+    │   │   │  ├─ __len__()
+    │   │   │  ├─ _examples()
+    │   │   │  └─ __getitem__()
+    │   │   ├─ FrameBatch
+    │   │   │  └─ __len__()
+    │   │   └─ collate()
+    │   ├── loss.py
+    │   │   └─ FrameBCELoss (Loss)
+    │   │      ├─ __init__()
+    │   │      └─ compute()
+    │   └── recipe.py
+    │       └─ FrameRecipe (Recipe)
+    │          ├─ __init__()
+    │          ├─ @heads()
+    │          ├─ @config()
+    │          ├─ from_config()  [cls]
+    │          ├─ @params()
+    │          ├─ build_model()
+    │          ├─ build_loss()
+    │          ├─ _windows()
+    │          ├─ _tracks()
+    │          ├─ _loader()
+    │          ├─ train_loader()
+    │          ├─ val_loader()
+    │          └─ decoder_from()
+    └── semicrf/
+        ├── __init__.py
+        ├── dataset.py
+        │   ├─ Chunk
+        │   ├─ ChunkBatch
+        │   │  └─ __len__()
+        │   ├─ collate()
+        │   ├─ _Track
+        │   │  ├─ __init__()
+        │   │  └─ __getitem__()
+        │   └─ ChunkDataset (IterableDataset)
+        │      ├─ __init__()
+        │      ├─ _shard()
+        │      └─ __iter__()
+        ├── loss.py
+        │   └─ SemiCRFLoss (Loss)
+        │      ├─ __init__()
+        │      ├─ parameters()
+        │      ├─ scalars()
+        │      ├─ state_dict()
+        │      ├─ load_state_dict()
+        │      ├─ to()
+        │      ├─ _resume()
+        │      ├─ compute()
+        │      ├─ _aux_term()
+        │      ├─ scored_slice()
+        │      └─ scored_frames()
+        ├── recipe.py
+        │   ├─ _config_weights()
+        │   └─ SemiCRFRecipe (Recipe)
+        │      ├─ __init__()
+        │      ├─ @heads()
+        │      ├─ _serialisable_scorer()
+        │      ├─ @config()
+        │      ├─ from_config()  [cls]
+        │      ├─ @aux_heads()
+        │      ├─ @params()
+        │      ├─ build_model()
+        │      ├─ build_loss()
+        │      ├─ @_geometry()
+        │      ├─ _chunks()
+        │      ├─ _loader()
+        │      ├─ train_loader()
+        │      ├─ val_loader()
+        │      └─ decoder_from()
+        ├── terms.py
+        │   ├─ AuxTerm (ABC)
+        │   │  └─ *__call__()
+        │   ├─ BinaryTerm (AuxTerm)
+        │   │  └─ __call__()
+        │   └─ CategoricalTerm (AuxTerm)
+        │      └─ __call__()
+        └── tracks.py
+            ├─ TrainItem
+            │  └─ open()
+            ├─ channel_window()
+            ├─ target_windows()
+            └─ train_items()
+
+94 classes (304 methods), 117 module-level functions
+legend: (Base) inherits   @ property   * abstract   [cls]/[static]
