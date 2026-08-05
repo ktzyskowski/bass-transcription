@@ -260,6 +260,7 @@ def build_validators(
     val_limit: int,
     conditions: list[str],
     cache: Cache | None = None,
+    split: str = "validation",
 ) -> dict[str, CheckpointValidator]:
     """One ``CheckpointValidator`` per condition, keyed by tag. A condition names the
     channels the model reads -- exactly what a validator has to reproduce -- so the
@@ -281,7 +282,7 @@ def build_validators(
     pointless on a given machine."""
     return {
         tag: CheckpointValidator(
-            CONDITIONS[tag].dataset(root, "validation", val_limit),
+            CONDITIONS[tag].dataset(root, split, val_limit),
             CONDITIONS[tag],
             cache=cache,
         )

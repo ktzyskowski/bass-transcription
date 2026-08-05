@@ -167,7 +167,10 @@ class SemiCRFDecoder(Decoder, nn.Module):
         )
         return self._segs_to_notes(segs, ev, confidence)
 
-    def decode_marginal(self, cues: Cues) -> list[NoteEvent]:
+    def decode_marginal(
+        self, cues: Cues, aggregate: str = "boundary", tau: float = 0.5,
+        tol_frames: int = 0,
+    ) -> list[NoteEvent]:
         """The notes implied by ``cues``, decoded from **span posteriors** rather than
         from potentials -- maximum expected accuracy instead of maximum a posteriori.
 
@@ -184,7 +187,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         ev, grid = self._prepare([cues])
         if ev.lengths[0] == 0:
             return []
-        posterior = marginal_scorer(self.scorer, ev, grid)
+        posterior = marginal_scorer(self.scorer, ev, grid, aggregate, tau, tol_frames)
         return self._segs_to_notes(viterbi(posterior, ev, grid), ev)
 
     def _segs_to_notes(

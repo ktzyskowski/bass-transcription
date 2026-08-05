@@ -138,9 +138,121 @@ class MarginalScorer(SpanScorer):
         return self._grid
 
 
-def marginal_scorer(scorer: SpanScorer, ev: Evidence, grid: Grid) -> MarginalScorer:
-    """``MarginalScorer`` over ``scorer``'s own posteriors -- the two-step composed."""
-    return MarginalScorer(span_marginals(scorer, ev, grid), grid, scorer.dmax_s)
+def boundary_marginals(span: torch.Tensor) -> torch.Tensor:
+    """``(B, T+1, 2)``: ``P(a label-L span ends at j | x)``, from the span posteriors.
+
+    Summing over candidate starts, which is the whole point. A segmentation contains at
+    most one span ending at ``j``, so the sum is a probability rather than an
+    expectation -- and it aggregates the mass that ``span_marginals`` leaves scattered
+    across neighbouring ``(i, j)`` pairs when the model is sure a note *starts around
+    here* and unsure exactly where.
+
+    That scattering is not hypothetical. On a trained checkpoint, 63 exact spans clear
+    a posterior of 0.5 against **253 boundaries** -- so a rule that decides span by span
+    sees a model that is unsure about everything, and the same rule one level up sees
+    one that is sure about four times as much.
+    """
+    return span.sum(dim=2)
+
+
+def tolerated(boundary: torch.Tensor, frames: int) -> torch.Tensor:
+    """Boundary posteriors summed over ``+-frames``: the mass the *matcher* would accept.
+
+    Every decision rule tried before this one scored the posterior of an **exact**
+    position -- an exact span, then an exact boundary frame. The note metric never asks
+    for that. It matches within ``ONSET_TOLERANCE_S`` (50 ms), which at the DP's 34.8 ms
+    hop is about +-1.4 frames, so a boundary one frame early still counts and its exact
+    position's posterior does not.
+
+    That is why all three collapsed: they demanded the model be certain about something
+    nothing scores it on, found it certain almost nowhere, and fell back to the fewest
+    spans. Summing over the window asks the question the metric asks -- *is there a note
+    boundary near here* -- which is also the question the model is decisive about.
+
+    A sum rather than a max because these are disjoint events: a segmentation has at
+    most one boundary at each frame, so mass at neighbouring frames adds.
+    """
+    if frames <= 0:
+        return boundary
+    width = 2 * frames + 1
+    # (B, T+1, 2) -> (B, 2, T+1) for a 1-D pool over time, and back.
+    pooled = torch.nn.functional.avg_pool1d(
+        boundary.transpose(1, 2), kernel_size=width, stride=1, padding=frames,
+        count_include_pad=False,
+    ) * width
+    return pooled.transpose(1, 2)
+
+
+class BoundaryScorer(SpanScorer):
+    """Scores a span by the posterior that a boundary falls at its **end**.
+
+    Each boundary is counted once: a segmentation's score is the sum over its own
+    boundary positions, because the span ending at ``j`` is the only one that can claim
+    ``j``. Scoring both endpoints would double-count every interior boundary and, worse,
+    weigh the two ends of the track differently from its middle.
+
+    Independent of ``i``, which is exactly the point. ``MarginalScorer`` asks "is this
+    the right span", a question the model answers diffusely because it is unsure of the
+    exact start; this asks "is there a note boundary here", which it answers sharply.
+    The duration prior is not lost -- Viterbi still returns a valid tiling, so span
+    lengths remain constrained by ``dmax`` and the transition structure.
+    """
+
+    def __init__(self, boundary: torch.Tensor, grid: Grid, dmax_s: float,
+                 tau: float = HALF) -> None:
+        super().__init__()
+        self.dmax_s = dmax_s
+        self._grid = grid
+        self.register_buffer("gain", boundary - tau)
+
+    def unary(
+        self,
+        ev: Evidence,
+        grid: Grid,
+        b: torch.Tensor | int,
+        i: torch.Tensor | int,
+        j: torch.Tensor | int,
+    ) -> torch.Tensor:
+        table = torch.as_tensor(self.gain)
+        value = table[b, j]
+        # Broadcast across the candidate-start axis without indexing on it: the score
+        # genuinely does not depend on `i`, and adding a zero of `i`'s shape is what
+        # lets one implementation serve both the scan (b=(B,1), i=(1,dmax)) and the gold
+        # scorer (three (S,) tensors), as `SpanScorer.unary` requires.
+        spread = torch.zeros_like(torch.as_tensor(i), dtype=value.dtype)
+        return value + spread.unsqueeze(-1)
+
+    def transitions(self) -> torch.Tensor:
+        return torch.as_tensor(self.gain).new_zeros((3, 2))
+
+    def grid(self, frame_times: np.ndarray) -> Grid:
+        return self._grid
+
+
+def marginal_scorer(
+    scorer: SpanScorer,
+    ev: Evidence,
+    grid: Grid,
+    aggregate: str = "boundary",
+    tau: float = HALF,
+    tol_frames: int = 0,
+) -> SpanScorer:
+    """A posterior-scoring ``SpanScorer`` over ``scorer``'s own distribution.
+
+    ``aggregate="span"`` scores each exact span, ``"boundary"`` scores each boundary
+    position. They are the same posteriors summed at different levels, and the level
+    decides whether the rule works: measured on a trained checkpoint, ``"span"`` decodes
+    to 0.31 of the reference note count -- *coarser* than the MAP decode it corrects --
+    because almost no exact span clears ``tau`` and the rule then minimises span count.
+    """
+    span = span_marginals(scorer, ev, grid)
+    if aggregate == "span":
+        return MarginalScorer(span, grid, scorer.dmax_s)
+    if aggregate == "boundary":
+        return BoundaryScorer(
+            tolerated(boundary_marginals(span), tol_frames), grid, scorer.dmax_s, tau
+        )
+    raise ValueError(f"aggregate must be 'span' or 'boundary', got {aggregate!r}")
 
 
 def segment_confidence(

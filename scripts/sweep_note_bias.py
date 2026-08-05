@@ -58,7 +58,8 @@ DECODE_DEVICE = "cpu"
 
 def sweep(
     checkpoint: Path, root: str, cache_dir: str, conditions: list[str],
-    limit: int, biases: list[float], marginal: bool = False,
+    limit: int, biases: list[float], marginal: str = "",
+    tau: float = 0.5, split: str = "validation", tol_frames: int = 0,
 ) -> None:
     ck = Checkpoint.load(checkpoint)
     model = ck.recipe.build_model()
@@ -69,7 +70,7 @@ def sweep(
     print(f"{checkpoint}  pitch_source={encoder.pitch_source}  "
           f"encode={ENCODE_DEVICE} decode={DECODE_DEVICE}")
 
-    validators = build_validators(root, limit, conditions, cache=Cache(cache_dir))
+    validators = build_validators(root, limit, conditions, cache=Cache(cache_dir), split=split)
     for tag, validator in validators.items():
         examples = validator.examples
         refs = [ex.notes for ex in examples]
@@ -90,13 +91,14 @@ def sweep(
         for bias in [*biases, *([None] if marginal else [])]:
             t0 = time.perf_counter()
             ests = (
-                [decoder.decode_marginal(c) for c in cues] if bias is None
+                [decoder.decode_marginal(c, marginal, tau, tol_frames) for c in cues]
+                if bias is None
                 else [decoder.decode(c, note_bias=bias) for c in cues]
             )
             scalars = {r.name: r.scalars for r in score_notes(refs, ests)}
             prf, frag = scalars["note-prf"], scalars["fragmentation"]
             emitted = sum(len(e) for e in ests)
-            label = " MEA" if bias is None else f"{bias:>7.2f}"
+            label = f"MEA:{marginal[:4]}" if bias is None else f"{bias:>7.2f}"
             print(f"{label:>7} {emitted:>8d} {emitted / gold:>6.2f} "
                   f"{prf['f1']:>7.4f} {prf['precision']:>7.4f} {prf['recall']:>7.4f} "
                   f"{frag['fragmentation']:>6.0f} {frag['rest']:>6.0f} "
@@ -112,7 +114,18 @@ def main() -> None:
     p.add_argument("--conditions", default="clean,separated")
     p.add_argument("--limit", type=int, default=40,
                    help="val tracks per condition; 40 matches the training run's set")
-    p.add_argument("--marginal", action="store_true",
+    p.add_argument("--tol-frames", type=int, default=0,
+                   help="sum boundary posteriors over +-N frames -- the note "
+                        "matcher tolerates 50ms, ~1.4 DP frames, so scoring an "
+                        "exact position asks for certainty nothing measures")
+    p.add_argument("--split", default="validation", choices=["validation", "test"],
+                   help="test is for re-running an ALREADY CHOSEN setting; "
+                        "sweeping on it is how a held-out set stops being one")
+    p.add_argument("--tau", type=float, default=0.5,
+                   help="posterior a span/boundary must beat to be worth "
+                        "including; 0.5 is what the symmetric-difference "
+                        "loss implies")
+    p.add_argument("--marginal", default="", choices=["", "span", "boundary"],
                    help="also decode from span posteriors (MEA) and report it "
                         "as a row labelled MEA -- no bias, since it corrects per "
                         "span rather than per track")
@@ -123,7 +136,7 @@ def main() -> None:
     sweep(
         args.checkpoint, args.root, args.cache_dir,
         args.conditions.split(","), args.limit,
-        [float(b) for b in args.biases.split(",")], args.marginal,
+        [float(b) for b in args.biases.split(",")], args.marginal, args.tau, args.split, args.tol_frames,
     )
 
 
