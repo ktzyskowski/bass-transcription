@@ -82,6 +82,28 @@ def config_str_list(
     return [str(v) for v in items]
 
 
+def config_int_list(
+    config: Mapping[str, object], key: str, default: Sequence[int] = ()
+) -> list[int]:
+    """A list-of-ints field -- the peer of ``config_str_list``.
+
+    Absent means *empty* rather than an error: an int list here names an optional
+    setting (``harmonics``), so a checkpoint written before that setting existed must
+    still load and fall back to the recipe's own default. ``bool`` is rejected
+    explicitly, since it is an ``int`` to ``isinstance`` and would quietly become 0/1.
+    """
+    value = config.get(key, default)
+    if isinstance(value, str) or not isinstance(value, Iterable):
+        raise ValueError(
+            f"recipe config field {key!r} should be a list of int, got {value!r}"
+        )
+    items = list(value)
+    bad = [v for v in items if isinstance(v, bool) or not isinstance(v, int)]
+    if bad:
+        raise ValueError(f"recipe config field {key!r} has non-int entries: {bad!r}")
+    return [int(v) for v in items]
+
+
 class Batch(Protocol):
     """What the training loop needs of a batch, which is one thing: its size.
 

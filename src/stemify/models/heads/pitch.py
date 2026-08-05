@@ -146,7 +146,11 @@ def pitch_ce(logits: torch.Tensor, midi: torch.Tensor) -> torch.Tensor:
     # Soft-target cross-entropy: -sum_b target[b] * log q[b]. F.cross_entropy accepts
     # probability targets too, but only with the class axis at dim 1 -- spelling it out
     # keeps the bin axis last, matching two_hot and the head's own output.
-    per_frame = -(two_hot(midi) * F.log_softmax(logits, dim=-1)).sum(-1)
+    # The target's width comes from the *logits*, not from `N_BINS`. A harmonic-stacked
+    # front-end crops the fundamental axis (see `_ConvFrontend.stack`), so the head emits
+    # fewer bins than the CQT has; a target built at the module default is simply the
+    # wrong shape against it, and the multiply below raises rather than trains.
+    per_frame = -(two_hot(midi, logits.shape[-1]) * F.log_softmax(logits, dim=-1)).sum(-1)
     return (per_frame * voiced).sum() / voiced.sum()
 
 

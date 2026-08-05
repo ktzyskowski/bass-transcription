@@ -84,6 +84,22 @@ def cqt(audio: np.ndarray, sr: int = SAMPLE_RATE) -> np.ndarray:
     return db
 
 
+def harmonic_shifts(harmonics: Sequence[int]) -> tuple[int, ...]:
+    """Bin offsets at which each harmonic of a note sits, on this log-frequency axis.
+
+    A vibrating string at ``f`` also radiates ``2f``, ``3f``, ``4f`` ... -- so one note
+    occupies several bins at once. Because the axis is logarithmic, ``h * f`` is always
+    ``BINS_PER_OCTAVE * log2(h)`` bins above ``f`` **whatever the note is**: +36 for the
+    octave, +57 for the twelfth, +72 for two octaves. That constancy is the same
+    property that makes a CQT worth using at all, applied one level up.
+
+    It is what lets the harmonic stack be a re-indexing rather than a second transform.
+    The rounding costs at most 0.41 bins (at ``h=5``), well inside the 3-bins-per-
+    semitone grid, so no interpolation is needed.
+    """
+    return tuple(int(round(BINS_PER_OCTAVE * np.log2(h))) for h in harmonics)
+
+
 def midi_to_bin(midi_pitch: float) -> float:
     """Map a MIDI pitch to its (fractional) CQT bin index."""
     hz = librosa.midi_to_hz(midi_pitch)

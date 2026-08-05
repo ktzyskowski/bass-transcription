@@ -19,7 +19,13 @@ from stemify.decoders.greedy import GreedyDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
-from stemify.training.base import Loss, Recipe, config_field, config_str_list
+from stemify.training.base import (
+    Loss,
+    Recipe,
+    config_field,
+    config_int_list,
+    config_str_list,
+)
 from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.training.config import TrainConfig
 from stemify.training.examples import prepare_examples
@@ -47,6 +53,7 @@ class FrameRecipe(Recipe):
         window_frames: int = WINDOW_FRAMES,
         hop_frames: int = HOP_FRAMES,
         pos_weight: dict[str, float | None] | None = None,
+        harmonics: Sequence[int] | None = None,
     ) -> None:
         """These three used to live on ``TrainConfig``, and only this recipe read them.
 
@@ -65,6 +72,10 @@ class FrameRecipe(Recipe):
         self.window_frames = window_frames
         self.hop_frames = hop_frames
         self.pos_weight = dict(pos_weight or {})
+        # `(1,)` is the plain CQT: one channel per rendering, full frequency axis, and
+        # `_ConvFrontend.stack` returns its input untouched. Kept as the default so
+        # every checkpoint trained before harmonic stacking rebuilds unchanged.
+        self.harmonics = tuple(harmonics or (1,))
 
     @property
     def heads(self) -> list[str]:
@@ -84,6 +95,7 @@ class FrameRecipe(Recipe):
             "window_frames": self.window_frames,
             "hop_frames": self.hop_frames,
             "pos_weight": dict(self.pos_weight),
+            "harmonics": list(self.harmonics),
         }
 
     @classmethod
@@ -101,6 +113,7 @@ class FrameRecipe(Recipe):
             window_frames=config_field(config, "window_frames", int, WINDOW_FRAMES),
             hop_frames=config_field(config, "hop_frames", int, HOP_FRAMES),
             pos_weight={str(h): float(w) for h, w in weights.items()},
+            harmonics=[int(h) for h in config_int_list(config, "harmonics")] or None,
         )
 
     @property
@@ -115,10 +128,11 @@ class FrameRecipe(Recipe):
             "pos_weight": ",".join(
                 f"{h}={w}" for h, w in sorted(self.pos_weight.items())
             ) or "none",
+            "harmonics": ",".join(str(h) for h in self.harmonics),
         }
 
     def build_model(self) -> CueNet:
-        backbone = TCN(in_channels=self.in_channels)
+        backbone = TCN(in_channels=self.in_channels, harmonics=self.harmonics)
         return CueNet(
             backbone,
             {
@@ -127,7 +141,12 @@ class FrameRecipe(Recipe):
             },
             # A FrequencyHead takes no `hidden`: it taps the front-end before the
             # flatten, reading (B, C, F, T) with the frequency axis still intact.
-            frequency_heads={"pitch": pitch_head()} if self.pitch else None,
+            # The head's width is the front-end's cropped axis, not `N_BINS`: harmonic
+            # stacking spends the top of the fundamental axis on the channels below it.
+            frequency_heads=(
+                {"pitch": pitch_head(n_bins=backbone.frontend.n_bins)}
+                if self.pitch else None
+            ),
         )
 
     def build_loss(self) -> Loss[FrameBatch]:

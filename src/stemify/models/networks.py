@@ -17,14 +17,16 @@ This is a *backbone*, not the pipeline ``Encoder``: a ``LearnedEncoder`` compose
 with heads to produce ``Cues``.
 """
 
+from collections.abc import Sequence
+
 import torch
 from torch import nn
 
-from stemify.features import N_BINS
+from stemify.features import N_BINS, harmonic_shifts
 
 
 class _ConvFrontend(nn.Module):
-    """CQT (B, in_channels, n_bins, T) -> per-frame channels (B, conv_channels * n_bins, T).
+    """CQT (B, in_channels, n_bins, T) -> per-frame channels (B, conv_channels * bins, T).
 
     Two conv blocks over (freq, time); padding keeps T, and frequency is kept
     (not pooled) so the temporal stack downstream sees the full harmonic layout.
@@ -35,16 +37,32 @@ class _ConvFrontend(nn.Module):
     first layer sees both registers of the same instant at the same bin and can
     learn "this transient is present in the mix too" as a plain filter, with
     everything downstream unchanged.
+
+    ``harmonics`` stacks each rendering against itself at its own harmonics -- see
+    ``stack``. It multiplies the conv's input width the same way ``in_channels`` does
+    and changes nothing else about this module.
     """
 
     def __init__(
-        self, n_bins: int = N_BINS, conv_channels: int = 32, in_channels: int = 1
+        self,
+        n_bins: int = N_BINS,
+        conv_channels: int = 32,
+        in_channels: int = 1,
+        harmonics: Sequence[int] = (1,),
     ):
         super().__init__()
         self.in_channels = in_channels
-        self.out_channels = conv_channels * n_bins
+        self.harmonics = tuple(harmonics)
+        self.shifts = harmonic_shifts(self.harmonics)
+        # The fundamental axis loses whatever the topmost harmonic reaches past, so
+        # every stacked channel is real data and none needs padding. Nothing is lost:
+        # the bins given up sit above any bass fundamental (bin 144 is D#5), and their
+        # content is still present -- as the harmonic channels of the notes below.
+        self.n_bins = n_bins - max(self.shifts)
+        self.out_channels = conv_channels * self.n_bins
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels, conv_channels, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels * len(self.shifts), conv_channels,
+                      kernel_size=3, padding=1),
             nn.BatchNorm2d(conv_channels),
             nn.ReLU(),
             nn.Conv2d(conv_channels, conv_channels, kernel_size=3, padding=1),
@@ -52,19 +70,43 @@ class _ConvFrontend(nn.Module):
             nn.ReLU(),
         )
 
+    def stack(self, x: torch.Tensor) -> torch.Tensor:
+        """(B, C, n_bins, T) -> (B, C * len(harmonics), self.n_bins, T).
+
+        **The same numbers, re-indexed so a 3x3 kernel can reach them.** A note at bin
+        ``b`` also radiates at ``b + 36``, ``b + 57``, ``b + 72``; a two-layer 3x3
+        front-end sees +-2 bins, so as laid out it can never have a fundamental and any
+        of its own harmonics inside one window, and the flatten then removes the
+        frequency axis entirely. Slicing each harmonic to its own channel puts them at
+        the same ``(bin, frame)`` position, where the existing kernel sees them together
+        on layer one -- and learns *one* detector that works at every pitch instead of a
+        separate one per bin.
+
+        No information is added, only adjacency; that is also the argument for using a
+        CQT over a linear spectrogram in the first place, one level down.
+
+        Channel order is harmonic-major: all renderings at ``h=1``, then all at ``h=2``.
+        The identity case (``harmonics=(1,)``) returns the input untouched rather than
+        going through ``cat``, so the default path is exactly what it was before.
+        """
+        if self.shifts == (0,):
+            return x
+        return torch.cat([x[:, :, s: s + self.n_bins] for s in self.shifts], dim=1)
+
     def conv_features(self, x: torch.Tensor) -> torch.Tensor:
-        """(B, in_channels, F, T) -> (B, conv_channels, F, T), *before* the flatten.
+        """(B, in_channels, F, T) -> (B, conv_channels, self.n_bins, T), *before* the
+        flatten.
 
         Split out because this is exactly what a pitch head has to consume: the
         flatten below gives every ``(channel, bin)`` pair its own downstream weight,
         which is what ends the frequency equivariance a pitch head depends on. See
-        ``encoders/pitch_head.py``.
+        ``models/heads/pitch.py``.
         """
         # Annotated locals throughout this module: torch types `Module.__call__` as
         # returning `Any`, so a submodule call otherwise launders the tensor type away
         # and every function that returns one straight through declares more than the
         # checker can see.
-        out: torch.Tensor = self.conv(x)
+        out: torch.Tensor = self.conv(self.stack(x))
         return out
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -129,12 +171,13 @@ class TCN(nn.Module):
         levels: int = 4,
         kernel: int = 3,
         in_channels: int = 1,
+        harmonics: Sequence[int] = (1,),
     ):
         super().__init__()
         self.hidden = hidden
         self.in_channels = in_channels
         self.levels, self.kernel = levels, kernel
-        self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels)
+        self.frontend = _ConvFrontend(n_bins, conv_channels, in_channels, harmonics)
         self.project = nn.Conv1d(self.frontend.out_channels, hidden, kernel_size=1)
         self.tcn = nn.Sequential(
             *[_TCNBlock(hidden, dilation=2**i, kernel=kernel) for i in range(levels)]

@@ -281,14 +281,18 @@ def test_every_recipe_exposes_loggable_params():
 
 
 def test_frame_params_report_the_knobs_the_recipe_owns():
-    # These four moved off TrainConfig; a run that does not record them cannot be told
-    # apart from one trained with different windows or weights.
+    # These moved off TrainConfig; a run that does not record them cannot be told
+    # apart from one trained with different windows, weights or input features.
     r = FrameRecipe(pitch=True, window_frames=64, hop_frames=32,
-                    pos_weight={"onset": 5.0})
+                    pos_weight={"onset": 5.0}, harmonics=[1, 2, 3, 4])
     assert r.params == {
         "window": 64, "hop": 32, "pitch": True, "pos_weight": "onset=5.0",
+        "harmonics": "1,2,3,4",
     }
     assert FrameRecipe().params["pos_weight"] == "none"
+    # The plain CQT is still *recorded*, not omitted: "1" and a missing key would
+    # otherwise be indistinguishable when comparing an old run against a new one.
+    assert FrameRecipe().params["harmonics"] == "1"
 
 
 def test_open_track_cache_is_bounded(tmp_path):

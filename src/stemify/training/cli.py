@@ -48,6 +48,26 @@ def _parse_pos_weight(spec: str) -> dict[str, float]:
     return weights
 
 
+def _parse_harmonics(spec: str) -> list[int]:
+    """``"1,2,3,4"`` -> ``[1, 2, 3, 4]``, the harmonics each CQT channel is stacked at.
+
+    Refuses anything but positive integers *including 1*. Dropping the fundamental is
+    representable and almost certainly a mistake -- the pitch head reads this axis, and
+    a stack starting at ``h=2`` shifts every bin it decodes by an octave without
+    changing a single shape, so nothing downstream would raise.
+    """
+    values = [int(p) for p in filter(None, (p.strip() for p in spec.split(",")))]
+    if not values:
+        return [1]
+    if any(v < 1 for v in values) or values[0] != 1:
+        raise ValueError(
+            f"--harmonics must be positive and start at 1 (the fundamental), got {spec!r}"
+        )
+    if len(set(values)) != len(values):
+        raise ValueError(f"--harmonics has repeats: {spec!r}")
+    return values
+
+
 def main() -> None:
     # Configure logging once, here at the entry point -- library modules only ever
     # getLogger, never configure, so importing them stays side-effect free.
@@ -94,6 +114,12 @@ def main() -> None:
                          "Onsets are ~7%% of frames after +-1 widening, so >1 trades "
                          "precision for recall -- the candidate-generator setting for a "
                          "two-stage decoder. Unset (the default) is plain unweighted BCE")
+    ap.add_argument("--harmonics", default="1",
+                    help="objective frame only: stack each CQT channel against itself "
+                         "at these harmonics, e.g. '1,2,3,4'. A note at bin b also "
+                         "sounds at b+36, b+57, b+72, which a 3x3 front-end can never "
+                         "reach; stacking puts them at one position. '1' (the default) "
+                         "is the plain CQT and changes nothing")
     ap.add_argument("--monitor", default=TrainConfig.monitor,
                     help="which metric picks the best checkpoint and drives early "
                          "stopping. 'loss/<head>/val' is an inline validation loss; "
@@ -181,6 +207,7 @@ def main() -> None:
     strategy_kwargs: dict[str, Any] = {"pitch": args.pitch}
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
+        strategy_kwargs["harmonics"] = _parse_harmonics(args.harmonics)
         for flag, value in (("--pitch-weight", args.pitch_weight),
                             ("--voicing-weight", args.voicing_weight),
                             ("--onset-weight", args.onset_weight)):
