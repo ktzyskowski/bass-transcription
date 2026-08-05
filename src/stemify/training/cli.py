@@ -181,7 +181,14 @@ def main() -> None:
                          f"binary gaps. Default {ONSET_WEIGHT}; 0 restores the "
                          "structured-only objective for this head.")
     ap.add_argument("--out", type=Path,
-                    help="checkpoint path (default <cache-dir>/onset_model.pt)")
+                    help="where to write this run's checkpoint. No default and no "
+                         "fallback: without it the run trains, logs and scores but "
+                         "persists nothing, which is what a smoke test wants. There "
+                         "used to be a shared default and it overwrote two "
+                         "still-cited checkpoints")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite --out if it already exists. Checked before "
+                         "training starts, not at save time")
     ap.add_argument("--save-epochs", action="store_true",
                     help="also write <out>.epoch<N>.pt after every epoch. Selection "
                          "happens on a decode, so an epoch can be discarded for how it "
@@ -278,7 +285,7 @@ def main() -> None:
         experiment=args.experiment, run_name=args.run_name,
         batch_log_every=args.batch_log_every,
         tracking_uri=args.tracking_uri, limit=args.limit, out=args.out,
-        save_epochs=args.save_epochs,
+        save_epochs=args.save_epochs, force=args.force,
     )
 
 

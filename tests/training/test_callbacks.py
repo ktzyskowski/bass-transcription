@@ -217,10 +217,10 @@ def test_mlflow_callback_logs_artifact(tmp_path):
 
     uri = f"file://{tmp_path}/mlruns"
     cb = MLflowCallback(run_name="t", tracking_uri=uri)
-    ckpt = tmp_path / "onset_model.pt"
+    ckpt = tmp_path / "cuenet.pt"
     ckpt.write_bytes(b"weights")
     cb.log_artifact(ckpt)
 
     client = MlflowClient(tracking_uri=uri)
     artifacts = [a.path for a in client.list_artifacts(cb._run_id)]
-    assert "onset_model.pt" in artifacts
+    assert "cuenet.pt" in artifacts

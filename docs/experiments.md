@@ -75,6 +75,12 @@ The demucs floor uses the stem-tuned δ=0.20; demucs's own optimum is milder
   trimming pyin's over-voiced rests — exactly the 34% FP bucket predicted below.
 - Checkpoint saved to `data/cache/onset/onset_model.pt` (holds both heads; this
   overwrote the onset-only tcn-v1 file — name future outputs per-run to keep both).
+  **Both files are now gone.** The warning above went unheeded: a two-track smoke run
+  on 2026-08-05 was launched without `--out` and overwrote tcn-v2 in turn. The numbers
+  in the table above survive; the weights do not, so this arm can never be re-scored
+  under a changed pipeline — which, per "a rung marked DONE is only done against the
+  pipeline it ran on", is the loss that matters. `--out` is now required and refuses an
+  existing path without `--force`, checked before a run starts.
 
 ## Error decomposition
 

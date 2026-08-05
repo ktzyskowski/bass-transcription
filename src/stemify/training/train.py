@@ -98,6 +98,7 @@ def train(
     recipe: Recipe | None = None,
     init_from: Path | None = None,
     save_epochs: bool = False,
+    force: bool = False,
 ) -> None:
     recipe = recipe or RECIPES["frame"]()
     sources = [c.name for c in recipe.conditions]
@@ -136,7 +137,31 @@ def train(
             "Scoring needs the same channel layout the model was trained with."
         )
     cache = Cache(cache_dir)
-    out = out or cache_dir / "onset_model.pt"
+    # **No default path, and the check runs before any work starts.**
+    #
+    # There was a default (`<cache-dir>/onset_model.pt`), and it was wrong twice over.
+    # Wrong as a *name*, because it stopped describing the model when a voicing head
+    # arrived and stopped describing it three ways over once pitch did. Wrong as a
+    # *default*, because every run ever launched without `--out` wrote the same file:
+    # tcn-v1 was overwritten by tcn-v2, a warning went into docs/experiments.md, and
+    # tcn-v2 was then overwritten by a two-track smoke run anyway. A shared default for
+    # a per-run artefact is a collision waiting on a careless launch.
+    #
+    # So `out=None` now means *do not save*, which is what a smoke test actually wants,
+    # and naming a run's checkpoint is a deliberate act. The existence check is here
+    # rather than at save time because a run that discovers its path is occupied after
+    # hours of training can only clobber or be thrown away.
+    if out is not None and out.exists() and not force:
+        raise FileExistsError(
+            f"{out} already exists. Name this run's own checkpoint, or pass --force to "
+            "overwrite. A checkpoint is the only artefact a result cannot be reproduced "
+            "without, so overwriting one is never implicit."
+        )
+    if save_epochs and out is None:
+        raise ValueError(
+            "--save-epochs needs --out: it writes '<stem>.epoch<N><suffix>' beside the "
+            "run's checkpoint, and there is nowhere to put those without one."
+        )
 
     # One cache for every condition and both splits. Features are content-addressed on
     # the resolved audio path, so a stem, a mix and a separated mix of the same track
@@ -182,9 +207,11 @@ def train(
 
     # Written on every improvement, not once at the end: `fit` restores the best
     # weights when it *returns*, so a Ctrl-C, a SIGKILL or an OOM loses the whole run.
-    callbacks: list[Callback] = [ConsoleCallback(), BestCheckpointCallback(out, recipe)]
-    if save_epochs:
-        callbacks.append(EveryEpochCheckpointCallback(out, recipe))
+    callbacks: list[Callback] = [ConsoleCallback()]
+    if out is not None:
+        callbacks.append(BestCheckpointCallback(out, recipe))
+        if save_epochs:
+            callbacks.append(EveryEpochCheckpointCallback(out, recipe))
     mlflow = None
     eval_fn = None
     if tracking_uri:
@@ -280,12 +307,15 @@ def train(
     # the same way training did, instead of re-deriving them and getting it subtly
     # wrong. The objective's own parameters travel too -- for a semi-CRF they *are*
     # the decoder, and a file without them restores half a system while looking whole.
+    if out is None:
+        logger.info("no --out given: trained weights are not persisted")
+        return
     Checkpoint(
         recipe=recipe,
         model_state=trainer.model.state_dict(),
         objective_state=trainer.loss.state_dict(),
     ).save(out)
-    logger.info("saved onset model -> %s", out)
+    logger.info("saved checkpoint -> %s", out)
     if mlflow is not None:
         mlflow.log_artifact(out)
 
