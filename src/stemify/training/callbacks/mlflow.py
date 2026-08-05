@@ -108,6 +108,10 @@ class MLflowCallback(Callback):
         # async path sends the identical keys straight to `sink`, so a run reads the
         # same whichever way it was scored.
         metrics.update(logs.scores)
+        # The objective's learned potentials, under their own namespace rather than
+        # ``loss/``: they share the epoch axis with the losses but are not losses, and
+        # the point of watching them is to read one against the other.
+        metrics.update({f"scalars/{k}": v for k, v in logs.scalars.items()})
         self.sink(metrics, logs.epoch)
 
     def on_train_end(self, best_epoch: int) -> None:

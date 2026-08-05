@@ -45,6 +45,13 @@ from stemify.training.semicrf.dataset import ChunkBatch
 # on, so a head can never be declared, accepted, and then silently not scored.
 AUX_TERMS = {"pitch": "categorical", "onset": "binary", "voicing": "binary"}
 
+_SCALARS_MAX = 32
+"""Entries above which ``scalars`` summarises a potential instead of naming each one.
+
+Sized to clear the classical scorer's widest potential (the duration buckets) with room
+to spare, and to stay well under the point where one metric per element would swamp a
+run's own losses in the tracking UI."""
+
 
 class SemiCRFLoss(Loss[ChunkBatch]):
     """The semi-CRF NLL over ordered chunks, carrying alpha between them."""
@@ -123,6 +130,34 @@ class SemiCRFLoss(Loss[ChunkBatch]):
 
     def parameters(self) -> Iterable[nn.Parameter]:
         return self.decoder.parameters()
+
+    def scalars(self) -> dict[str, float]:
+        """Every potential the scorer learns, one metric each.
+
+        These are the numbers that decide segmentation *granularity* -- a per-segment
+        bias and a duration-bucket profile sit alongside the evidence weights, so the
+        model can trade note count against fit without any head changing. That trade is
+        invisible in the loss terms and visible here, which is the reason to spend an
+        axis on each.
+
+        Flattened by index (``dur/3`` is the fourth duration bucket, ordered by the
+        scorer's own edges) because the alternative is naming buckets here and having
+        two places that must agree about them. Anything wider than a handful of entries
+        is summarised rather than dropped: a scorer that grows a real weight matrix
+        should still report *something*, and silence would read as "unchanged".
+        """
+        out: dict[str, float] = {}
+        for name, param in self.decoder.named_parameters():
+            key = name.replace(".", "/")
+            flat = param.detach().flatten()
+            if flat.numel() > _SCALARS_MAX:
+                out[f"{key}/mean"] = float(flat.mean())
+                out[f"{key}/std"] = float(flat.std())
+            elif flat.numel() == 1:
+                out[key] = float(flat[0])
+            else:
+                out.update({f"{key}/{i}": float(v) for i, v in enumerate(flat)})
+        return out
 
     def state_dict(self) -> dict[str, torch.Tensor]:
         # The ~15 potentials ARE the decoder. Without them a checkpoint restores an

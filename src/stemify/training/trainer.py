@@ -304,6 +304,7 @@ class Trainer(Generic[B]):
                 train_losses=train_losses, val_losses=val_losses,
                 best_epoch=history.best_epoch, snapshot=self.state_cpu,
                 scores=scores, monitored=monitored, monitor=self.config.monitor,
+                scalars=self.loss.scalars(),
             )
             for callback in callbacks:
                 callback.on_epoch_end(logs)

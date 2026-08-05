@@ -34,6 +34,10 @@ class EpochLogs:
     # Note-level harness metrics, when the loop scored synchronously (empty when the
     # scoring is async -- that path delivers straight to its own sink instead).
     scores: Mapping[str, float] = field(default_factory=dict)
+    # The objective's own interpretable parameters (``Loss.scalars``), empty for an
+    # objective that has none. Separate from the loss breakdown because these are not
+    # losses: they are what the run learned, on their own axes.
+    scalars: Mapping[str, float] = field(default_factory=dict)
     # The value early stopping actually compared, and under which key. Reported so a
     # log line can say what drove the decision rather than leaving it to be inferred.
     monitored: float = float("nan")

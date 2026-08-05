@@ -128,6 +128,24 @@ class Loss(ABC, Generic[B]):
         default; a structured decoder overrides to return its own)."""
         return ()
 
+    def scalars(self) -> Mapping[str, float]:
+        """Interpretable parameters of this objective, to watch per epoch (none by
+        default).
+
+        The companion to ``Recipe.params``, one level down: that reports the knobs a
+        run was *given*, this reports the few the run *learned* whose values mean
+        something on their own. A structured decoder is the case that needs it -- its
+        potentials decide the shape of the decode, so a decode that changes character
+        between epochs is explained by numbers that otherwise appear only inside a
+        checkpoint, and only for the epochs that happened to be best.
+
+        Deliberately not derived from ``state_dict``: that is everything the optimiser
+        may move, including whatever a future scorer adds, and a consumer cannot tell
+        which entries are worth an axis. Naming them here keeps that judgement with the
+        objective that knows.
+        """
+        return {}
+
     def state_dict(self) -> dict[str, torch.Tensor]:
         """The objective's own learned state, for snapshotting and persistence.
 
