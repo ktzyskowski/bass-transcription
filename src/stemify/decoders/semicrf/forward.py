@@ -91,6 +91,7 @@ def scan(
     *,
     semiring: Semiring = LOG,
     bias: torch.Tensor | None = None,
+    perturb: torch.Tensor | None = None,
     witness: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """The segmental recurrence from ``window``; returns the final alpha window.
@@ -112,7 +113,17 @@ def scan(
     zero-padding at the chunk's right edge, and which the DP must not consume.
 
     ``bias`` is added to every step's terms before the reduction, broadcast against
-    ``(B, dmax, 3, 2)``. ``witness`` is a ``(stop+1, B, 2)`` int64 table filled with the
+    ``(B, dmax, 3, 2)`` -- one constant for the whole scan.
+
+    ``perturb`` is its per-span twin, ``(B, stop+1, dmax, 2)``, sliced at each step. It
+    exists to be differentiated rather than to change an answer: with it left at zero
+    the scan returns exactly what it otherwise would, and ``d log Z / d perturb`` is the
+    posterior probability of each span. The two are separate parameters because they are
+    separate ideas -- one is a correction someone tuned, the other is a handle autograd
+    reads a marginal off. Collapsing them into one shape-polymorphic argument would save
+    a line and lose that.
+
+    ``witness`` is a ``(stop+1, B, 2)`` int64 table filled with the
     index of each step's surviving alternative -- backpointers, for a caller that means
     to reconstruct the path. Requesting one from a semiring that has no survivor to
     point at is an error rather than a silent no-op, because the traceback that follows
@@ -131,6 +142,11 @@ def scan(
         term = step_terms(scorer, ev, grid, window, j)
         if bias is not None:
             term = term + bias
+        if perturb is not None:
+            # (B, dmax, 2) -> (B, dmax, 1, 2): one epsilon per (start, label), shared
+            # across the `prev` axis, because a span's identity does not include what
+            # preceded it.
+            term = term + perturb[:, j].unsqueeze(-2)
         flat = term.reshape(B, -1, 2)
         if witness is None:
             val = semiring.reduce(flat, dim=1)                 # (B, 2)
@@ -152,8 +168,16 @@ def scan(
     return window
 
 
-def log_partitions(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor:
-    """``log Z`` per track ``(B,)`` for a padded batch of ragged whole tracks."""
+def log_partitions(
+    scorer: SpanScorer,
+    ev: Evidence,
+    grid: Grid,
+    perturb: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """``log Z`` per track ``(B,)`` for a padded batch of ragged whole tracks.
+
+    ``perturb`` rides through to ``scan``; see ``marginals`` for what differentiating
+    with respect to it buys."""
     window = initial_window(ev.onset_logit, ev.B, grid.dmax)
 
     # Each track is read out at its *own* length, which the rolling window cannot hold:
@@ -166,7 +190,7 @@ def log_partitions(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
     for b in ends.get(0, ()):                          # an empty track ends at START
         captured[b] = window[b, -1]
 
-    scan(scorer, ev, grid, window, ends, captured)
+    scan(scorer, ev, grid, window, ends, captured, perturb=perturb)
     # Every row is written: `ends` is keyed by `ev.lengths`, no length exceeds `ev.T`
     # (Tmax *is* the max), and the scan visits every j in [1, T]. Checked rather than
     # cast, because a row left unwritten means a track whose length the evidence and

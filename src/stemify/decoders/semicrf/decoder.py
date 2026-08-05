@@ -36,6 +36,7 @@ from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.score import segmentation_scores
 from stemify.decoders.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
+from stemify.decoders.semicrf.marginals import marginal_scorer
 from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.notes import NoteEvent
 
@@ -147,6 +148,26 @@ class SemiCRFDecoder(Decoder, nn.Module):
         if ev.lengths[0] == 0:
             return []
         return self._segs_to_notes(viterbi(self.scorer, ev, grid, note_bias), ev)
+
+    def decode_marginal(self, cues: Cues) -> list[NoteEvent]:
+        """The notes implied by ``cues``, decoded from **span posteriors** rather than
+        from potentials -- maximum expected accuracy instead of maximum a posteriori.
+
+        Same recurrence, same duration and transition structure, same guarantee of a
+        valid tiling. What changes is the quantity being maximised: summed posterior
+        mass rather than a single path's score, which is where the systematic
+        under-segmentation lives (see ``marginals``).
+
+        Costs one extra scan with its autograd graph retained, so roughly 3-4x
+        ``decode``. Kept a separate method while the two are being compared; if this
+        wins it should *become* ``decode`` rather than settle in as a permanent flag,
+        because "which decision rule" is not a per-call preference.
+        """
+        ev, grid = self._prepare([cues])
+        if ev.lengths[0] == 0:
+            return []
+        posterior = marginal_scorer(self.scorer, ev, grid)
+        return self._segs_to_notes(viterbi(posterior, ev, grid), ev)
 
     def _segs_to_notes(
         self, segs: list[tuple[int, int, int]], ev: Evidence

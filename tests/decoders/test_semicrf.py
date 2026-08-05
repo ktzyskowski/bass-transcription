@@ -21,6 +21,7 @@ from stemify.decoders.semicrf.forward import (
     log_partitions,
     scan,
 )
+from stemify.decoders.semicrf.marginals import marginal_scorer, span_marginals
 from stemify.decoders.semicrf.semiring import MAX_PLUS
 from stemify.decoders.semicrf.spans import Grid
 from stemify.decoders.semicrf.window import initial_window
@@ -342,8 +343,86 @@ def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
         dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax),
         stop=T, semiring=MAX_PLUS,
     )
-    got = float(window[0, -1, :2].max())
+    got = float(window[0, -1, :2].max().detach())
     assert abs(got - best) < 1e-4, f"max-plus scan says {got}, enumeration says {best}"
+
+
+# --------------------------------------------------------------------------- #
+# Span marginals                                                               #
+# --------------------------------------------------------------------------- #
+def _enumerated_marginals(scorer, ev, grid, T, dmax):
+    """`P(span in y)` by explicit enumeration: every segmentation, its probability,
+    summed over the ones containing each span. Ground truth by construction."""
+    segs = list(_all_segmentations(T, dmax))
+    scores = torch.tensor([_score_by_loop(scorer, ev, s, grid).item() for s in segs])
+    probs = (scores - torch.logsumexp(scores, 0)).exp()
+    want = torch.zeros(T + 1, dmax, 2)
+    for p, seg in zip(probs, segs):
+        for label, i, j in seg:
+            want[j, i - j + dmax, label] += p
+    return want
+
+
+def test_span_marginals_equal_brute_force_enumeration():
+    """THE correctness test for the marginals, and it cannot be replaced by an internal
+    one. `d log Z / d eps` is only the posterior if the scan it differentiates is the
+    right recurrence *and* the perturbation lands on the right axis -- a shape mistake
+    that shares eps across the wrong dimension still yields a plausible, normalised,
+    entirely wrong table. Enumeration has no recurrence to be wrong about."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T, seed=5)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    want = _enumerated_marginals(dec.scorer, e, grid, T, dmax)
+    got = span_marginals(dec.scorer, e, grid)[0]
+    assert torch.allclose(got, want, atol=1e-5), (
+        f"max abs error {float((got - want).abs().max())}"
+    )
+
+
+def test_something_must_end_at_the_last_frame():
+    """A segmentation tiles `[0, T)`, so the spans ending at `T` are mutually exclusive
+    and exhaustive: their posteriors sum to exactly 1. Cheap, and it catches a table
+    that is right in shape but off by a normaliser."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 7, 3
+    e = _random_emissions(T, seed=6)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+    m = span_marginals(dec.scorer, e, grid)[0]
+    assert float(m[T].sum()) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_marginals_and_the_note_count_gradient_agree():
+    """Two routes to the same expectation: summing `P(note span)` over every span, and
+    differentiating `log Z` by `b_note` -- whose feature *is* the note count. They come
+    from the same identity applied at different granularity, so disagreement means the
+    perturbation is not scoring the event its axis claims."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T, seed=7)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    by_marginal = float(span_marginals(dec.scorer, e, grid)[0, :, :, NOTE].sum())
+    logz = log_partitions(dec.scorer, e, grid).sum()
+    (by_gradient,) = torch.autograd.grad(logz, [dec.scorer.b_note])
+    assert by_marginal == pytest.approx(float(by_gradient), abs=1e-4)
+
+
+def test_decoding_from_marginals_returns_a_valid_tiling():
+    """The property MEA keeps and thresholded peak-picking would not: the output is
+    still a segmentation, so the duration and transition structure the semi-CRF exists
+    to impose still holds."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 9, 3
+    e = _random_emissions(T, seed=8)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    segs = viterbi(marginal_scorer(dec.scorer, e, grid), e, grid)
+    covered = [(i, j) for _, i, j in segs]
+    assert covered[0][0] == 0 and covered[-1][1] == T, covered
+    assert all(a[1] == b[0] for a, b in zip(covered, covered[1:])), covered
+    assert all(1 <= j - i <= dmax for i, j in covered), covered
 
 
 def test_asking_the_log_semiring_for_backpointers_is_refused():

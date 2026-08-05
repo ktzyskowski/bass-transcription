@@ -58,7 +58,7 @@ DECODE_DEVICE = "cpu"
 
 def sweep(
     checkpoint: Path, root: str, cache_dir: str, conditions: list[str],
-    limit: int, biases: list[float],
+    limit: int, biases: list[float], marginal: bool = False,
 ) -> None:
     ck = Checkpoint.load(checkpoint)
     model = ck.recipe.build_model()
@@ -84,13 +84,20 @@ def sweep(
         print(f"{'bias':>7} {'emitted':>8} {'/gold':>6} {'f1':>7} {'prec':>7} "
               f"{'recall':>7} {'frag':>6} {'rest':>6} {'offp':>6} {'s':>5}")
 
-        for bias in biases:
+        # `None` marks the marginal decode: no bias at all, because it corrects
+        # per span rather than per track. Scored through the identical path so the
+        # comparison is the decision rule and nothing else.
+        for bias in [*biases, *([None] if marginal else [])]:
             t0 = time.perf_counter()
-            ests = [decoder.decode(c, note_bias=bias) for c in cues]
+            ests = (
+                [decoder.decode_marginal(c) for c in cues] if bias is None
+                else [decoder.decode(c, note_bias=bias) for c in cues]
+            )
             scalars = {r.name: r.scalars for r in score_notes(refs, ests)}
             prf, frag = scalars["note-prf"], scalars["fragmentation"]
             emitted = sum(len(e) for e in ests)
-            print(f"{bias:>7.2f} {emitted:>8d} {emitted / gold:>6.2f} "
+            label = " MEA" if bias is None else f"{bias:>7.2f}"
+            print(f"{label:>7} {emitted:>8d} {emitted / gold:>6.2f} "
                   f"{prf['f1']:>7.4f} {prf['precision']:>7.4f} {prf['recall']:>7.4f} "
                   f"{frag['fragmentation']:>6.0f} {frag['rest']:>6.0f} "
                   f"{frag['interior_offpitch']:>6.0f} "
@@ -105,6 +112,10 @@ def main() -> None:
     p.add_argument("--conditions", default="clean,separated")
     p.add_argument("--limit", type=int, default=40,
                    help="val tracks per condition; 40 matches the training run's set")
+    p.add_argument("--marginal", action="store_true",
+                   help="also decode from span posteriors (MEA) and report it "
+                        "as a row labelled MEA -- no bias, since it corrects per "
+                        "span rather than per track")
     p.add_argument("--biases", default="-1.5,-1.0,-0.5,-0.25,0,0.25,0.5,1.0,1.5",
                    help="comma-separated; 0 must be present as the baseline that "
                         "reproduces the run's own reported numbers")
@@ -112,7 +123,7 @@ def main() -> None:
     sweep(
         args.checkpoint, args.root, args.cache_dir,
         args.conditions.split(","), args.limit,
-        [float(b) for b in args.biases.split(",")],
+        [float(b) for b in args.biases.split(",")], args.marginal,
     )
 
 
