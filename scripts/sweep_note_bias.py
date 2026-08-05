@@ -27,8 +27,8 @@ What the shape means, and why the answer is not just the argmax:
   but wrongly *shaped*. Theory says the per-segment bonus should be about
   ``log(mean segment length)``, i.e. shrinking as segmentation gets finer, where a flat
   bias does not. The next step is then the duration buckets, not a bigger constant.
-* **F1 flat or falling from zero** -- the diagnosis is wrong, and neither this nor
-  marginal decoding is worth building.
+* **F1 flat or falling from zero** -- the diagnosis is wrong, and the model needs
+  retraining rather than a different readout.
 
 Selection on validation only. A bias chosen here is fitted to these tracks; quoting it
 means re-running the chosen value on held-out test, exactly as ``decoder_audit`` does.
@@ -58,8 +58,7 @@ DECODE_DEVICE = "cpu"
 
 def sweep(
     checkpoint: Path, root: str, cache_dir: str, conditions: list[str],
-    limit: int, biases: list[float], marginal: str = "",
-    tau: float = 0.5, split: str = "validation", tol_frames: int = 0,
+    limit: int, biases: list[float], split: str = "validation",
 ) -> None:
     ck = Checkpoint.load(checkpoint)
     model = ck.recipe.build_model()
@@ -85,21 +84,13 @@ def sweep(
         print(f"{'bias':>7} {'emitted':>8} {'/gold':>6} {'f1':>7} {'prec':>7} "
               f"{'recall':>7} {'frag':>6} {'rest':>6} {'offp':>6} {'s':>5}")
 
-        # `None` marks the marginal decode: no bias at all, because it corrects
-        # per span rather than per track. Scored through the identical path so the
-        # comparison is the decision rule and nothing else.
-        for bias in [*biases, *([None] if marginal else [])]:
+        for bias in biases:
             t0 = time.perf_counter()
-            ests = (
-                [decoder.decode_marginal(c, marginal, tau, tol_frames) for c in cues]
-                if bias is None
-                else [decoder.decode(c, note_bias=bias) for c in cues]
-            )
+            ests = [decoder.decode(c, note_bias=bias) for c in cues]
             scalars = {r.name: r.scalars for r in score_notes(refs, ests)}
             prf, frag = scalars["note-prf"], scalars["fragmentation"]
             emitted = sum(len(e) for e in ests)
-            label = f"MEA:{marginal[:4]}" if bias is None else f"{bias:>7.2f}"
-            print(f"{label:>7} {emitted:>8d} {emitted / gold:>6.2f} "
+            print(f"{bias:>7.2f} {emitted:>8d} {emitted / gold:>6.2f} "
                   f"{prf['f1']:>7.4f} {prf['precision']:>7.4f} {prf['recall']:>7.4f} "
                   f"{frag['fragmentation']:>6.0f} {frag['rest']:>6.0f} "
                   f"{frag['interior_offpitch']:>6.0f} "
@@ -114,21 +105,9 @@ def main() -> None:
     p.add_argument("--conditions", default="clean,separated")
     p.add_argument("--limit", type=int, default=40,
                    help="val tracks per condition; 40 matches the training run's set")
-    p.add_argument("--tol-frames", type=int, default=0,
-                   help="sum boundary posteriors over +-N frames -- the note "
-                        "matcher tolerates 50ms, ~1.4 DP frames, so scoring an "
-                        "exact position asks for certainty nothing measures")
     p.add_argument("--split", default="validation", choices=["validation", "test"],
                    help="test is for re-running an ALREADY CHOSEN setting; "
                         "sweeping on it is how a held-out set stops being one")
-    p.add_argument("--tau", type=float, default=0.5,
-                   help="posterior a span/boundary must beat to be worth "
-                        "including; 0.5 is what the symmetric-difference "
-                        "loss implies")
-    p.add_argument("--marginal", default="", choices=["", "span", "boundary"],
-                   help="also decode from span posteriors (MEA) and report it "
-                        "as a row labelled MEA -- no bias, since it corrects per "
-                        "span rather than per track")
     p.add_argument("--biases", default="-1.5,-1.0,-0.5,-0.25,0,0.25,0.5,1.0,1.5",
                    help="comma-separated; 0 must be present as the baseline that "
                         "reproduces the run's own reported numbers")
@@ -136,7 +115,7 @@ def main() -> None:
     sweep(
         args.checkpoint, args.root, args.cache_dir,
         args.conditions.split(","), args.limit,
-        [float(b) for b in args.biases.split(",")], args.marginal, args.tau, args.split, args.tol_frames,
+        [float(b) for b in args.biases.split(",")], args.split,
     )
 
 
