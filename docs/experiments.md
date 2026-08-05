@@ -1067,6 +1067,26 @@ closed branch instead of a losing streak.
 It does not touch the diagnosis in the entry above, which stands: the collapse *was* the
 readout. It says the crude fix is the fix.
 
+### The head-to-head that reframes all of it (2026-08-05)
+
+Both arms are now on held-out test, same 37 tracks, same metric, same learned pitch
+contour. `rung4-pitch` re-run from `scripts/pitch_ab.py` (`logs/TEST-rung4-pitch.log`),
+reproducing the numbers already recorded in the rung-4 section above:
+
+| arm | decoder | objective | clean | separated |
+|---|---|---|---|---|
+| `rung4-pitch` | greedy peak-pick | frame BCE | **0.9619** | **0.8638** |
+| `semicrf_pitch_aux2` ep4 @ bias 1.5 | segmental Viterbi | semi-CRF NLL + aux | 0.9367 | 0.8232 |
+
+**The semi-CRF loses by 4.1 points separated and 2.5 clean.** A segmental DP, a
+structured objective, chunked truncated BPTT and five decode rules, against greedy
+peak-picking on the same encoder.
+
+This was never hidden — the entry above already recorded that the semi-CRF "still trails
+`rung1-bichannel-pitch` and `rung4-pitch`" on validation, and test agrees. What changes is
+what it makes worth doing: further work on *how the semi-CRF decodes* is optimising the
+losing branch. The open question is whether it earns its complexity at all.
+
 **Still open, and unaffected:** max-margin training, which does not correct the readout
 but makes training and decoding the same operation — it optimises the argmax the decode
 actually uses. Costs a retrain, an L2 term (the hinge is satisfiable by inflating score
