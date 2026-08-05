@@ -21,7 +21,11 @@ from stemify.decoders.semicrf.forward import (
     log_partitions,
     scan,
 )
-from stemify.decoders.semicrf.marginals import marginal_scorer, span_marginals
+from stemify.decoders.semicrf.marginals import (
+    MarginalScorer,
+    marginal_scorer,
+    span_marginals,
+)
 from stemify.decoders.semicrf.semiring import MAX_PLUS
 from stemify.decoders.semicrf.spans import Grid
 from stemify.decoders.semicrf.window import initial_window
@@ -407,6 +411,33 @@ def test_marginals_and_the_note_count_gradient_agree():
     logz = log_partitions(dec.scorer, e, grid).sum()
     (by_gradient,) = torch.autograd.grad(logz, [dec.scorer.b_note])
     assert by_marginal == pytest.approx(float(by_gradient), abs=1e-4)
+
+
+def test_the_span_score_is_linear_in_the_posterior_not_logarithmic():
+    """The bug this exists for, and the validity test below does not catch it.
+
+    Scoring a segmentation by `sum of log P` scores it by its *probability*, so every
+    extra span multiplies in another factor below one -- the same per-span cost that
+    makes MAP under-segment, reintroduced on top of marginals computed to remove it.
+    Measured on a trained checkpoint it decoded to 0.44 of the reference note count
+    where MAP-plus-bias reached 0.98. `sum of (P - 1/2)` scores expected *agreement*,
+    which has no length preference of its own.
+
+    Pinned as a difference rather than a value: linear means two spans 0.8 apart in
+    posterior are 0.8 apart in score, whatever the offset."""
+    dmax = 3
+    grid = Grid(dmax, torch.zeros(dmax + 1, dtype=torch.long))
+    m = torch.zeros(1, 5, dmax, 2)
+    m[0, 3, dmax - 1, NOTE] = 0.9          # span [2, 3)
+    m[0, 3, dmax - 2, NOTE] = 0.1          # span [1, 3)
+    sc = MarginalScorer(m, grid, dmax_s=4.0)
+
+    likely = sc.unary(None, grid, 0, 2, 3)[NOTE]
+    unlikely = sc.unary(None, grid, 0, 1, 3)[NOTE]
+    assert float(likely - unlikely) == pytest.approx(0.8, abs=1e-6)
+    # ...and a span the model thinks more likely absent than present must not pay for
+    # itself, or the rule would take every span it is offered.
+    assert float(unlikely) < 0 < float(likely)
 
 
 def test_decoding_from_marginals_returns_a_valid_tiling():

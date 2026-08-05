@@ -34,13 +34,19 @@ from stemify.decoders.semicrf.evidence import Evidence
 from stemify.decoders.semicrf.forward import log_partitions
 from stemify.decoders.semicrf.spans import Grid, SpanScorer
 
-MIN_P = 1e-12
-"""Floor under a posterior before its log is taken.
+HALF = 0.5
+"""The posterior a span must beat to be worth including.
 
-A span the model gives no mass to has ``log P = -inf``, which is the *right* score --
-never choose it -- but ``-inf`` propagates into the scan's arithmetic and reaches the
-reduction as ``NaN`` rather than as a rejected alternative. ``log(1e-12) ~ -27.6`` is
-already far below any span the DP would consider."""
+Not a tuned threshold -- it is what the decision rule implies. Minimising the expected
+symmetric difference between the emitted segmentation and the truth,
+
+    E[L(y, y')] = |y| + E|y'| - 2 * sum over s in y of P(s)
+
+is maximising ``sum over s in y of (P(s) - 1/2)``. A span pays a half to exist and earns
+its posterior back, so it is included exactly when the model thinks it more likely
+present than absent. Change this and you are changing how the loss weighs a false
+positive against a false negative, which is a statement about the metric rather than a
+knob."""
 
 
 def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor:
@@ -65,7 +71,16 @@ def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
 
 
 class MarginalScorer(SpanScorer):
-    """A scorer whose span score is ``log P(span | x)`` under some other scorer.
+    """A scorer whose span score is ``P(span | x) - 1/2`` under some other scorer.
+
+    **Linear in the posterior, not logarithmic**, and the distinction is the whole
+    rule. Summing ``log P`` would score a segmentation by its probability, so every
+    additional span multiplies in another factor below one -- reintroducing the exact
+    per-span cost that makes MAP under-segment, on top of marginals computed to remove
+    it. Measured, that decoded *coarser* than MAP: 0.44 of the reference note count
+    against MAP-plus-bias's 0.98. Summing ``P - 1/2`` scores a segmentation by its
+    expected agreement with the truth, which is what the metric asks for and what has no
+    length preference of its own.
 
     Decoding through this is **maximum expected accuracy** (equivalently, minimum Bayes
     risk under a per-span loss): Viterbi still returns a valid tiling, obeying the same
@@ -76,7 +91,9 @@ class MarginalScorer(SpanScorer):
 
     ``transitions`` is **zero** on purpose. The transition table already shaped the
     distribution these marginals were computed from; scoring it again would count the
-    monophonic grammar twice, once inside the posterior and once outside it.
+    monophonic grammar twice, once inside the posterior and once outside it. The
+    structure it imposes survives anyway -- Viterbi still returns a valid tiling, so
+    spans cannot overlap or leave gaps whatever the posteriors say.
 
     Not a trained module and never serialised -- ``SemiCRFRecipe`` refuses to write a
     checkpoint for a scorer it cannot rebuild, which is the correct answer for one whose
@@ -90,7 +107,7 @@ class MarginalScorer(SpanScorer):
         # A buffer, not a parameter: it is data about one track, and the optimiser must
         # never see it. Registered rather than plain-attributed so `.to(device)` moves it
         # with the module.
-        self.register_buffer("log_p", marginal.clamp_min(MIN_P).log())
+        self.register_buffer("gain", marginal - HALF)
 
     def unary(
         self,
@@ -105,12 +122,12 @@ class MarginalScorer(SpanScorer):
         # `candidate_starts`, and the clamp covers the starts that function pins at 0
         # near a track's beginning -- those pair with a `zero` alpha and cannot win, so
         # any finite score there is unreachable rather than wrong.
-        table = torch.as_tensor(self.log_p)
+        table = torch.as_tensor(self.gain)
         d = (torch.as_tensor(i) - j + grid.dmax).clamp(0, grid.dmax - 1)
         return table[b, j, d]
 
     def transitions(self) -> torch.Tensor:
-        return torch.as_tensor(self.log_p).new_zeros((3, 2))
+        return torch.as_tensor(self.gain).new_zeros((3, 2))
 
     def grid(self, frame_times: np.ndarray) -> Grid:
         # The marginals were computed against one grid and are indexed by its `dmax`;
