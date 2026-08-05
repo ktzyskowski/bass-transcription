@@ -30,9 +30,6 @@ on how well the learned cues survive separation.
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
-from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
 from stemify.training.checkpoint import Checkpoint
@@ -46,27 +43,14 @@ from stemify.training.callbacks import (
 )
 from stemify.training.conditions import CONDITIONS, canonical
 from stemify.training.config import TrainConfig
+from stemify.training.base import epoch_batches
 from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.trainer import Trainer
-from stemify.training.validation import _eval_fn, build_validators
+from stemify.training.validation import build_eval_fn, build_validators
 
 logger = logging.getLogger(__name__)
 
 
-def _epoch_batches(loader: DataLoader[Any]) -> int | str:
-    """Batches per epoch, or ``"streaming"`` when that is not knowable in advance.
-
-    The chunked semi-CRF loader wraps an ``IterableDataset``: it walks ``batch_size``
-    parallel streams and stops when the first one runs out, so its epoch length is a
-    property of how the tracks divided up rather than something ``len`` can answer.
-    Logged as a param either way -- it is the number that makes "10 epochs" comparable
-    between objectives, and assuming every loader is sized is what crashed a run at
-    the first MLflow write while every smoke test (which ran without a tracking URI)
-    passed."""
-    try:
-        return len(loader)
-    except TypeError:
-        return "streaming"
 
 
 def train(
@@ -235,7 +219,7 @@ def train(
                     "max_grad_norm": config.max_grad_norm,
                     "objective": recipe.name,
                     "in_channels": recipe.in_channels,
-                    "train_batches": _epoch_batches(train_loader),
+                    "train_batches": epoch_batches(train_loader),
                     **recipe.params},
         )
         # Precompute pyin (and, for demucs, the separation) over each val condition
@@ -249,7 +233,7 @@ def train(
         # Per-epoch validation reports (all conditions x note+cues) are written here
         # and attached to the run under "validation/", so each scored checkpoint leaves
         # a diffable JSON artifact, not only metric points.
-        eval_fn = _eval_fn(
+        eval_fn = build_eval_fn(
             validators,
             report_dir=cache_dir / "val_reports",
             log_artifact=lambda p, _e: mlflow.log_artifact(p, artifact_path="validation"),
@@ -274,7 +258,7 @@ def train(
             "caching val contours for %d tracks x conditions %s (for --monitor %s)...",
             val_limit, val_conditions, config.monitor,
         )
-        eval_fn = _eval_fn(
+        eval_fn = build_eval_fn(
             build_validators(root, val_limit, val_conditions, cache=cache),
             build_decoder=recipe.decoder_from,
             build_model=recipe.build_model,

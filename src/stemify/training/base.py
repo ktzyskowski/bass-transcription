@@ -104,6 +104,22 @@ def config_int_list(
     return [int(v) for v in items]
 
 
+def epoch_batches(loader: DataLoader[Any]) -> int | str:
+    """Batches per epoch, or ``"streaming"`` when that is not knowable in advance.
+
+    The chunked semi-CRF loader wraps an ``IterableDataset``: it walks ``batch_size``
+    parallel streams and stops when the first one runs out, so its epoch length is a
+    property of how the tracks divided up rather than something ``len`` can answer.
+    Logged as a param either way -- it is the number that makes "10 epochs" comparable
+    between objectives, and assuming every loader is sized is what crashed a run at
+    the first MLflow write while every smoke test (which ran without a tracking URI)
+    passed."""
+    try:
+        return len(loader)
+    except TypeError:
+        return "streaming"
+
+
 class Batch(Protocol):
     """What the training loop needs of a batch, which is one thing: its size.
 

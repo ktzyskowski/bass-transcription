@@ -13,7 +13,7 @@ invent half-voiced frames or smear an onset across two.
 
 import numpy as np
 
-from stemify.grids import _nearest_frame, resample_mask
+from stemify.grids import nearest_frame, resample_mask
 
 
 def onset_targets(
@@ -32,7 +32,7 @@ def onset_targets(
     y = np.zeros(frame_times.size, dtype=np.float32)
     if len(onset_times) == 0 or frame_times.size == 0:
         return y
-    centres = _nearest_frame(frame_times, np.asarray(onset_times, dtype=float))
+    centres = nearest_frame(frame_times, np.asarray(onset_times, dtype=float))
     for c in centres:
         lo = max(0, int(c) - tolerance_frames)
         hi = min(frame_times.size, int(c) + tolerance_frames + 1)
@@ -73,7 +73,7 @@ def pitch_targets(
     voiced = ~np.isnan(src_midi)
     if not voiced.any():
         return y
-    nearest = _nearest_frame(pitch_times[voiced], frame_times)
+    nearest = nearest_frame(pitch_times[voiced], frame_times)
     resampled = src_midi[voiced][nearest]
     # A frame closer to a rest than to any voiced source frame stays NaN.
     src_voiced_time = pitch_times[voiced]

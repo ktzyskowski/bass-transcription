@@ -21,7 +21,7 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 
 
-def _check_one_device(what: str, **fields: torch.Tensor) -> None:
+def check_one_device(what: str, **fields: torch.Tensor) -> None:
     """Raise unless every named field shares a device. The guard behind the one-device
     invariant: it names the offending field, which a ``RuntimeError`` raised deep in
     the recurrence does not."""
@@ -35,14 +35,14 @@ def _check_one_device(what: str, **fields: torch.Tensor) -> None:
         raise ValueError(f"{what} fields span multiple devices: {detail}")
 
 
-def _on(x: np.ndarray | torch.Tensor, device: torch.device) -> torch.Tensor:
+def on_device(x: np.ndarray | torch.Tensor, device: torch.device) -> torch.Tensor:
     """``x`` as a tensor on ``device``. ``as_tensor`` keeps a numpy input a constant
     and a tensor input on the autograd graph; ``.to`` is itself differentiable, so a
     grad-bearing cue survives the placement."""
     return torch.as_tensor(x).to(device)
 
 
-def _cues_device(cues: Cues | TensorCues) -> torch.device:
+def cues_device(cues: Cues | TensorCues) -> torch.device:
     """Where a cues bundle's evidence already lives: the encoder's device for a
     ``TensorCues``, CPU for a numpy ``Cues``. Only a fallback -- callers that own a
     module (``SemiCRFDecoder``) pass its device explicitly instead."""

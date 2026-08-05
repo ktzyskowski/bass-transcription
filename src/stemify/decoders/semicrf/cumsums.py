@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from stemify.contour import Contour
-from stemify.decoders.semicrf.tensor_cues import _on
+from stemify.decoders.semicrf.tensor_cues import on_device
 from stemify.grids import resample_mask
 
 
@@ -38,7 +38,7 @@ def voiced_logcumsum(
     a silence -- so defaulting to "everything is voiced" would return a plausible
     number for a model that was never given the question."""
     if voicing is not None:
-        v = _on(voicing, device).float().clamp(1e-6, 1 - 1e-6)
+        v = on_device(voicing, device).float().clamp(1e-6, 1 - 1e-6)
         vlp, ulp = torch.log(v), torch.log1p(-v)
     else:
         if contour is None:
@@ -49,8 +49,8 @@ def voiced_logcumsum(
             )
         mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
         vp = np.clip(mask, 1e-6, 1 - 1e-6)
-        vlp = _on(np.log(vp).astype(np.float32), device)
-        ulp = _on(np.log1p(-vp).astype(np.float32), device)
+        vlp = on_device(np.log(vp).astype(np.float32), device)
+        ulp = on_device(np.log1p(-vp).astype(np.float32), device)
     Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
     Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
     return Vc, Uc

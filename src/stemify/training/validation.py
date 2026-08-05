@@ -290,7 +290,7 @@ def build_validators(
     }
 
 
-def _eval_fn(
+def build_eval_fn(
     validators: dict[str, CheckpointValidator],
     report_dir: Path | None = None,
     log_artifact: Callable[[Path, int], None] | None = None,

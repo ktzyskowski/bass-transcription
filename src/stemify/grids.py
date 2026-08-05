@@ -11,7 +11,7 @@ onset across two.
 import numpy as np
 
 
-def _nearest_frame(frame_times: np.ndarray, query: np.ndarray) -> np.ndarray:
+def nearest_frame(frame_times: np.ndarray, query: np.ndarray) -> np.ndarray:
     """Index of the nearest frame to each query time. Vectorised, so a whole
     track's onsets or a whole source grid resample in one call."""
     j = np.searchsorted(frame_times, query)
@@ -30,6 +30,6 @@ def resample_mask(
     y = np.zeros(frame_times.size, dtype=np.float32)
     if src_times.size == 0 or frame_times.size == 0:
         return y
-    nearest = _nearest_frame(np.asarray(src_times, dtype=float), frame_times)
+    nearest = nearest_frame(np.asarray(src_times, dtype=float), frame_times)
     resampled: np.ndarray = np.asarray(src_mask)[nearest].astype(np.float32)
     return resampled

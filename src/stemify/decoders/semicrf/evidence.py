@@ -37,7 +37,7 @@ from stemify.contour import Contour
 from stemify.cues import Cues
 from stemify.decoders.semicrf.cumsums import pitch_cumsums, voiced_logcumsum
 from stemify.decoders.semicrf.tensor_cues import (
-    TensorCues, _check_one_device, _cues_device, _on,
+    TensorCues, check_one_device, cues_device, on_device,
 )
 
 # A span index: an int for a single span, or a tensor when the scan broadcasts a
@@ -79,7 +79,7 @@ class Evidence:
     pitch_c: torch.Tensor | None = None     # (B, Tmax+1, K) cumsum of p_t
 
     def __post_init__(self) -> None:
-        _check_one_device(
+        check_one_device(
             "Evidence",
             onset_logit=self.onset_logit, voiced_c=self.voiced_c,
             rest_c=self.rest_c,
@@ -212,7 +212,7 @@ def _track_tensors(
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
     # Stride first, place second: the slice is cheap on the source device and only the
     # decimated grid crosses the bus.
-    onset = _on(torch.as_tensor(cues.onset).float()[::stride], device)
+    onset = on_device(torch.as_tensor(cues.onset).float()[::stride], device)
     onset_logit = torch.logit(onset.clamp(1e-6, 1 - 1e-6))
     voicing = cues.voicing[::stride] if cues.voicing is not None else None
     Vc, Uc = voiced_logcumsum(voicing, cues.contour, frame_times, device)
@@ -220,7 +220,7 @@ def _track_tensors(
     # the probe that used to stand here is what let the numpy path silently arrive
     # without one -- zeroing the learned span features at decode.
     logits = cues.pitch_logits
-    pitch = None if logits is None else pitch_cumsums(_on(logits, device)[::stride])
+    pitch = None if logits is None else pitch_cumsums(on_device(logits, device)[::stride])
     return onset_logit, Vc, Uc, frame_times, pitch
 
 
@@ -245,7 +245,7 @@ def build_evidence(
     batch = list(cues) if isinstance(cues, Sequence) else [cues]
     if not batch:
         raise ValueError("build_evidence needs at least one track")
-    device = _cues_device(batch[0]) if device is None else torch.device(device)
+    device = cues_device(batch[0]) if device is None else torch.device(device)
 
     built = [_track_tensors(c, stride, device) for c in batch]
     lengths = [int(t[0].shape[0]) for t in built]

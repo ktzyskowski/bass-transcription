@@ -172,12 +172,12 @@ def test_the_validation_report_records_the_pitch_source(tmp_path):
     a choice worth ~5 F1. Unrecorded, a saved artifact cannot say which made it."""
     import json
 
-    from stemify.training.validation import _eval_fn
+    from stemify.training.validation import build_eval_fn
 
     def report_for(pitch: bool) -> dict:
         out = tmp_path / ("learned" if pitch else "pyin")
         model = _cuenet(pitch)
-        fn = _eval_fn({}, report_dir=out, log_artifact=lambda p, e: None,
+        fn = build_eval_fn({}, report_dir=out, log_artifact=lambda p, e: None,
                       build_model=lambda: _cuenet(pitch))
         fn({"model": model.state_dict(), "loss": {}}, 0)
         return json.loads((out / "validation_epoch000.json").read_text())
