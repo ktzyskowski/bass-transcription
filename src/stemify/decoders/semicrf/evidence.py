@@ -105,12 +105,19 @@ class Evidence:
         t = self.lengths[b]
         def cut(x: torch.Tensor | None) -> torch.Tensor | None:
             return None if x is None else x[b : b + 1, : t + 1]
+        # Keyword arguments, not positional. `path_c` and `entropy_c` are both
+        # (B, Tmax+1), so transposing them here type-checks, runs, trains, and scores
+        # pitch instability with the entropy cumsum -- a wrong model that never raises.
         return Evidence(
-            self.onset_logit[b : b + 1, :t], self.voiced_c[b : b + 1, : t + 1],
-            self.rest_c[b : b + 1, : t + 1],
-            [t], [self.frame_times[b]],
-            None if self.contours is None else [self.contours[b]],
-            cut(self.path_c), cut(self.entropy_c), cut(self.pitch_c),
+            onset_logit=self.onset_logit[b : b + 1, :t],
+            voiced_c=self.voiced_c[b : b + 1, : t + 1],
+            rest_c=self.rest_c[b : b + 1, : t + 1],
+            lengths=[t],
+            frame_times=[self.frame_times[b]],
+            contours=None if self.contours is None else [self.contours[b]],
+            path_c=cut(self.path_c),
+            entropy_c=cut(self.entropy_c),
+            pitch_c=cut(self.pitch_c),
         )
 
     # --- span accessors: the index conventions, in one place --------------------
@@ -283,5 +290,7 @@ def build_evidence(
     maybe = [c.contour for c in batch]
     contours = None if any(c is None for c in maybe) else cast(list[Contour], maybe)
     return Evidence(
-        onset, Vc, Uc, lengths, [t[3] for t in built], contours, Pc, Hc, Dc,
+        onset_logit=onset, voiced_c=Vc, rest_c=Uc, lengths=lengths,
+        frame_times=[t[3] for t in built], contours=contours,
+        path_c=Pc, entropy_c=Hc, pitch_c=Dc,
     )

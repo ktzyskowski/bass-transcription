@@ -1104,3 +1104,33 @@ def test_the_learned_pitch_features_survive_into_inference():
         f"inference scores {scores[0]} but training scored {scores[1]} for the same "
         "cues -- the decoder is not the model that was trained"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Evidence's optional fields, which are same-shaped and were passed positionally #
+# --------------------------------------------------------------------------- #
+def test_one_preserves_each_optional_field_separately():
+    """`path_c` and `entropy_c` are both (B, T+1). Built positionally, transposing them
+    type-checks, runs, trains, and scores pitch instability with the entropy cumsum --
+    a wrong model that never raises.
+
+    Distinguishable values per field, so a swap fails here rather than months later as
+    an unexplained result."""
+    B, T, K = 2, 5, 3
+    ev = Evidence(
+        onset_logit=torch.zeros(B, T),
+        voiced_c=torch.full((B, T + 1), 1.0),
+        rest_c=torch.full((B, T + 1), 2.0),
+        lengths=[T, T],
+        frame_times=[np.arange(T) * DT, np.arange(T) * DT],
+        contours=None,
+        path_c=torch.full((B, T + 1), 3.0),
+        entropy_c=torch.full((B, T + 1), 4.0),
+        pitch_c=torch.full((B, T + 1, K), 5.0),
+    )
+    row = ev.one(1)
+    assert float(row.voiced_c.mean()) == 1.0
+    assert float(row.rest_c.mean()) == 2.0
+    assert row.path_c is not None and float(row.path_c.mean()) == 3.0
+    assert row.entropy_c is not None and float(row.entropy_c.mean()) == 4.0
+    assert row.pitch_c is not None and float(row.pitch_c.mean()) == 5.0
