@@ -18,8 +18,8 @@ whether the missing notes are:
 
   - cheap    -- a decoder constant (MIN_NOTE_S, MIN_ONSET_GAP_S) throws them away, and
                 a one-line change recovers them
-  - upstream -- pyin tracked no pitch, or demucs deleted the evidence, in which case
-                nothing downstream of the encoder can help either
+  - upstream -- the pitch source tracked nothing, or demucs deleted the evidence, in
+                which case nothing downstream of the encoder can help either
   - real     -- the encoder genuinely never fired, which is the emissions problem the
                 verifier was never going to fix
 
@@ -94,7 +94,7 @@ class RefNote:
     onset_prob: float     # peak of the onset curve within the match tolerance
     peak_dt: float        # seconds to the nearest *picked* peak; inf if none fired
     voiced_frac: float    # fraction of the note's frames the voicing head calls voiced
-    pyin_frac: float      # fraction of the note's frames pyin tracked any pitch in
+    tracked_frac: float   # fraction of the note's frames the pitch source tracked
     energy_db: float      # CQT level at this pitch during the note, dB below track peak
     clean_db: float       # the same, measured in the *clean stem* -- see below
 
@@ -154,7 +154,12 @@ def profile_track(
     peaks = onset_times_from_probs(cues.onset, cues.frame_times, threshold, MIN_ONSET_GAP_S)
     est_onsets = np.array([n.onset for n in est]) if est else np.zeros(0)
     features = ex.load_features()
-    contour = ex.contour
+    # The contour the *decode* used, not the cached pyin one. `LearnedEncoder` replaces
+    # pyin with the pitch head's own contour whenever the checkpoint has that head, so
+    # reading `ex.contour` here profiled a pitch source the pipeline never consulted --
+    # and the bucket below is tested first, so it claimed misses before any explanation
+    # that was actually in the loop got a look.
+    contour = cues.contour
 
     rows = []
     for i, n in enumerate(ref):
@@ -187,7 +192,7 @@ def profile_track(
                     float((voicing[frames] > VOICING_THRESHOLD).mean())
                     if voicing is not None else float("nan")
                 ),
-                pyin_frac=float((contour.freqs[c_frames] > 0).mean()),
+                tracked_frac=float((contour.freqs[c_frames] > 0).mean()),
                 energy_db=_energy_db(features.values, cues.frame_times, n),
                 clean_db=(
                     _energy_db(clean, cues.frame_times, n) if clean is not None
@@ -311,14 +316,14 @@ def bucket_table(rows: list[RefNote], field: str, edges: list[float], unit: str 
 def mechanism_table(rows: list[RefNote], threshold: float) -> str:
     """Why each missed note was missed, assigned to the earliest stage that explains it.
 
-    Ordered by pipeline position, and *exclusive*: a note whose pitch pyin never
+    Ordered by pipeline position, and *exclusive*: a note whose pitch the source never
     tracked is counted there even if the onset curve was also flat, because fixing the
     later stage would not have recovered it. The marginal (non-exclusive) rates follow,
     since the ordering is a choice and the overlaps are worth seeing.
     """
     missed = [r for r in rows if not r.found]
     tests = [
-        ("pyin tracked no pitch", lambda r: r.pyin_frac < 0.5),
+        ("pitch source tracked nothing", lambda r: r.tracked_frac < 0.5),
         ("voicing head says rest", lambda r: r.voiced_frac < 0.5),
         ("no onset peak fired", lambda r: r.peak_dt > ONSET_TOLERANCE_S),
         ("absorbed into a neighbour", lambda r: r.absorbed),
@@ -370,7 +375,7 @@ def report(rows: list[RefNote], threshold: float) -> None:
         ("separation_loss", [-inf, 0, 5, 10, 20, 40, inf], " (dB lost to separation)"),
         ("overlaps", [0, 1, 2, 3, inf], " (simultaneous notes)"),
         ("onset_prob", [0, 0.05, 0.2, 0.5, 0.8, 1.01], ""),
-        ("pyin_frac", [0, 0.01, 0.25, 0.5, 0.75, 1.01], " (frames pyin tracked)"),
+        ("tracked_frac", [0, 0.01, 0.25, 0.5, 0.75, 1.01], " (frames pitch-tracked)"),
         ("voiced_frac", [0, 0.01, 0.25, 0.5, 0.75, 1.01], " (frames called voiced)"),
     ]:
         print(bucket_table(rows, field, edges, unit), "\n")
