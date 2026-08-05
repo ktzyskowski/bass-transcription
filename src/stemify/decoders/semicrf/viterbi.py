@@ -22,9 +22,24 @@ from stemify.decoders.semicrf.window import initial_window, push
 
 @torch.no_grad()
 def viterbi(
-    scorer: SpanScorer, ev: Evidence, grid: Grid
+    scorer: SpanScorer, ev: Evidence, grid: Grid, note_bias: float = 0.0
 ) -> list[tuple[int, int, int]]:
     """The single highest-scoring segmentation of track 0 of ``ev``.
+
+    ``note_bias`` is added once per ``note`` span, so a segmentation with ``k`` notes
+    is shifted by ``k * note_bias``. It exists because this reduction and the objective
+    that trained the scorer disagree about what they are computing. Training minimises
+    ``log Z - score(gold)``, and ``log Z`` sums over *every* segmentation -- so it
+    counts the combinatorially many ways to place ``k`` boundaries, and the scorer is
+    fit knowing each individual fine segmentation must therefore score low to leave the
+    right total mass on "``k`` notes". ``max`` sees one segmentation at a time. It feels
+    the per-span cost that multiplicity paid for and never sees the multiplicity, so the
+    best *single* path is systematically coarser than the distribution's own expected
+    note count -- the same bias ASR corrects with a word insertion penalty.
+
+    Zero by default: the correction belongs to whoever tuned it against a validation
+    set, and a decode silently applying someone else's constant is worse than one that
+    does not correct at all.
 
     The backpointers accumulate as **one device tensor**, read back after the scan
     rather than element by element inside it: converting an argmax to a Python ``int``
@@ -42,9 +57,13 @@ def viterbi(
     window = initial_window(ev.onset_logit, 1, grid.dmax)
     last = window[:, -1]
     back = ev.onset_logit.new_zeros((T + 1, 2), dtype=torch.long)
+    # Added to the *next-label* axis, so it lands once per span closed as a note and
+    # never on a rest. Built once, outside the scan.
+    bias = ev.onset_logit.new_zeros(2)
+    bias[NOTE] = note_bias
     for j in range(1, T + 1):
         term = step_terms(scorer, ev, grid, window, j)      # (1, dmax, 3, 2)
-        val, arg = term.reshape(-1, 2).max(dim=0)           # (2,), (2,)
+        val, arg = (term + bias).reshape(-1, 2).max(dim=0)  # (2,), (2,)
         back[j] = arg
         # NEG rather than -inf: START is unreachable after position 0, and a finite
         # sentinel cannot produce a NaN when it meets the potentials added to it.

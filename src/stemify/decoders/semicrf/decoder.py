@@ -135,12 +135,18 @@ class SemiCRFDecoder(Decoder, nn.Module):
         A, window = chunk_log_partition(self.scorer, ev, grid, carry, context, right)
         return A, segmentation_scores(self.scorer, ev, golds, grid), window
 
-    def decode(self, cues: Cues) -> list[NoteEvent]:
-        """The notes implied by ``cues`` under the learned scorer (Viterbi)."""
+    def decode(self, cues: Cues, note_bias: float = 0.0) -> list[NoteEvent]:
+        """The notes implied by ``cues`` under the learned scorer (Viterbi).
+
+        ``note_bias`` is a **diagnostic**, not a setting: it measures how far the
+        best single path sits from the distribution's own expected note count, which
+        is what said the collapse was a readout and not a worse model. Deliberately a
+        call-site argument that nothing persists -- the pipeline decodes uncorrected,
+        so no result can silently acquire a constant fitted to somebody's val set."""
         ev, grid = self._prepare([cues])
         if ev.lengths[0] == 0:
             return []
-        return self._segs_to_notes(viterbi(self.scorer, ev, grid), ev)
+        return self._segs_to_notes(viterbi(self.scorer, ev, grid, note_bias), ev)
 
     def _segs_to_notes(
         self, segs: list[tuple[int, int, int]], ev: Evidence

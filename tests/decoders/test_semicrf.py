@@ -318,6 +318,80 @@ def test_viterbi_equals_brute_force_argmax():
     assert got == best, f"viterbi returned {got}, brute force says {best}"
 
 
+# --------------------------------------------------------------------------- #
+# note_bias: correcting max for what sum accounted for                         #
+# --------------------------------------------------------------------------- #
+def _notes_in(segs):
+    return sum(1 for label, _, _ in segs if label == NOTE)
+
+
+def test_note_bias_equals_brute_force_argmax_over_biased_scores():
+    """The same standard the unbiased recurrence is held to. A bias folded into the
+    scan accumulates through the window and the backpointers, so "it shifts the answer"
+    is not evidence it shifts it by ``k * bias`` -- only enumeration is."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax, bias = 8, 3, 0.8
+    e = _random_emissions(T, seed=1)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    scored = [
+        (_score_by_loop(dec.scorer, e, s, grid).item() + bias * _notes_in(s), s)
+        for s in _all_segmentations(T, dmax)
+    ]
+    best_score, best = max(scored, key=lambda kv: kv[0])
+    got = viterbi(dec.scorer, e, grid, note_bias=bias)
+    got_score = _score_by_loop(dec.scorer, e, got, grid).item() + bias * _notes_in(got)
+    assert abs(got_score - best_score) < 1e-4, (
+        f"biased viterbi scored {got_score}, best possible {best_score}"
+    )
+    assert got == best, f"biased viterbi returned {got}, brute force says {best}"
+
+
+def test_a_rest_never_collects_the_bias():
+    """It is a *note* insertion bonus. Paid on rests too it would be a constant per
+    span, which cancels between any two segmentations of equal span count and so
+    corrects nothing -- while still perturbing the decode enough to look like it works
+    on a single track."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 6, 3
+    e = _random_emissions(T, seed=4)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    # Drive every span to rest with a large negative bias, then confirm a further
+    # change of bias cannot move a segmentation that collects none of it.
+    all_rest = viterbi(dec.scorer, e, grid, note_bias=-50.0)
+    assert _notes_in(all_rest) == 0, "a -50 bias should leave no note spans at all"
+    assert viterbi(dec.scorer, e, grid, note_bias=-500.0) == all_rest
+
+
+def test_note_bias_defaults_to_no_correction():
+    """Every result in docs/experiments.md was decoded without one. A default that
+    shifted the decode would silently restate all of them."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 8, 3
+    e = _random_emissions(T, seed=2)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+    assert viterbi(dec.scorer, e, grid) == viterbi(dec.scorer, e, grid, note_bias=0.0)
+
+
+def test_note_bias_moves_note_count_monotonically():
+    """``score(y) + b * k(y)`` has increasing differences in ``(b, k)``, so the argmax's
+    note count is non-decreasing in ``b``. Worth pinning because it is what makes a
+    sweep interpretable: a non-monotone knob has no "the count crosses gold here", and
+    the F1 curve's peak would not mean what the script reads it as."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    T, dmax = 10, 3
+    e = _random_emissions(T, seed=3)
+    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+
+    counts = [
+        _notes_in(viterbi(dec.scorer, e, grid, note_bias=b))
+        for b in (-3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 3.0)
+    ]
+    assert counts == sorted(counts), f"note count not monotone in the bias: {counts}"
+    assert counts[0] < counts[-1], f"the bias moved nothing across +-3: {counts}"
+
+
 def test_batched_log_partition_equals_brute_force():
     # The batched scan is what training actually runs; check it against ground truth
     # too, not only against the single-track version.
