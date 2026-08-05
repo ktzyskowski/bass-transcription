@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch import nn
 
 from stemify.atomic import atomic_write
 from stemify.decoders.base import Decoder

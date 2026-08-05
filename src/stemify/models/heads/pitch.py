@@ -59,7 +59,7 @@ class FrequencyHead(nn.Module):
         super().__init__()
         self.n_bins = n_bins
         blocks: list[nn.Module] = []
-        for fd, td in zip(FREQ_DILATIONS, TIME_DILATIONS):
+        for fd, td in zip(FREQ_DILATIONS, TIME_DILATIONS, strict=True):
             blocks += [
                 nn.Conv2d(
                     conv_channels, conv_channels, kernel_size=3,

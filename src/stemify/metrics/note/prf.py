@@ -57,7 +57,7 @@ class PRF(NoteMetric):
     ) -> MetricResult:
         counts = [
             count_matches(ref, est, self.onset_tolerance, self.pitch_tolerance)
-            for ref, est in zip(references, estimates)
+            for ref, est in zip(references, estimates, strict=True)
         ]
         per_item = np.array(counts, dtype=int).reshape(-1, 3)  # (n_tracks, 3): tp/fp/fn
         tp, fp, fn = (int(per_item[:, i].sum()) for i in range(3))

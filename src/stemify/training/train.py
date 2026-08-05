@@ -27,26 +27,14 @@ breakdown. The gap between ``note/clean/f1`` and ``note/separated/f1`` is the ve
 on how well the learned cues survive separation.
 """
 
-import argparse
-import json
 import logging
-from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import torch
-from torch import nn
 from torch.utils.data import DataLoader
 
 from stemify.cache import Cache
-from stemify.contour import Contour
-from stemify.decoders.base import Decoder
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
-from stemify.features import FrameFeatures
-from stemify.notes import NoteEvent
-from stemify.models.cuenet import CueNet
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -59,7 +47,6 @@ from stemify.training.callbacks import (
 from stemify.training.conditions import CONDITIONS, canonical
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES, Recipe
-from stemify.training.semicrf.recipe import PITCH_WEIGHT
 from stemify.training.trainer import Trainer
 from stemify.training.validation import _eval_fn, build_validators
 

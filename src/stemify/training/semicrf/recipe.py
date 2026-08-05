@@ -13,10 +13,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
-from torch import nn
 from torch.utils.data import DataLoader
 
-import torch
 
 from stemify.cache import Cache
 from stemify.decoders.base import Decoder

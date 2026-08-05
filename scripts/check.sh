@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Types and tests, in one command. Run before committing, and while working through a
-# refactor -- the two together are the gate, since neither catches the other's class of
-# defect: mypy sees a field that cannot exist, pytest sees a value that is wrong.
+# Lint, types and tests, in one command. Run before committing, and while working
+# through a refactor -- the three together are the gate, since none catches another's
+# class of defect: ruff sees a name that is never read, mypy sees a field that cannot
+# exist, pytest sees a value that is wrong.
 #
-#   scripts/check.sh              both
+#   scripts/check.sh              all three
+#   scripts/check.sh lint         ruff only  (instant)
 #   scripts/check.sh types        mypy only  (fast, run this while editing)
 #   scripts/check.sh tests        pytest only
 #
@@ -19,8 +21,18 @@ cd "$(dirname "$0")/.."
 target="${1:-all}"
 [ $# -gt 0 ] && shift
 
+lint=0
 types=0
 tests=0
+
+run_lint() {
+  echo "── ruff ─────────────────────────────────────────"
+  # `check`, never `--fix` here. A gate that edits your working tree while reporting on
+  # it turns a red run into a diff you did not write, and the fix for an unused import
+  # is sometimes to *use* it.
+  uv run ruff check "$@" 2>&1
+  return "${PIPESTATUS[0]}"
+}
 
 run_types() {
   echo "── mypy ─────────────────────────────────────────"
@@ -43,15 +55,16 @@ run_tests() {
 }
 
 case "$target" in
+  lint)  run_lint "$@"; lint=$? ;;
   types) run_types "$@"; types=$? ;;
   tests) run_tests "$@"; tests=$? ;;
-  all)   run_types; types=$?; echo; run_tests; tests=$? ;;
-  *)     echo "usage: $0 [all|types|tests] [args...]" >&2; exit 2 ;;
+  all)   run_lint; lint=$?; echo; run_types; types=$?; echo; run_tests; tests=$? ;;
+  *)     echo "usage: $0 [all|lint|types|tests] [args...]" >&2; exit 2 ;;
 esac
 
 echo
-if [ "$types" -ne 0 ] || [ "$tests" -ne 0 ]; then
-  echo "FAIL  (mypy=$types pytest=$tests)"
+if [ "$lint" -ne 0 ] || [ "$types" -ne 0 ] || [ "$tests" -ne 0 ]; then
+  echo "FAIL  (ruff=$lint mypy=$types pytest=$tests)"
   exit 1
 fi
 echo "PASS"

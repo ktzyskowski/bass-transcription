@@ -5,8 +5,6 @@ directory level, the metadata.yaml stem table, the omitted split -- which
 changes when the dataset's on-disk shape does, not when an item or a filter changes.
 """
 
-import warnings
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 

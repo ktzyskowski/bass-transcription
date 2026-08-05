@@ -15,7 +15,6 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.contour import Contour
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.notes import NoteEvent
@@ -49,7 +48,7 @@ def _chunk(spans, pitches_hz, stream: int) -> Chunk:
     high on voiced frames -- so a linear head can learn to lower the NLL."""
     feats = np.zeros((N_BINS, T), dtype=np.float32)
     freqs = np.zeros(T, dtype=np.float32)
-    for (a, b), hz in zip(spans, pitches_hz):
+    for (a, b), hz in zip(spans, pitches_hz, strict=True):
         feats[0, round(a / DT)] = 1.0                       # onset marker
         feats[1, (TIMES >= a) & (TIMES < b)] = 1.0          # voiced marker
         freqs[(TIMES >= a) & (TIMES < b)] = hz

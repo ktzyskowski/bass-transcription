@@ -18,13 +18,11 @@ Either would report the right ``--sources`` and still feed the TCN's BatchNorm o
 condition's statistics at a time. So the shuffle is the feature, and this is its test.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from stemify.contour import Contour
 from stemify.notes import NoteEvent
 from stemify.serde import CachedItem
 from stemify.training.semicrf.dataset import ChunkDataset

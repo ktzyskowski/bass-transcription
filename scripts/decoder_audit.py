@@ -54,7 +54,7 @@ def score(refs, ests) -> Scored:
     exactly the pitch error, holding segmentation fixed.
     """
     tp = fp = fn = stp = sfp = sfn = 0
-    for ref, est in zip(refs, ests):
+    for ref, est in zip(refs, ests, strict=True):
         m = len(matched_pairs(ref, est, pitch_tolerance=IGNORE_PITCH))
         tp, fp, fn = tp + m, fp + len(est) - m, fn + len(ref) - m
         s = len(matched_pairs(ref, est))

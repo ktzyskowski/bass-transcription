@@ -31,7 +31,6 @@ combination, which is much more often than the types do.
 
 import logging
 import re
-from pathlib import Path
 
 from stemify.training.condition_types import Channel, Condition
 from stemify.transforms import AudioTransform, DemucsSeparator, Identity

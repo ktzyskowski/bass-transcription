@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from stemify.data.base import Dataset
-from stemify.data.slakh.index import SPLITS, index
+from stemify.data.slakh.index import index
 from stemify.data.slakh.item import BassStem
 
 

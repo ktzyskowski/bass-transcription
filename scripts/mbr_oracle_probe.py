@@ -146,7 +146,7 @@ def check_tiling(segs: Segs, T: int, dmax: int) -> None:
     covered = [(i, j) for _, i, j in segs]
     if not covered or covered[0][0] != 0 or covered[-1][1] != T:
         raise RuntimeError(f"sample does not cover [0, {T}): {covered[:3]}...{covered[-3:]}")
-    if any(a[1] != b[0] for a, b in zip(covered, covered[1:])):
+    if any(a[1] != b[0] for a, b in zip(covered, covered[1:], strict=True)):
         raise RuntimeError("sample has a gap or an overlap")
     if any(not 1 <= j - i <= dmax for i, j in covered):
         raise RuntimeError(f"sample has a span outside [1, {dmax}]")
@@ -207,7 +207,7 @@ def probe(
         rows: dict[str, list[float]] = {k: [] for k in ("map", "sample", "mbr", "oracle")}
         counts: dict[str, list[float]] = {k: [] for k in rows}
         drift: list[float] = []
-        for ex, cue in zip(examples, cues):
+        for ex, cue in zip(examples, cues, strict=True):
             ref = ex.notes
             # `_prepare` and `_segs_to_notes` are the decoder's internals. Reached into
             # deliberately: the point of the probe is to compare decision rules over the

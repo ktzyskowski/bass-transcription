@@ -51,7 +51,7 @@ class Fragmentation(NoteMetric):
     ) -> MetricResult:
         semitone_tol = self.pitch_tolerance / 100.0
         fragmentation = interior_off = rest = fp = 0
-        for ref, est in zip(references, estimates):
+        for ref, est in zip(references, estimates, strict=True):
             matched = {
                 e for _, e in matched_pairs(
                     ref, est, self.onset_tolerance, self.pitch_tolerance

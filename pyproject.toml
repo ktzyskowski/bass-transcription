@@ -40,7 +40,12 @@ build-backend = "hatchling.build"
 packages = ["src/stemify"]
 
 [dependency-groups]
-dev = ["pytest>=8", "mlflow>=2", "mypy>=1.14"]
+dev = [
+    "pytest>=8",
+ "mlflow>=2",
+ "mypy>=1.14",
+ "ruff>=0.9",
+]
 
 [tool.mypy]
 python_version = "3.12"
@@ -59,3 +64,35 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+# Same scope as mypy's `files`, plus the places mypy deliberately skips. Tests and
+# scripts are out of mypy's reach for good reasons (duck-typed fixtures, one-off
+# probes) -- but an unused import is an unused import wherever it sits, and those two
+# directories accumulate them fastest.
+src = ["src"]
+include = ["src/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+# The codebase's settled width, measured rather than chosen: p99 is 88 in both src and
+# tests. Recorded so a formatter agrees with it, but E501 is deliberately *not*
+# selected -- the convention already holds, and the ~120 lines past it are long URLs
+# and docstring table rows where breaking hurts.
+line-length = 88
+
+[tool.ruff.lint]
+# **Defects, not style.** This is a complement to mypy --strict, which sees a field
+# that cannot exist but never a name that is never read. Rules that would relitigate
+# formatting, import order or naming are left off on purpose: the codebase has a
+# settled voice, and a linter arguing with it produces a 200-line diff that catches
+# nothing and teaches people to skip the gate.
+#
+#   F  pyflakes -- unused imports and variables, undefined names, broken f-strings
+#   B  bugbear  -- mutable defaults, loop-variable capture, and `zip` without
+#                  `strict=`, which is a live bug class here: a length mismatch
+#                  between a track's channels silently pairs track i's audio with
+#                  track j's labels, loss still falling
+#   W  pycodestyle warnings -- whitespace and EOF hygiene only, no line length
+select = ["F", "B", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# A package `__init__` exists to re-export; every name in it is "unused" by definition.
+"**/__init__.py" = ["F401"]

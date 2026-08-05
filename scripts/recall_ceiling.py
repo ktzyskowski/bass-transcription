@@ -300,7 +300,7 @@ def bucket_table(rows: list[RefNote], field: str, edges: list[float], unit: str 
 
     out = [f"  {field}{unit}".ljust(24) + f"{'notes':>8} {'share':>7} {'miss':>7} {'lift':>6}"]
     base = 1.0 - found[ok].mean()
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
         sel = ok & (vals >= lo) & (vals < hi)
         n = int(sel.sum())
         if n == 0:

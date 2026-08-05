@@ -58,7 +58,7 @@ def _two_note_cues(
         onset[round(a / DT)] = 0.99
     voicing = _curve(note_spans, 0.99, 0.01)
     freqs = np.zeros(T, dtype=np.float32)
-    for (a, b), hz in zip(note_spans, pitches_hz):
+    for (a, b), hz in zip(note_spans, pitches_hz, strict=True):
         freqs[(TIMES >= a) & (TIMES < b)] = hz
     return Cues(
         contour=Contour(times=TIMES, freqs=freqs),
@@ -67,7 +67,7 @@ def _two_note_cues(
 
 
 def _notes(spans: list[tuple[float, float]], midis: list[float]) -> list[NoteEvent]:
-    return [NoteEvent(onset=a, offset=b, midi_pitch=m) for (a, b), m in zip(spans, midis)]
+    return [NoteEvent(onset=a, offset=b, midi_pitch=m) for (a, b), m in zip(spans, midis, strict=True)]
 
 
 def test_gold_rest_across_audible_gap():
@@ -357,7 +357,7 @@ def _enumerated_marginals(scorer, ev, grid, T, dmax):
     scores = torch.tensor([_score_by_loop(scorer, ev, s, grid).item() for s in segs])
     probs = (scores - torch.logsumexp(scores, 0)).exp()
     want = torch.zeros(T + 1, dmax, 2)
-    for p, seg in zip(probs, segs):
+    for p, seg in zip(probs, segs, strict=True):
         for label, i, j in seg:
             want[j, i - j + dmax, label] += p
     return want
@@ -586,7 +586,6 @@ def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
 
     size = e.T // n_chunks
     trimmed = _truncate(e, size * n_chunks)  # chunks must tile it exactly
@@ -623,7 +622,6 @@ def test_a_right_margin_is_not_scanned(right):
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, grid)
@@ -641,7 +639,6 @@ def test_scanning_the_right_margin_corrupts_the_carry():
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, grid)
@@ -659,7 +656,6 @@ def test_dropping_the_left_context_changes_the_answer():
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, grid)
@@ -680,7 +676,6 @@ def test_detaching_the_carry_still_reaches_every_chunk():
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
 
@@ -708,7 +703,6 @@ def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
     dec = _fitted_scorer(SemiCRFDecoder())
     e = _long_emissions(dec)
     grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, grid)
@@ -732,7 +726,6 @@ def test_chunk_log_partition_rejects_ragged_lengths():
         onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
     )
     grid = dec.scorer.grid(ea.frame_times[0])
-    dmax = grid.dmax
     ragged = build_evidence([a, short], dec.stride)
     with pytest.raises(ValueError, match="uniform lengths"):
         chunk_log_partition(dec.scorer, ragged, grid)
@@ -923,7 +916,7 @@ def test_cuda_decode_matches_cpu():
 
     on_cpu, on_gpu = cpu.decode(cues), gpu.decode(cues)
     assert len(on_cpu) == len(on_gpu) == 2
-    for a, b in zip(on_cpu, on_gpu):
+    for a, b in zip(on_cpu, on_gpu, strict=True):
         assert a.onset == pytest.approx(b.onset)
         assert a.offset == pytest.approx(b.offset)
         assert a.midi_pitch == pytest.approx(b.midi_pitch, abs=1e-4)

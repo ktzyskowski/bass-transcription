@@ -14,7 +14,7 @@ def classify(path: Path) -> Counter:
     src = path.read_text()
     lines = src.splitlines()
     n = len(lines)
-    kind = ["code"] * n  # default; overridden below
+    # Every line is code until one of the checks below claims it.
 
     # Docstring line spans from the AST (1-indexed, inclusive).
     doc = set()

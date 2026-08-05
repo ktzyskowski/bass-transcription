@@ -19,7 +19,6 @@ These pin the term's *mechanics*. Whether it lifts AUROC is an experiment, not a
 import numpy as np
 import pytest
 import torch
-from torch import nn
 
 from stemify.decoders.semicrf import SemiCRFDecoder
 from stemify.models.heads import frame_bce

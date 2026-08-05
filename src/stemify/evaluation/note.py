@@ -57,7 +57,7 @@ def _per_item_prf(
     )
     if counts is None:
         return []
-    return [(name, prf_rates(*(int(c) for c in row))) for name, row in zip(names, counts)]
+    return [(name, prf_rates(*(int(c) for c in row))) for name, row in zip(names, counts, strict=True)]
 
 
 @dataclass(frozen=True)

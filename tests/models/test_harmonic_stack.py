@@ -28,7 +28,7 @@ def test_shifts_land_on_the_harmonic_frequencies():
     """The claim the whole design rests on: ``h * f`` is a fixed bin offset from ``f``,
     the same offset at every pitch. Checked against the frequencies themselves rather
     than against a hardcoded table, which would only restate the implementation."""
-    for h, shift in zip((1, 2, 3, 4, 5), harmonic_shifts((1, 2, 3, 4, 5))):
+    for h, shift in zip((1, 2, 3, 4, 5), harmonic_shifts((1, 2, 3, 4, 5)), strict=True):
         for midi_bin in (0, 40, 84):        # bottom, mid-bass, top of the bass range
             f = FMIN * 2 ** (midi_bin / BINS_PER_OCTAVE)
             want = BINS_PER_OCTAVE * np.log2(h * f / FMIN)

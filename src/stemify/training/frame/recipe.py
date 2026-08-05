@@ -9,8 +9,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from pathlib import Path
 
-import torch
-from torch import nn
 from torch.utils.data import DataLoader
 
 from stemify.cache import Cache

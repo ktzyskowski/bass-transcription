@@ -39,7 +39,6 @@ from stemify.decoders.semicrf.cumsums import pitch_cumsums, voiced_logcumsum
 from stemify.decoders.semicrf.tensor_cues import (
     TensorCues, _check_one_device, _cues_device, _on,
 )
-from stemify.grids import resample_mask
 
 # A span index: an int for a single span, or a tensor when the scan broadcasts a
 # whole row of candidate starts at once. Every accessor takes all three the same
