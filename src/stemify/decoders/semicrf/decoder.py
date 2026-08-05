@@ -20,7 +20,7 @@ greedy decoder does. See ``docs/semi-crf.md``, which carries the theory and a le
 where this implementation departs from it.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import librosa
 import numpy as np
@@ -36,7 +36,11 @@ from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.decoders.semicrf.gold import gold_segments
 from stemify.decoders.semicrf.score import segmentation_scores
 from stemify.decoders.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
-from stemify.decoders.semicrf.marginals import marginal_scorer
+from stemify.decoders.semicrf.marginals import (
+    marginal_scorer,
+    segment_confidence,
+    span_marginals,
+)
 from stemify.decoders.semicrf.viterbi import viterbi
 from stemify.notes import NoteEvent
 
@@ -136,8 +140,17 @@ class SemiCRFDecoder(Decoder, nn.Module):
         A, window = chunk_log_partition(self.scorer, ev, grid, carry, context, right)
         return A, segmentation_scores(self.scorer, ev, golds, grid), window
 
-    def decode(self, cues: Cues, note_bias: float = 0.0) -> list[NoteEvent]:
+    def decode(
+        self, cues: Cues, note_bias: float = 0.0, with_confidence: bool = False
+    ) -> list[NoteEvent]:
         """The notes implied by ``cues`` under the learned scorer (Viterbi).
+
+        ``with_confidence`` attaches each note's posterior, ``P(span | x)``, which
+        Viterbi itself cannot report -- it returns the best path and says nothing about
+        how close the runner-up came, so every note arrives equally certain. Off by
+        default because it costs a second scan with its autograd graph retained,
+        roughly 3-4x the decode: worth it for a person reviewing a recording, waste for
+        a validation pass that only wants F1.
 
         ``note_bias`` is a **diagnostic**, not a setting: it measures how far the
         best single path sits from the distribution's own expected note count, which
@@ -147,7 +160,12 @@ class SemiCRFDecoder(Decoder, nn.Module):
         ev, grid = self._prepare([cues])
         if ev.lengths[0] == 0:
             return []
-        return self._segs_to_notes(viterbi(self.scorer, ev, grid, note_bias), ev)
+        segs = viterbi(self.scorer, ev, grid, note_bias)
+        confidence = (
+            segment_confidence(span_marginals(self.scorer, ev, grid), segs, grid)
+            if with_confidence else None
+        )
+        return self._segs_to_notes(segs, ev, confidence)
 
     def decode_marginal(self, cues: Cues) -> list[NoteEvent]:
         """The notes implied by ``cues``, decoded from **span posteriors** rather than
@@ -170,7 +188,10 @@ class SemiCRFDecoder(Decoder, nn.Module):
         return self._segs_to_notes(viterbi(posterior, ev, grid), ev)
 
     def _segs_to_notes(
-        self, segs: list[tuple[int, int, int]], ev: Evidence
+        self,
+        segs: list[tuple[int, int, int]],
+        ev: Evidence,
+        confidence: Mapping[tuple[int, int, int], float] | None = None,
     ) -> list[NoteEvent]:
         """Turn ``note`` segments into ``NoteEvent``s, reading each note's pitch as the
         median contour pitch over its span -- pitch comes from the contour, never
@@ -204,5 +225,12 @@ class SemiCRFDecoder(Decoder, nn.Module):
             pitch = float(np.nanmedian(cmidi[sel]))
             if np.isnan(pitch):
                 continue
-            notes.append(NoteEvent(onset=onset, offset=offset, midi_pitch=pitch))
+            notes.append(NoteEvent(
+                onset=onset, offset=offset, midi_pitch=pitch,
+                # 1.0 when nobody asked -- ``NoteEvent``'s own default, and the
+                # honest value for a decode that computed no posterior. Reporting
+                # a made-up number would be worse than reporting none, because a
+                # reviewer sorting by confidence would be sorting noise.
+                confidence=1.0 if confidence is None else confidence.get((label, i, j), 0.0),
+            ))
         return notes

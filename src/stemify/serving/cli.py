@@ -51,7 +51,7 @@ def transcribe(
     # ignored for a greedy checkpoint -- silently dropping it would report a
     # transcription under a correction that never applied.
     if isinstance(decoder, SemiCRFDecoder):
-        notes = decoder.decode(cues, note_bias=note_bias)
+        notes = decoder.decode(cues, note_bias=note_bias, with_confidence=True)
     elif note_bias:
         raise ValueError(
             f"--note-bias is a semi-CRF decode correction, but this checkpoint decodes "

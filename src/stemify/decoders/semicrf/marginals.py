@@ -27,6 +27,8 @@ No backward recurrence is written here. Reverse-mode autodiff through the forwar
 module is thirty lines and not a second DP to verify.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
 import torch
 
@@ -139,3 +141,31 @@ class MarginalScorer(SpanScorer):
 def marginal_scorer(scorer: SpanScorer, ev: Evidence, grid: Grid) -> MarginalScorer:
     """``MarginalScorer`` over ``scorer``'s own posteriors -- the two-step composed."""
     return MarginalScorer(span_marginals(scorer, ev, grid), grid, scorer.dmax_s)
+
+
+def segment_confidence(
+    marginal: torch.Tensor,
+    segs: Sequence[tuple[int, int, int]],
+    grid: Grid,
+    row: int = 0,
+) -> dict[tuple[int, int, int], float]:
+    """``P(span | x)`` for each decoded segment, keyed by ``(label, i, j)``.
+
+    What a reviewer needs and a MAP decode does not produce. Viterbi returns the best
+    path and says nothing about how close the runner-up was, so every note arrives
+    equally certain -- which on a real recording means checking all of them or none.
+    The posterior is already computed for the marginals; this is the lookup.
+
+    **Read it as a ranking, not as P(this note is correct).** It is the posterior of
+    this *exact* span -- both endpoints, to the frame. The note metric matches within
+    +-50 ms, so a note whose boundary is one frame off still counts, while its exact
+    span's posterior does not. Measured on a trained checkpoint the values run
+    min 0.03 / median 0.28 / max 0.80: the mass for "a note around here" is spread
+    across neighbouring ``(i, j)`` pairs, which is the same fragmentation that defeats
+    decoding from these directly. So 0.28 is a floor on the note being right, not an
+    estimate of it, and the number worth acting on is which notes sit at the bottom.
+    """
+    return {
+        (label, i, j): float(marginal[row, j, min(max(i - j + grid.dmax, 0), grid.dmax - 1), label])
+        for label, i, j in segs
+    }

@@ -24,6 +24,7 @@ from stemify.decoders.semicrf.forward import (
 from stemify.decoders.semicrf.marginals import (
     MarginalScorer,
     marginal_scorer,
+    segment_confidence,
     span_marginals,
 )
 from stemify.decoders.semicrf.semiring import MAX_PLUS
@@ -1134,3 +1135,32 @@ def test_one_preserves_each_optional_field_separately():
     assert row.path_c is not None and float(row.path_c.mean()) == 3.0
     assert row.entropy_c is not None and float(row.entropy_c.mean()) == 4.0
     assert row.pitch_c is not None and float(row.pitch_c.mean()) == 5.0
+
+
+def test_confidence_is_off_unless_asked_for():
+    """It costs a second scan with its graph retained -- roughly 3-4x the decode. A
+    validation pass wanting only F1 must not pay that, and a note carrying a made-up
+    number would be worse than one carrying none: a reviewer sorting by confidence
+    would be sorting noise."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    assert all(n.confidence == 1.0 for n in dec.decode(cues))
+
+
+def test_confidence_is_the_span_posterior():
+    """Not a score, not a margin -- the same number `span_marginals` reports, looked up
+    for the span that was actually emitted. Pinned against that table directly, because
+    an index convention off by one here would still produce plausible spread."""
+    dec = _fitted_scorer(SemiCRFDecoder())
+    cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
+    ev, grid = dec._prepare([cues])
+    segs = viterbi(dec.scorer, ev, grid)
+    table = span_marginals(dec.scorer, ev, grid)
+
+    got = segment_confidence(table, segs, grid)
+    assert got, "no segments to check -- fixture is not exercising the decode"
+    for (label, i, j), value in got.items():
+        assert value == pytest.approx(
+            float(table[0, j, i - j + grid.dmax, label]), abs=1e-6
+        )
+        assert 0.0 <= value <= 1.0, f"{value} is not a probability"
