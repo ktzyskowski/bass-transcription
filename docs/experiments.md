@@ -829,6 +829,185 @@ confidence a *trained* encoder reaches: an untrained head is diffuse and safe, s
 suite exercising only initialisation tests the one regime where the bug does not
 exist.
 
+## The composite objective — what the structured NLL alone would not train (2026-08-04)
+
+Four defects fixed together, deliberately: each is a defect rather than a tuning, and
+each costs ~2 h to isolate. It does mean a good result cannot say which one did it —
+ablate back with `--onset-weight 0` / `--voicing-weight 0` / `--accumulate-steps 1`.
+
+1. **Gradient accumulation** (`--accumulate-steps`, run uses 16). The detached alpha
+   carry was ~53 optimiser steps stale by a track's end (median 53 chunks/track, p90 69,
+   max 96) — R2D2's representational drift. Recomputing the prefix is O(N²) ≈ 27× ≈ 50 h
+   per epoch; freezing the weights across the window costs nothing. **This is what
+   stopped the divergence**, not the `sqrt` fix above, which was at most the terminal
+   event.
+2. **Per-frame NLL.** `log Z − score(gold)` is the surprisal of one structured object;
+   the heads report means. Adding a total to an average is dimensionally incoherent and
+   no weight repairs it — the weight just absorbs the frame count. Measured gradient
+   share into the shared trunk: **1233:1 → 3.31:1** on dividing by scanned frames.
+3. **Auxiliary per-frame terms** — BCE on onset and voicing, categorical CE on pitch.
+   The NLL is discriminative *over segmentations*: a feature earns gradient only in
+   proportion to how much it helps rank gold above the alternatives, and every span
+   feature carries a learned scalar that can shrink toward zero. Nothing asks a head to
+   be **calibrated**, only to be useful for ranking.
+
+   | | onset AP | voicing AUROC |
+   |---|---|---|
+   | frame BCE (5 runs) | 0.994–0.996 | 0.995–0.996 |
+   | semi-CRF (3 runs) | 0.20–0.53 | 0.510–0.522 |
+
+   Consistent across every run of each kind, so structural rather than early-epoch
+   noise. `cos(nll, voicing_bce) = +0.871` — the NLL already "wants" what the aux term
+   supplies and was simply far too weak to get it. No pair of terms has a negative
+   cosine, so nothing is fighting and gradient surgery is unnecessary.
+4. **Selection on a harness metric** (`--monitor`), forcing synchronous scoring. Val
+   loss was caught choosing the *worse* model: epoch 1 best by loss (16.25 < 20.04) with
+   **half** the F1 (0.4086 vs 0.8175).
+
+Gradient attribution at init, by projection onto the actual update direction (sums to
+100%, unlike norm shares): `nll 20.9%  onset 33.2%  voicing 45.2%  pitch 0.6%`. Pitch's
+0.6% is not starvation — `cos(pitch, total) = 0.080`, nearly orthogonal, because
+`FrequencyHead` taps the front-end *before* the temporal stack.
+
+### Result: epoch 0, same validator, same 37 val tracks
+
+| | before | after |
+|---|---|---|
+| clean F1 | 0.8175 | **0.9215** |
+| separated F1 | 0.6523 | **0.7236** |
+| onset AP (clean) | 0.3746 | **0.9170** |
+| voicing AUROC (clean) | 0.5160 | **0.9907** |
+| fragmentation | 691 | **186** |
+
+Best semi-CRF result on record, at epoch 0. The cues moved from near-chance into
+frame-BCE territory, and fragmentation −73 % is the over-segmentation bucket this
+objective exists to fix finally moving.
+
+**This reframes "semi-CRF loses to frame BCE by 6.4 F1"** (0.8733 vs 0.9375 on identical
+tracks). That comparison was substantially 0.99-quality cues against 0.4-quality ones,
+not a verdict on the objectives. With aux terms the semi-CRF objective *contains* frame
+BCE, so the open question becomes whether the structured term adds anything on top.
+
+Also worth recording: the DP reached note F1 **0.8175 on near-chance cues** (onset AP
+0.375, voicing AUROC 0.516) before any of this. A point in the architecture's favour.
+
+## The recall collapse was the decode, not the model (2026-08-04)
+
+Epochs 1 and 2 of that run looked like a catastrophe. Every loss term improved, every
+cue metric improved, and note F1 fell off a cliff.
+
+| clean | ep 0 | ep 1 | ep 2 |
+|---|---|---|---|
+| notes emitted | 13,516 | 9,310 | 8,783 |
+| precision | 0.9461 | 0.9328 | 0.9415 |
+| recall | 0.8981 | 0.6099 | 0.5808 |
+| F1 | 0.9215 | 0.7376 | 0.7184 |
+| fragmentation | 186 | 47 | 30 |
+| `fp_rest` | 210 | 232 | 198 |
+| `fp_interior_offpitch` | 333 | 347 | 286 |
+| val `nll` | 0.0667 | 0.0510 | 0.0453 |
+| onset AP | 0.9170 | 0.9415 | **0.9546** |
+
+Separated the same shape, worse: 10,305 → 4,965 → 5,145 emitted, F1 0.7236 → 0.4142 →
+0.4479. References: **14,238 notes**.
+
+Two things rule out "it got worse at the task". It dropped **true positives faster than
+false ones** (TP −32 %, FP −14 %), which is the opposite of a decoder declining risky
+notes. And of the three false-positive classes only fragmentation improved — spurious
+notes in rests and interior off-pitch notes both *rose*. It kept its mistakes and
+deleted boundaries around them. That is a granularity knob moving, not a judgement.
+
+### Mechanism: `log Z` sums, Viterbi maxes
+
+Training minimises `log Z − score(gold)`, and **there is no argmax anywhere in it** —
+`log Z` is a logsumexp over every segmentation and `score(gold)` needs no search. Only
+inference maximises.
+
+`log Z` therefore counts the `C(T−1, k−1)` ways to place `k` boundaries. For the right
+*total* mass to sit on "k notes", each individual fine segmentation must score low —
+roughly `−log(mean segment length)` per segment. Viterbi compares one structure against
+one structure: it pays that per-span cost and never sees the multiplicity that justified
+it. **The best single path is coarser than the distribution's own expected note count.**
+
+It also worsens as the model sharpens, because the residual uncertainty concentrates in
+boundary *placement* — mass split across 20 plausible split points at 3 % each loses to
+a single no-boundary structure at 40 %, even though the split reading holds 60 %.
+
+Not a new phenomenon: ASR corrects it with the **word insertion penalty**, NMT with
+length normalisation, and Eikema & Aziz (2020) showed NMT's exact mode is often the
+empty string while the distribution is well calibrated.
+
+### Confirmation 1 — the bias sweep (`scripts/sweep_note_bias.py`)
+
+`note_bias` adds a constant per `note` span at decode, so a `k`-note segmentation shifts
+by `k · bias`. Training is untouched. `bias 0.00` reproduces epoch 0's logged numbers
+exactly, so the harness path is sound.
+
+| bias | clean F1 | clean /gold | sep F1 | sep /gold |
+|---|---|---|---|---|
+| −1.00 | 0.6176 | 0.56 | 0.3034 | 0.28 |
+| −0.50 | 0.8362 | 0.81 | 0.5259 | 0.48 |
+| **0.00** | 0.9215 | 0.95 | 0.7238 | 0.72 |
+| **+0.20** | **0.9287** | 0.99 | 0.7696 | 0.81 |
+| **+0.40** | 0.9210 | 1.04 | **0.7916** | 0.90 |
+| +1.00 | 0.8527 | 1.24 | 0.7426 | 1.20 |
+| +1.50 | 0.7877 | 1.44 | 0.6642 | 1.53 |
+
+**+6.8 separated F1 and +0.7 clean, from one scalar on unchanged weights.** Both peaks
+are broad — clean within 0.002 across 0.10–0.30, separated within 0.009 across
+0.30–0.60 — so this is not a knob fitted to noise on 37 tracks.
+
+Three things fell out that fitting F1 does not force:
+
+1. **The peak lands near where emitted count crosses the reference count.** Clean peaks
+   at 0.99 of gold, which is the prediction almost exactly. Separated peaks at 0.90,
+   *under* gold, though its plateau spans 0.85–0.98 so gold sits inside it. Confirmed on
+   clean, approximately right on separated.
+2. **The negative side reproduces epochs 1 and 2.** All four collapsed points sit
+   **+0.035 to +0.057 above** the epoch-0 model biased to the same note count, and the
+   gap grows with epoch — their better cues showing through. They were better models
+   read through a worse readout.
+3. **The correction scales with boundary uncertainty.** Clean (onset AP 0.917) needs
+   +0.20; separated (AP 0.736) needs +0.40. Blunter evidence spreads mass over more
+   candidate positions, so the penalty is larger.
+
+### Confirmation 2 — expected count, with no labels (`scripts/expected_note_count.py`)
+
+For a log-linear model `d log Z / d w_f = E_model[f(y)]`, and `b_note`'s feature *is*
+the note-span count. So one `autograd.grad` through the existing differentiable forward
+gives what the distribution believes, with no reference notes and nothing tuned.
+
+Clean, epoch-0 checkpoint: **`E[count]/gold = 1.04` against `viterbi/gold = 0.96`**, and
+the same ordering on every track individually. The model expects more notes than its own
+decode emits, and lands near the references.
+
+This matters because the sweep is measured against labels and so cannot separate "the
+readout is biased" from "a count-shaped knob happens to help". This can.
+
+### What follows
+
+- `note_bias` is a **diagnostic** and stays a `decode()` argument that nothing persists.
+  It is a val-fitted constant; shipping it would mean every future result silently
+  carrying someone's tuning of 37 tracks.
+- **The fix is marginal / MBR decoding** — sum instead of max. Cheaper than it sounds:
+  reverse-mode autodiff through the forward scan *is* the backward algorithm (Eisner
+  2016, *Inside-Outside and Forward-Backward Algorithms Are Just Backprop*), so there is
+  no second DP to write and verify. Caveats: `viterbi` is `@torch.no_grad()`, so
+  marginals need their own entry point; and posterior decoding maximises expected
+  per-position correctness, which can emit structures the duration and transition priors
+  would have rejected. A constrained MBR is likely the right form, since those priors are
+  what the semi-CRF exists to provide.
+- **Selection is only as good as the decode it runs through.** `--save-epochs` now keeps
+  every epoch so selection can happen offline, where the readout can change without
+  re-training. Three improving epochs were discarded and could not afterwards be
+  re-scored, which is what made this expensive to establish.
+- **Soft onset targets move from parked to live** — see the revised note below.
+
+**Caveats.** Every number here is validation-tuned on 37 tracks and needs a held-out test
+re-run before being quoted. And the semi-CRF at its best bias (0.7916 separated / 0.9287
+clean) still trails `rung1-bichannel-pitch` and `rung4-pitch` — closer than 0.7236 made
+it look, not ahead.
+
 ## Future experiments
 
 ### Learned similarity for the span features (idea, 2026-08-04)
@@ -882,10 +1061,28 @@ being traded for another.
 Ranking: **soft > flat +-1 > 0**. Do not set `tolerance_frames=0`; it is strictly worse
 on every axis.
 
-**Why it is parked.** The plateau spans ~35 ms, *inside* the note metric's +-50 ms
-tolerance; peak-picking collapses it and the CRF's duration priors disambiguate
-further. So the gap between "soft" and "flat +-1" is currently below the metric's
-resolution. Revisit if boundary sharpness ever measures as the bottleneck.
+**Why it was parked, and why that no longer holds (revised 2026-08-04).** The original
+argument: the plateau spans ~35 ms, *inside* the note metric's ±50 ms tolerance;
+peak-picking collapses it and the CRF's duration priors disambiguate further, so the gap
+between "soft" and "flat ±1" sits below the metric's resolution. Revisit if boundary
+sharpness ever measures as the bottleneck.
+
+That reasoning is about the **note matcher**, and it does not transfer to the semi-CRF's
+decode. A flat 3-frame plateau trains the head to call three adjacent frames equally the
+onset, which splits every boundary's evidence ~3 ways. Under `log Z` those three
+positions **sum** (≈ +log 3 ≈ 1.1 nats); under Viterbi only the max survives. That is
+~1.1 nats of self-inflicted penalty on every boundary, on top of the combinatorial term
+— paid whether or not the matcher would have forgiven the timing. See "The recall
+collapse was the decode, not the model" above; the condition this note set for revisiting
+has been met.
+
+Two qualifications before acting on it. **Marginal decoding partly subsumes this** —
+summing over the plateau recovers the mass that maxing discards — so the remaining
+benefit is boundary localisation and the BCE/NLL target disagreement, which are real but
+smaller. And soft targets need a full retrain to evaluate, where the decode change is
+testable on a checkpoint that already exists. **Sequence rather than bundle**: bias probe
+→ marginal decoding → soft targets. The composite objective above shipped four changes at
+once and cannot attribute; doing it again would buy another unattributable result.
 
 **If it is ever done:** apply it to the auxiliary term only. Changing the frame path's
 targets silently breaks comparability with `tcn-v1`/`tcn-v2`, which every row in "the
