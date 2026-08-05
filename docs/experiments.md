@@ -1067,6 +1067,38 @@ closed branch instead of a losing streak.
 It does not touch the diagnosis in the entry above, which stands: the collapse *was* the
 readout. It says the crude fix is the fix.
 
+### Would more training rescue it? No — it makes it worse
+
+The obvious objection is that the posterior is diffuse because the model is undertrained,
+and that sharpening it closes the gap. Measured instead of argued: the same probe on the
+**epoch-0** checkpoint, same 11 tracks, each checkpoint at its own tuned bias
+(`logs/mbr-probe-ep0.log`).
+
+| rule | epoch 0 | epoch 4 | change |
+|---|---|---|---|
+| MAP + bias | 0.7658 | 0.7634 | −0.002 |
+| sample mean | 0.5734 | 0.5383 | **−0.035** |
+| MBR (K=32) | 0.6014 | 0.5771 | −0.024 |
+| ORACLE best of 32 | 0.6137 | 0.5883 | −0.025 |
+| **MAP − ORACLE gap** | 0.152 | **0.175** | **+0.023** |
+
+Four epochs made the *samples* 3.5 points worse while MAP held flat, widening the gap MBR
+would have to close. Per track the direction is consistent, not an average artifact: 8 of
+11 down for both sample mean and oracle. **Training moves MBR further from viable, so
+"train longer" is not a route back.**
+
+The mechanism is the multiplicity gap, and it now explains everything on this branch at
+once. As the model fits it puts more total mass on "there are k notes" — but there are
+`C(T−1, k−1)` ways to arrange k boundaries, so the distribution over *arrangements*
+flattens even as the belief about the *count* sharpens. Argmax is indifferent to that
+flattening; sampling draws straight from it. One mechanism, five consequences: MAP
+under-segments, the required bias climbs monotonically with training, the four MEA rules
+fail, MBR fails, and MBR degrades with training.
+
+The sample note counts make the same point from the other side: **1.15 → 1.02 of gold**
+(count calibration *improved*) while sample F1 went **0.5734 → 0.5383** (placement got
+worse). Getting the count right is not getting the notes right.
+
 ### The head-to-head that reframes all of it (2026-08-05)
 
 Both arms are now on held-out test, same 37 tracks, same metric, same learned pitch
