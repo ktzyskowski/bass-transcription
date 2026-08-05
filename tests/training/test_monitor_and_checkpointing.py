@@ -17,7 +17,10 @@ import torch
 from torch import nn
 
 from stemify.training.base import Loss
-from stemify.training.callbacks import BestCheckpointCallback
+from stemify.training.callbacks import (
+    BestCheckpointCallback,
+    EveryEpochCheckpointCallback,
+)
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import RECIPES
@@ -164,3 +167,32 @@ def test_a_non_improving_epoch_does_not_overwrite_the_best(tmp_path):
     assert cb.saved_epoch == 0
     cb.on_epoch_end(logs(1, 0))          # epoch 1 is not the best
     assert cb.saved_epoch == 0, "overwrote the best with a worse epoch"
+
+
+def test_every_epoch_is_kept_under_its_own_name(tmp_path):
+    """"Best" is decided by a decode, and a decode can be wrong about which epoch was
+    better -- the semi-CRF's Viterbi readout drifts from its own distribution as the
+    model sharpens, so three improving epochs scored worse, were never written, and
+    could not be re-scored afterwards. Keeping every epoch moves selection offline,
+    where the readout can change without re-training."""
+    recipe = RECIPES["semicrf"](["clean"], pitch=True)
+    model, objective = recipe.build_model(), recipe.build_loss()
+    cb = EveryEpochCheckpointCallback(tmp_path / "run.pt", recipe)
+    from stemify.training.callbacks.base import EpochLogs
+
+    for epoch in range(3):
+        cb.on_epoch_end(EpochLogs(
+            epoch=epoch, train_loss=1.0, val_loss=1.0, train_losses={"total": 1.0},
+            val_losses={"total": 1.0}, best_epoch=0,   # only epoch 0 is ever "best"
+            snapshot=lambda: {"model": model.state_dict(),
+                              "loss": objective.state_dict()},
+        ))
+
+    assert [p.name for p in cb.saved] == [
+        "run.epoch0.pt", "run.epoch1.pt", "run.epoch2.pt"
+    ]
+    # Each must be independently loadable, or "we kept them" is not the same claim as
+    # "we can score them".
+    for path in cb.saved:
+        assert Checkpoint.load(path).recipe.pitch is True
+    assert not (tmp_path / "run.pt").exists(), "must not also claim the best-checkpoint path"

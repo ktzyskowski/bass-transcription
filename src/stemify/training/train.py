@@ -51,6 +51,7 @@ from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
     BestCheckpointCallback,
+    EveryEpochCheckpointCallback,
     Callback,
     ConsoleCallback,
     MLflowCallback,
@@ -96,6 +97,7 @@ def train(
     out: Path | None = None,
     recipe: Recipe | None = None,
     init_from: Path | None = None,
+    save_epochs: bool = False,
 ) -> None:
     recipe = recipe or RECIPES["frame"]()
     sources = [c.name for c in recipe.conditions]
@@ -181,6 +183,8 @@ def train(
     # Written on every improvement, not once at the end: `fit` restores the best
     # weights when it *returns*, so a Ctrl-C, a SIGKILL or an OOM loses the whole run.
     callbacks: list[Callback] = [ConsoleCallback(), BestCheckpointCallback(out, recipe)]
+    if save_epochs:
+        callbacks.append(EveryEpochCheckpointCallback(out, recipe))
     mlflow = None
     eval_fn = None
     if tracking_uri:

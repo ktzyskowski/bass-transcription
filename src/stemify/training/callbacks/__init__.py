@@ -7,13 +7,17 @@ imports only from here, never a concrete callback module, and never mlflow.
 """
 
 from stemify.training.callbacks.async_validation import AsyncValidationCallback
-from stemify.training.callbacks.checkpoint import BestCheckpointCallback
+from stemify.training.callbacks.checkpoint import (
+    BestCheckpointCallback,
+    EveryEpochCheckpointCallback,
+)
 from stemify.training.callbacks.base import Callback, EpochLogs, Metrics, StateDict
 from stemify.training.callbacks.console import ConsoleCallback
 from stemify.training.callbacks.mlflow import MLflowCallback
 
 __all__ = [
     "BestCheckpointCallback",
+    "EveryEpochCheckpointCallback",
     "AsyncValidationCallback",
     "Callback",
     "ConsoleCallback",

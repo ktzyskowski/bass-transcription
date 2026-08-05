@@ -155,6 +155,12 @@ def main() -> None:
                          "structured-only objective for this head.")
     ap.add_argument("--out", type=Path,
                     help="checkpoint path (default <cache-dir>/onset_model.pt)")
+    ap.add_argument("--save-epochs", action="store_true",
+                    help="also write <out>.epoch<N>.pt after every epoch. Selection "
+                         "happens on a decode, so an epoch can be discarded for how it "
+                         "was read rather than what it learned -- keep them all and "
+                         "choose offline, where the readout can change without "
+                         "re-training.")
     args = ap.parse_args()
 
     # The recipe is built first because it owns which heads this run trains: with
@@ -236,6 +242,7 @@ def main() -> None:
         experiment=args.experiment, run_name=args.run_name,
         batch_log_every=args.batch_log_every,
         tracking_uri=args.tracking_uri, limit=args.limit, out=args.out,
+        save_epochs=args.save_epochs,
     )
 
 

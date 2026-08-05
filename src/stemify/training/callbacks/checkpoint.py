@@ -51,3 +51,38 @@ class BestCheckpointCallback(Callback):
             "saved best checkpoint (epoch %d, %s %.4f) -> %s",
             logs.epoch, logs.monitor or "val loss", logs.monitored, self.path,
         )
+
+
+class EveryEpochCheckpointCallback(Callback):
+    """Write ``<stem>.epoch<N><suffix>`` after every epoch, best or not.
+
+    "Best" is only as good as the metric deciding it, and that metric is a decode --
+    so an epoch can be discarded for how it was *read* rather than for what it
+    learned. The semi-CRF's Viterbi readout drifts away from its own distribution as
+    the model sharpens, which cost three epochs of a run whose losses and cue metrics
+    improved throughout: they scored worse, were never written, and could not
+    afterwards be re-scored under a corrected decode to find out.
+
+    So this keeps every epoch and lets selection happen offline, where the readout can
+    change without re-training. Cheap insurance -- a checkpoint here is single-digit
+    megabytes against hours per epoch.
+    """
+
+    def __init__(self, path: Path, recipe: Recipe) -> None:
+        self.path = Path(path)
+        self.recipe = recipe
+        self.saved: list[Path] = []
+
+    def on_epoch_end(self, logs: EpochLogs) -> None:
+        state = logs.snapshot()
+        out = self.path.with_name(
+            f"{self.path.stem}.epoch{logs.epoch}{self.path.suffix}"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Checkpoint(
+            recipe=self.recipe,
+            model_state=state["model"],
+            objective_state=state["loss"],
+        ).save(out)
+        self.saved.append(out)
+        logger.info("saved epoch checkpoint -> %s", out)
