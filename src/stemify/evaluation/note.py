@@ -24,7 +24,7 @@ metric, which loops tracks internally (a frame metric pools frames and scores on
 
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from stemify.core.data.base import Dataset, EvalItem
@@ -38,7 +38,6 @@ from stemify.core.metrics import (
 )
 from stemify.core.notes import NoteEvent
 from stemify.core.transcriber import Transcriber
-from stemify.core.sources import Sources
 from stemify.core.transforms import AudioTransform, Identity
 
 
@@ -151,8 +150,27 @@ class NoteEvaluation:
         self.progress = progress
 
     def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
-        path = self.transform.apply(item.audio())
-        return self.transcriber.transcribe(Sources(bass=path))
+        """The notes this transcriber reports for one item, over *every* role the
+        dataset offers rather than the bass alone.
+
+        It used to build ``Sources(bass=transform.apply(item.audio()))``, which made a
+        multi-channel checkpoint unscoreable: ``LearnedEncoder`` asks for
+        ``sources.role("mix")`` when the model has two input channels, and ``Sources``
+        raises rather than handing back a silent channel. So no bichannel arm had ever
+        been through this harness -- every such number came from the training-time
+        validator, which resolves channels properly.
+
+        Single-channel scoring is unchanged, and not merely by intent: the encoder
+        reads ``sources.bass`` and consults ``role("mix")`` only when
+        ``in_channels == 2``, so the extra field is unread by a mono model. The
+        transform still applies to channel 0 only -- the mixture is context the model
+        conditions on, never the thing being separated -- which is exactly how
+        ``bichannel-separated`` was trained.
+        """
+        sources = item.sources()
+        return self.transcriber.transcribe(
+            replace(sources, bass=self.transform.apply(sources.bass))
+        )
 
     def run(self) -> NoteReport:
         items = list(self.dataset)
