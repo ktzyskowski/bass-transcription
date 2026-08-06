@@ -5,12 +5,12 @@ implicitly (a save that completes leaves no .partial).
 
 import numpy as np
 
-from stemify.contour import Contour
-from stemify.serde import (
+from stemify.core.contour import Contour
+from stemify.core.legacy import migrate_example_cache
+from stemify.core.serde import (
     CachedItem,
     features_npy,
     load_contour,
-    migrate_example_cache,
     save_contour,
 )
 

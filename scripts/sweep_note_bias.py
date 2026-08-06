@@ -40,9 +40,9 @@ from pathlib import Path
 
 import torch
 
-from stemify.cache import Cache
-from stemify.encoders.learned import LearnedEncoder
-from stemify.metrics import score_notes
+from stemify.core.cache import Cache
+from stemify.models.learned_encoder import LearnedEncoder
+from stemify.core.metrics import score_notes
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators
 

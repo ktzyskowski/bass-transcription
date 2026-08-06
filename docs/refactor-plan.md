@@ -307,3 +307,228 @@ reported.
   pitch move" to the existing "did it move". Considered and **rejected**: folding pitch
   into the CRF label/likelihood — a joint likelihood allocates capacity by entropy and
   216 pitch bins would swamp the segmentation, inverting the current imbalance.
+
+---
+
+## Layering: `core/`, and the protocol seams between layers (opened 2026-08-05)
+
+External review of `docs/api-tree.txt` landed three notes: `training/` is large enough to
+be its own library; `semicrf` is split *horizontally* across `decoders/` and `training/`
+and wants to be one vertical slice; `training/` has slightly too many responsibilities.
+Their tl;dr — **the risk is continued growth, not poor organisation** — is right, and the
+measurements below say the fix is much smaller than the diagnosis suggests.
+
+### The measurement that shapes everything
+
+Classifying every module into a layer and computing cross-layer imports: **`core` has
+zero upward edges.** Not one module in the proposed bottom layer imports `training`,
+`semicrf`, `evaluation` or `serving`. The bottom layer is already a bottom layer; it has
+never been named.
+
+So this is not a rewrite. The whole programme is **12 edges**, all in the top three
+layers, plus a relabelling.
+
+| layer | lines | share | owns |
+|---|---|---|---|
+| `core` | 4,406 | 36% | runtime protocols, data contracts, DSP, torch-free reference impls |
+| `models` | 961 | 8% | TCN, CueNet, heads, `LearnedEncoder`, `NeuralPitch` |
+| `training` | 2,870 | 24% | extension protocols (`Recipe`/`Loss`/`Batch`), Trainer, callbacks, frame recipe |
+| `semicrf` | 2,962 | 24% | the vertical slice (`decoders/semicrf` + `training/semicrf` merged) |
+| `evaluation` | 705 | 6% | note + cues harness |
+| `serving` | 284 | 2% | inference CLI |
+
+Nothing dominates; compare today's `training` at 39%. `evaluation/` and `serving/` are
+the composition roots — they do not need an `app/` wrapper, they need to stop importing
+implementations.
+
+**Two protocol sets, two homes.** `core` owns what *inference composes* — `Encoder`,
+`Decoder`, `PitchEstimator`, `AudioTransform`, `Dataset`/`EvalItem`, the metrics, plus
+the new `Reconstitutable` and the registries. `training` owns what an *extension
+implements* — `Recipe`, `Loss`, `Batch`. No overlap, and the division answers "which
+protocol goes where" without case-by-case argument.
+
+### The 12 edges, grouped by the fix that removes them
+
+**A — `Checkpoint` split + registries (5).** `Checkpoint` holds `recipe: Recipe` as a
+*field*, so `load()` calls `RECIPES[name].from_config(...)`: you cannot read the file
+without the full recipe table, i.e. without importing semicrf's loss, dataset and
+loaders just to answer "what notes does this wav have". Split it:
+
+- `core/checkpoint.py` — `CheckpointFile`: `version`, `recipe_name: str`,
+  `recipe_config: dict`, `model_state`, `objective_state`. Pure data; `load` and the v1
+  migration become dict normalisation with no torch module built.
+- Reconstitution needs only 2 of `Recipe`'s 9 methods — `build_model()` and
+  `decoder_from()` are the only ones `Checkpoint` ever calls. `core` declares that
+  narrow half as a `Reconstitutable` Protocol; `Recipe` satisfies it structurally.
+- `Transcriber.from_checkpoint(path)` looks up `BUILDERS[recipe_name]` and composes,
+  never naming an objective. Same registry pattern retires
+  `evaluation/cli.py`'s `DECODERS = {"heuristic": ..., "semicrf": ...}`.
+
+Removes: `evaluation.cli → training.checkpoint`, `serving.cli → training.checkpoint`,
+`evaluation.cli → decoders.semicrf`, `serving.cli → decoders.semicrf`,
+`training.recipes → training.semicrf` (registration replaces import).
+
+*Write stays in `training`:* `save()`'s guard validates state against
+`recipe.build_model()`, and that guard exists for a bug that actually shipped.
+
+**B — preprocessing was never training-specific (4).** The reviewer's third note asked
+for a `training/preprocessing/` group. The better cut is that `labels`, `conditions`,
+`condition_types` and `examples` belong in `core`: `conditions.py` says so in its own
+docstring ("what the *evaluation* harness varies too, where objectives do not apply at
+all"), `evaluation.cues` already imports `labels`, and `scripts/`+`tests/` reach for
+`training.conditions` 16 times. A subpackage inside `training` would move the seam
+rather than remove it — the chain is `transforms → cache → features → labels →
+conditions`, and three of those five are already in `core`.
+
+Removes: `evaluation.cues → training.labels`, `semicrf.recipe → training.conditions`,
+`semicrf.tracks → training.conditions`, `semicrf.tracks → training.examples`.
+
+**C — recipes contribute their own CLI flags (2).** `training/cli.py` imports
+`ONSET_WEIGHT`/`PITCH_WEIGHT`/`VOICING_WEIGHT` from `semicrf.recipe` and `AUX_TERMS`
+from `semicrf.terms`, *by name*. This is what stops semicrf being a template: extension
+#2 would also require editing the framework's CLI. Until a recipe can contribute its own
+argument group and config keys, "semicrf is the template for future extensions" is not
+true whatever directory it lives in.
+
+**D — encoder assembly belongs to `core/models` (1).** `SemiCRFRecipe.build_model()`
+constructs a `FrameRecipe` and calls *its* `build_model()` ("Same encoder; only the
+objective differs"). A plugin instantiating a sibling plugin. Building a `CueNet` from
+`(conditions, pitch)` is a models concern; extract it and semicrf stops knowing `frame`
+exists.
+
+**Kept on purpose:** `semicrf → training.base` (`Recipe`, `Loss`, `config_field`) and
+`semicrf → training.config` (`TrainConfig`). Plugin→framework is the direction the arrow
+should point. After A–D those three are the *only* edges out of semicrf, which is the
+reviewer's "entirely disconnected" in the sense that matters.
+
+### The rule that makes the migration free: move code, never strings
+
+`cache.content_key` is SHA-256 over stringified, NUL-joined parts, and the parts are
+`AudioTransform.name`, `features.SIGNATURE` and resolved audio paths — **not** module
+paths, class locations or package structure. Condition tags (`"clean"`, …) live in
+checkpoint configs and MLflow params and resolve from anywhere.
+
+Verified alongside: `FrameRecipe.config` and `SemiCRFRecipe.config` return primitives
+only (`dur_edges_s` goes through `.cpu().tolist()`), and `Checkpoint.save` writes
+`{version, recipe:{name, config}, model_state, objective_state}`. **No checkpoint on
+disk pickles a module path**, so every existing checkpoint loads unchanged after the
+move.
+
+So: every file can move with zero cache invalidation, zero checkpoint breakage and zero
+backfill, *provided no string changes*. A legacy layer becomes necessary only where a
+rename is separately and deliberately chosen — never as fallout from relocation.
+
+### `core/legacy.py`
+
+Two migrations already exist and share a house style — `Checkpoint._from_v1` and
+`serde.migrate_example_cache` — both versioned or idempotent, both logging what they
+inferred, both documenting what lets them be deleted. Generalise into one module:
+
+    CHECKPOINT_MIGRATIONS: dict[int, Callable[[dict], dict]]   # chained, v -> v+1
+    CONDITION_ALIASES: dict[str, str]                          # old tag -> new tag
+    RECIPE_ALIASES: dict[str, str]                             # old objective -> key
+
+One rule per entry: the date it was added, and the condition that lets it be dropped.
+This is cheap *because of* the registries in A — alias resolution is a lookup at the
+registry boundary (`BUILDERS[RECIPE_ALIASES.get(name, name)]`), not a parallel compat
+layer. First inhabitant is `migrate_example_cache`, which is already documented as a
+droppable one-off and is imported only by `tests/training/test_serde.py`.
+
+**Explicitly not in scope:** shim modules re-exporting old import paths. The Python API
+has one consumer (this repo, three console scripts); shims would be compatibility with
+ourselves, plus permanent ruff/mypy ignores. The artifacts that genuinely cannot be
+regenerated are checkpoints, the feature/contour cache, MLflow history and the commands
+pinned in `ablation-plan.md` — all of which the rule above already protects.
+
+### Modernisation that rides along
+
+- **Protocols over ABCs, selectively.** Under structural typing a plugin satisfies
+  `Decoder` *without importing core's base class*, which is what "strict protocols
+  between layers" actually buys. Convert the pure interfaces — `PitchEstimator`,
+  `Encoder`, `FrameMetric`, `NoteMetric`. Keep ABCs where there is real shared
+  behaviour: `Decoder.decode_batch`, `AudioTransform.apply`/`cache_path`, `Recipe`.
+  Cost: no `isinstance` (`@runtime_checkable` checks method *names* only) — grep for
+  type branching before converting each one.
+- **PEP 695 generics.** `class Loss[B]`, `class Trainer[B]` instead of `Generic[B]` +
+  `TypeVar`. Three sites, 3.12, free.
+- **Rejected: pydantic for config.** `Recipe.from_config` already exists per recipe and
+  is the correct seam; adding pydantic solves a problem it would first create (a second
+  config idiom beside `TrainConfig`, plus a dependency).
+
+### Also surfaced, not layering
+
+- **The cues → `AlignedPairs` adapter exists twice** — `training/validation.py:156` and
+  `evaluation/cues.py:45-62` both build it and call `score_cues`. The metric is shared
+  (`core/metrics`); the adapter is not. Inputs genuinely differ (cached npz vs `EvalItem`
+  audio), so this is one small constructor in `core`, not a harness merge. Worth doing
+  for the reason `checkpoint.py` already records: "two implementations of this is what
+  let them disagree."
+- **`sagemaker` and `boto3` are declared in `pyproject.toml` and imported nowhere in
+  `src/`.** Unrelated; flagged where it was found.
+
+### Sequence
+
+    B (moves) -> D (extract) -> A (registry) -> merge semicrf -> C (CLI flags)
+
+B and D are pure moves with no design content, so they go first and shrink everything
+downstream. A is the design work. C is last because it is the only step that changes
+user-facing CLI behaviour. By the time the semicrf directories merge, they are files
+with no wrong edges left.
+
+**Not while a run is in flight.** The venv is an *editable* install, so a live
+`stemify-train` resolves `stemify.*` from `src/` as it goes; relocating modules under it
+risks a crash on any not-yet-imported module and on dataloader worker respawn. Costs
+hours of GPU; waiting costs minutes.
+
+### Rejected shapes
+
+- **Three top-level packages** (`src/stemify`, `src/training`, `src/semicrf`, or
+  `stemify_training`/`stemify_semicrf` as separate distributions). The reason to split
+  distributions is dependency separation, and it does not hold here: `torch` is already
+  in the bottom layer (`models/`, `encoders/`, `pitch/neural`, `device`), `demucs` is
+  already a lazy import inside `transforms.py`, and `mlflow` — one file — is the only
+  genuinely training-only dependency. A split would buy isolation from one dependency
+  while making `scripts/`+`tests/` deep imports (16× `training.conditions`, 12×
+  `training.checkpoint`, 11× `training.validation`, 6× `decoders.semicrf.gold`) into
+  cross-package reaches into privates. Revisit only if something outside this repo
+  installs one piece without the other. The layout above is the shape it would split
+  along, so nothing is wasted.
+- **Three top-level dirs in one wheel.** Enforces nothing — nothing stops `stemify/`
+  importing `training/`. The DAG is enforced by a contract check (`import-linter`, or
+  ~30 lines in `scripts/check.sh`), which works today on the current nesting.
+- **`app/` as a composition root.** Puts the coupling somewhere instead of removing it;
+  A removes it.
+- **`models/` moving up with `training`.** `learned_encoder.py` and `neural_pitch.py`
+  hold a `CueNet` to run *inference* -- both under `@torch.no_grad()` on a model in
+  `.eval()` -- and `stemify-transcribe` needs them, so the layering would invert on its
+  first real use. Autograd belongs to `Recipe`/`Loss`/`Trainer`; an `nn.Module` is not
+  autograd. **But it does not stay in `core` either** -- see below.
+
+### `models` as its own layer (done, 2026-08-05)
+
+`core` held the nets because nothing above it could. The third option is better than
+either: `models` between `core` and `training`, taking `LearnedEncoder` and
+`NeuralPitch` with it since both exist only to wrap a `CueNet`. What makes it worth the
+move is the property that falls out -- **`core` now imports no torch at all.** Exactly
+seven files in `core` imported it and they were exactly the set that left.
+
+That turns the boundary from a convention into a tripwire. `tests/test_layers.py`
+asserts, in a subprocess walking every submodule, that importing `stemify.core` leaves
+`torch` out of `sys.modules`; the same file holds the layer DAG as an allow-list with
+the still-outstanding edges named in a `PENDING` set that may only shrink. A contract
+nobody can breach by accident is worth more than a docstring asking them not to: the
+failure being guarded is one convenient import, which reads as a one-line diff.
+
+Two things the move flushed out, neither of which was visible before the test existed:
+
+- `DemucsSeparator` probed `best_device()` in `__init__`, and `core.conditions` builds
+  its registry at import time -- so merely importing the conditions table loaded torch,
+  for every caller including the ones that never separate anything. The device is now
+  resolved on first use. `best_device` itself stays in `core`: it already guarded its
+  torch import inside the function, and its docstring already said why.
+- **It corrects step A's protocol.** `Reconstitutable` was sketched as returning
+  `CueNet`, which now lives in `models` -- so `core` naming it would be an upward edge.
+  The contract must return core ABCs (`build_encoder(...) -> Encoder`,
+  `decoder_from(...) -> Decoder`) instead, which is better protocol design regardless:
+  the original leaked a concrete implementation class into a contract whose whole
+  purpose is to avoid naming implementations.

@@ -21,11 +21,11 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
-from stemify.decoders.semicrf.gold import gold_segments
-from stemify.decoders.semicrf.window import initial_window
-from stemify.features import N_BINS
-from stemify.notes import NoteEvent
+from stemify.semicrf import SemiCRFDecoder, TensorCues
+from stemify.semicrf.gold import gold_segments
+from stemify.semicrf.window import initial_window
+from stemify.core.features import N_BINS
+from stemify.core.notes import NoteEvent
 
 DT, T = 0.0116, 240
 TIMES = np.arange(T) * DT

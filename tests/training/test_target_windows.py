@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.serde import CachedItem
+from stemify.core.serde import CachedItem
 from stemify.models.heads import pitch_ce
-from stemify.training.semicrf.tracks import target_windows
+from stemify.semicrf.fit.tracks import target_windows
 
 N_BINS, HOP_S, T = 12, 0.0116, 20
 

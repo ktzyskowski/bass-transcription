@@ -18,13 +18,13 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.contour import Contour
-from stemify.cues import Cues
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.notes import NoteEvent
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
+from stemify.semicrf import SemiCRFDecoder
+from stemify.core.notes import NoteEvent
 from stemify.training.checkpoint import VERSION, Checkpoint
 from stemify.training.frame.recipe import FrameRecipe
-from stemify.training.semicrf.recipe import SemiCRFRecipe
+from stemify.semicrf.fit.recipe import SemiCRFRecipe
 
 DT = 0.0116
 

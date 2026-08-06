@@ -23,10 +23,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
-from stemify.training.semicrf.dataset import ChunkDataset
-from stemify.training.semicrf.tracks import TrainItem
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
+from stemify.semicrf.fit.dataset import ChunkDataset
+from stemify.semicrf.fit.tracks import TrainItem
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE, CHUNK, DMAX = 3, 40, 30

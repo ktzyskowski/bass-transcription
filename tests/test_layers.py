@@ -1,0 +1,137 @@
+"""The layering, as a test rather than a convention.
+
+Two properties, both of which were true by inspection when the layers were drawn and
+neither of which stays true on its own. A structural rule nobody can violate by accident
+is worth more than a docstring saying not to: the failure mode being guarded is a single
+convenient import that re-couples two layers, which reads as a one-line diff and is
+invisible in review.
+"""
+
+import ast
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
+
+# What each layer may import. The DAG, stated once.
+ALLOWED = {
+    "core": set(),
+    "models": {"core"},
+    "training": {"core", "models"},
+    "semicrf": {"core", "models", "training"},
+    "evaluation": {"core", "models"},
+    "serving": {"core", "models"},
+}
+
+# Edges that exist today and are known to be wrong -- the work still outstanding from
+# the layering plan (docs/refactor-plan.md, steps A and C). Listed rather than allowed,
+# so the set can only shrink: adding a new one fails this test, and removing the last of
+# them is what makes the layer above genuinely independent.
+#
+#   A  evaluation/serving read checkpoints and name SemiCRFDecoder directly; both go
+#      away with `Transcriber.from_checkpoint` and the decoder registry.
+#   C  training.cli imports the semi-CRF's weight constants and AUX_TERMS by name;
+#      goes away when a recipe contributes its own argument group.
+PENDING = {
+    ("evaluation", "training"),
+    ("evaluation", "semicrf"),
+    ("serving", "training"),
+    ("serving", "semicrf"),
+    ("training", "semicrf"),
+}
+
+# The semi-CRF is an *extension*: it implements training's contracts, so it may name
+# them -- and nothing else in that package. This is what stops a plugin reaching into a
+# sibling plugin (it built a `FrameRecipe` to reuse encoder assembly, which is step D).
+SEMICRF_MAY_IMPORT_FROM_TRAINING = {"training.base", "training.config"}
+
+
+def _layer(module: str) -> str:
+    return module.split(".")[0]
+
+
+def _edges() -> list[tuple[str, str, str]]:
+    """Every internal import, as ``(source module, target module, source file)``."""
+    out = []
+    for path in sorted(SRC.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        module = str(path.relative_to(SRC)).removesuffix(".py").replace("/", ".")
+        module = module.removesuffix(".__init__")
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+                "stemify"
+            ):
+                target = node.module.removeprefix("stemify").removeprefix(".")
+                if target:
+                    out.append((module, target, str(path.relative_to(SRC))))
+    return out
+
+
+def test_layer_dependencies_follow_the_dag():
+    """No layer imports one above it -- except the edges PENDING already names."""
+    violations = []
+    for source, target, where in _edges():
+        src_layer, dst_layer = _layer(source), _layer(target)
+        if src_layer == dst_layer:
+            continue
+        edge = (src_layer, dst_layer)
+        if dst_layer in ALLOWED.get(src_layer, set()) or edge in PENDING:
+            continue
+        violations.append(f"{where}: {source} -> {target}  ({src_layer} -> {dst_layer})")
+    assert not violations, "layer violations:\n  " + "\n  ".join(violations)
+
+
+def test_pending_edges_are_all_still_real():
+    """PENDING may only shrink. An entry that no longer occurs must be deleted, or the
+    list stops describing the work and starts hiding it."""
+    seen = {(_layer(s), _layer(t)) for s, t, _ in _edges() if _layer(s) != _layer(t)}
+    assert not (PENDING - seen), (
+        f"PENDING lists edges that no longer exist: {sorted(PENDING - seen)}. "
+        "Delete them -- that step of the refactor is done."
+    )
+
+
+def test_semicrf_touches_only_the_training_contracts():
+    """An extension depends on the framework, never on a sibling extension."""
+    bad = [
+        f"{where}: {source} -> {target}"
+        for source, target, where in _edges()
+        if _layer(source) == "semicrf"
+        and _layer(target) == "training"
+        and target not in SEMICRF_MAY_IMPORT_FROM_TRAINING
+    ]
+    # `semicrf.fit.recipe` builds a `FrameRecipe` purely to reuse encoder assembly.
+    # Step D moves that into `models`; until then this is the one known exception.
+    expected = ["semicrf/fit/recipe.py: semicrf.fit.recipe -> training.frame.recipe"]
+    assert bad == expected, f"unexpected semicrf -> training edges: {bad}"
+
+
+def test_core_imports_no_torch():
+    """Importing every module in ``core`` must not pull torch in.
+
+    In a subprocess because the test session has torch loaded already, and by walking
+    the package rather than importing ``stemify.core`` alone -- its ``__init__`` is a
+    docstring, so importing it proves nothing about the modules underneath.
+    """
+    probe = """
+import importlib, pkgutil, sys
+import stemify.core
+for m in pkgutil.walk_packages(stemify.core.__path__, "stemify.core."):
+    importlib.import_module(m.name)
+torch = sorted(n for n in sys.modules if n == "torch" or n.startswith("torch."))
+if torch:
+    raise SystemExit("core pulled in torch: " + ", ".join(torch[:5]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True
+    )
+    if result.returncode:
+        pytest.fail(
+            f"{result.stdout.strip()}{result.stderr.strip()}\n\n"
+            "Deep learning belongs in `stemify.models`. A torch import inside `core` "
+            "means a contract has been given a neural implementation in place."
+        )

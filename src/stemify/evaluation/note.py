@@ -27,19 +27,19 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from stemify.data.base import Dataset, EvalItem
+from stemify.core.data.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
-from stemify.metrics import (
+from stemify.core.metrics import (
     DEFAULT_NOTE_METRICS,
     MetricResult,
     NoteMetric,
     prf_rates,
     score_notes,
 )
-from stemify.notes import NoteEvent
-from stemify.transcriber import Transcriber
-from stemify.sources import Sources
-from stemify.transforms import AudioTransform, Identity
+from stemify.core.notes import NoteEvent
+from stemify.core.transcriber import Transcriber
+from stemify.core.sources import Sources
+from stemify.core.transforms import AudioTransform, Identity
 
 
 def _per_item_prf(

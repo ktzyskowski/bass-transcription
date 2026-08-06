@@ -31,15 +31,15 @@ from typing import Any
 
 import numpy as np
 
-from stemify.cues import Cues
-from stemify.data.base import Dataset, EvalItem
-from stemify.encoders.base import Encoder
+from stemify.core.cues import Cues
+from stemify.core.data.base import Dataset, EvalItem
+from stemify.core.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
-from stemify.metrics import MetricResult, AlignedPairs, score_cues
-from stemify.sources import Sources
-from stemify.training.labels import onset_targets, voicing_targets
-from stemify.transforms import AudioTransform, Identity
+from stemify.core.metrics import MetricResult, AlignedPairs, score_cues
+from stemify.core.sources import Sources
+from stemify.core.labels import onset_targets, voicing_targets
+from stemify.core.transforms import AudioTransform, Identity
 
 
 def aligned_pairs(cues: Cues, item: EvalItem) -> AlignedPairs:

@@ -22,22 +22,22 @@ from typing import Any
 
 import numpy as np
 
-from stemify.cache import Cache
-from stemify.decoders.base import Decoder
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.base import Decoder
+from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
-from stemify.contour import Contour
-from stemify.cues import Cues
-from stemify.data.base import Dataset
-from stemify.features import FrameFeatures, extract_features, stack_channels
-from stemify.metrics import MetricResult, AlignedPairs, score_cues, score_notes
-from stemify.notes import NoteEvent
-from stemify.pitch import PyinPitch
-from stemify.serde import features_npy
-from stemify.training.conditions import CONDITIONS, Condition
-from stemify.training.examples import prepare_examples
-from stemify.training.labels import onset_targets
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
+from stemify.core.data.base import Dataset
+from stemify.core.features import FrameFeatures, extract_features, stack_channels
+from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
+from stemify.core.notes import NoteEvent
+from stemify.core.pitch import PyinPitch
+from stemify.core.serde import features_npy
+from stemify.core.conditions import CONDITIONS, Condition
+from stemify.core.examples import prepare_examples
+from stemify.core.labels import onset_targets
 
 # A segmentation step: cached features + their contour -> notes. The validator
 # depends on this shape, not on any concrete encoder/decoder -- the caller wraps a

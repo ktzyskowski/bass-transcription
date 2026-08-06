@@ -14,7 +14,7 @@ from collections.abc import Callable
 import pytest
 import torch
 
-from stemify.notes import NoteEvent
+from stemify.core.notes import NoteEvent
 
 
 @pytest.fixture(params=["cpu", "cuda"])

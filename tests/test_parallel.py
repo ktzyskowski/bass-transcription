@@ -4,7 +4,7 @@ function -- a closure would not pickle under spawn, which is the whole constrain
 the helper documents.
 """
 
-from stemify.parallel import parallel_map
+from stemify.core.parallel import parallel_map
 
 
 def _square(x: int) -> int:

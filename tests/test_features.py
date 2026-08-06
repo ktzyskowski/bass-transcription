@@ -4,7 +4,7 @@ them, and the FrameFeatures object wraps arrays without copying."""
 import numpy as np
 import soundfile as sf
 
-from stemify.features import (
+from stemify.core.features import (
     N_BINS,
     SAMPLE_RATE,
     FrameFeatures,

@@ -35,11 +35,11 @@ from pathlib import Path
 
 import torch
 
-from stemify.cache import Cache
-from stemify.decoders.semicrf.forward import log_partitions
-from stemify.decoders.semicrf.viterbi import viterbi
-from stemify.decoders.semicrf.constants import NOTE
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.cache import Cache
+from stemify.semicrf.forward import log_partitions
+from stemify.semicrf.viterbi import viterbi
+from stemify.semicrf.constants import NOTE
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators
 

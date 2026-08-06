@@ -14,8 +14,8 @@ about the corpus rather than about the decoder.
 
 from pathlib import Path
 
-from stemify.sources import Sources
-from stemify.transforms import DEFAULT_CACHE, DemucsSeparator, Identity
+from stemify.core.sources import Sources
+from stemify.core.transforms import DEFAULT_CACHE, DemucsSeparator, Identity
 
 
 def sources_from(

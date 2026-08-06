@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from stemify.sources import Sources
+from stemify.core.sources import Sources
 
 
 def test_role_returns_the_audio_as_a_path():

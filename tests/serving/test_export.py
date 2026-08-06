@@ -12,8 +12,8 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from stemify.features import SAMPLE_RATE
-from stemify.notes import NoteEvent
+from stemify.core.features import SAMPLE_RATE
+from stemify.core.notes import NoteEvent
 from stemify.serving.export import HARMONICS, note_name, notes_csv, preview_wav, render
 
 

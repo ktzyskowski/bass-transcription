@@ -23,14 +23,14 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
+from stemify.semicrf import SemiCRFDecoder
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
 from stemify.training.config import TrainConfig
 from stemify.training.frame.dataset import FrameBatch
 from stemify.training.frame.loss import FrameBCELoss
-from stemify.training.semicrf.dataset import ChunkDataset
-from stemify.training.semicrf.tracks import TrainItem
+from stemify.semicrf.fit.dataset import ChunkDataset
+from stemify.semicrf.fit.tracks import TrainItem
 from stemify.training.trainer import Trainer
 
 N_BINS, HOP_S = 12, 0.0116
@@ -142,7 +142,7 @@ def test_the_semicrf_loss_reaches_the_trainer_guard_too(tmp_path):
     returning silently, this test would keep passing while `test_an_empty_val_loader`
     became the only thing standing between a small val set and a KeyError.
     """
-    from stemify.training.semicrf.loss import SemiCRFLoss
+    from stemify.semicrf.fit.loss import SemiCRFLoss
 
     items = [_item(tmp_path, "only")]
     trainer = Trainer(

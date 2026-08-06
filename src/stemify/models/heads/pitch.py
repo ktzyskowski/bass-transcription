@@ -30,8 +30,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from stemify.contour import Contour
-from stemify.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
+from stemify.core.contour import Contour
+from stemify.core.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
 
 # Frequency dilations grow ~3x per level so the branch can see across harmonics rather
 # than only its immediate neighbours: 1 + 2*(1+3+9+27) = 81 bins, about 2.25 octaves,

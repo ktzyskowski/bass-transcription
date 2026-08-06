@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from stemify.serde import CachedItem
+from stemify.core.serde import CachedItem
 
 # How many tracks' resident state one dataset keeps open. Sized to be negligible per
 # worker rather than to hit some ratio -- see ``_examples`` for why a larger cache
@@ -37,7 +37,7 @@ class FrameWindowDataset(Dataset[Any]):
     (content-addressed on its own audio file), so nothing here recomputes anything
     to add one; the windows are cut at the same offsets and stacked. **Targets and
     the window index come from channel 0 only**, which is the channel the labels
-    describe -- see ``training/conditions.py``.
+    describe -- see ``core/conditions.py``.
     """
 
     def __init__(

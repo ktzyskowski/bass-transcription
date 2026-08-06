@@ -8,7 +8,7 @@ weighted_not_track_averaged`` is the case that fails loudly if someone
 
 import math
 
-from stemify.metrics.note.prf import PRF
+from stemify.core.metrics.note.prf import PRF
 
 
 def test_single_track(note):

@@ -48,16 +48,16 @@ from pathlib import Path
 
 import torch
 
-from stemify.cache import Cache
-from stemify.decoders.semicrf.constants import NEG, NOTE, START
-from stemify.decoders.semicrf.evidence import Evidence
-from stemify.decoders.semicrf.forward import candidate_starts, log_partitions, step_terms
-from stemify.decoders.semicrf.marginals import span_marginals
-from stemify.decoders.semicrf.spans import Grid, SpanScorer
-from stemify.decoders.semicrf.window import initial_window, push
-from stemify.encoders.learned import LearnedEncoder
-from stemify.metrics.note import count_matches, prf_rates
-from stemify.notes import NoteEvent
+from stemify.core.cache import Cache
+from stemify.semicrf.constants import NEG, NOTE, START
+from stemify.semicrf.evidence import Evidence
+from stemify.semicrf.forward import candidate_starts, log_partitions, step_terms
+from stemify.semicrf.marginals import span_marginals
+from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.window import initial_window, push
+from stemify.models.learned_encoder import LearnedEncoder
+from stemify.core.metrics.note import count_matches, prf_rates
+from stemify.core.notes import NoteEvent
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators
 

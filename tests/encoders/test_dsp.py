@@ -7,10 +7,10 @@ onsets off, so no audio is read.
 
 import numpy as np
 
-from stemify.contour import Contour
-from stemify.encoders.classical import ClassicalEncoder
-from stemify.pitch import PitchEstimator, PyinPitch
-from stemify.sources import Sources
+from stemify.core.contour import Contour
+from stemify.core.encoders.classical import ClassicalEncoder
+from stemify.core.pitch import PitchEstimator, PyinPitch
+from stemify.core.sources import Sources
 
 
 class _FakePitch(PitchEstimator):

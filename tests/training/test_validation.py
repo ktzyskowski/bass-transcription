@@ -8,10 +8,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from stemify.contour import Contour
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
-from stemify.notes import NoteEvent
+from stemify.core.contour import Contour
+from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.models.learned_encoder import LearnedEncoder
+from stemify.core.notes import NoteEvent
 from stemify.training.validation import (
     ValItem,
     score_cues_examples,

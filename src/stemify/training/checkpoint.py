@@ -27,11 +27,11 @@ from typing import Any
 
 import torch
 
-from stemify.atomic import atomic_write
-from stemify.decoders.base import Decoder
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.atomic import atomic_write
+from stemify.core.decoders.base import Decoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
-from stemify.transcriber import Transcriber
+from stemify.core.transcriber import Transcriber
 from stemify.training.base import Recipe
 from stemify.training.recipes import RECIPES
 

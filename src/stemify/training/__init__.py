@@ -1,13 +1,13 @@
 """Training scaffolding for the learned segmenter heads.
 
 Onset, voicing and (optionally) pitch are the *same* problem -- per-frame
-sequence tagging on the shared CQT front-end (``stemify.features``) -- so they
+sequence tagging on the shared CQT front-end (``stemify.core.features``) -- so they
 share one encoder and differ only in the head and the target. That is the whole
 design:
 
-    features (CQT)            stemify.features.cqt, on the 11.6 ms frame grid
+    features (CQT)            stemify.core.features.cqt, on the 11.6 ms frame grid
     targets                   labels.py -- one builder per head, same grid
-    model                     stemify.encoders -- backbone (TCN) + swappable heads
+    model                     stemify.core.encoders -- backbone (TCN) + swappable heads
     data                      dataset.py -- SlakhItem -> (features, targets)
     fit                       trainer.py -- head-agnostic loop
 

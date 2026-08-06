@@ -6,7 +6,7 @@ rely on: onset tolerance, pitch tolerance, offsets ignored, and one-match-per-
 reference.
 """
 
-from stemify.metrics.note.base import (
+from stemify.core.metrics.note.base import (
     ONSET_TOLERANCE_S,
     PITCH_TOLERANCE_CENTS,
     count_matches,

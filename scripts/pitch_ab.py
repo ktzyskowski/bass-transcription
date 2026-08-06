@@ -25,13 +25,13 @@ wider claim than "only the pitch changed".
 import argparse
 from pathlib import Path
 
-from stemify.cache import Cache
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
-from stemify.metrics.note.base import matched_pairs
-from stemify.metrics.note.prf import prf_rates
-from stemify.training.conditions import CONDITIONS, canonical
+from stemify.core.metrics.note.base import matched_pairs
+from stemify.core.metrics.note.prf import prf_rates
+from stemify.core.conditions import CONDITIONS, canonical
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"

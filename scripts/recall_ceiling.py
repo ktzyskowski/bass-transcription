@@ -40,8 +40,8 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.cache import Cache
-from stemify.decoders.greedy import (
+from stemify.core.cache import Cache
+from stemify.core.decoders.greedy import (
     MIN_NOTE_S,
     MIN_ONSET_GAP_S,
     ONSET_THRESHOLD,
@@ -49,13 +49,13 @@ from stemify.decoders.greedy import (
     GreedyDecoder,
     onset_times_from_probs,
 )
-from stemify.encoders.learned import LearnedEncoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
-from stemify.features import BINS_PER_SEMITONE, midi_to_bin
-from stemify.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
-from stemify.notes import NoteEvent
-from stemify.serde import features_npy
-from stemify.training.conditions import CONDITIONS, canonical
+from stemify.core.features import BINS_PER_SEMITONE, midi_to_bin
+from stemify.core.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import features_npy
+from stemify.core.conditions import CONDITIONS, canonical
 from stemify.training.validation import CheckpointValidator, ValItem
 
 ROOT = "data/raw/slakh2100"

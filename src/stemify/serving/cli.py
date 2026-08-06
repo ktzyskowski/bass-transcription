@@ -18,8 +18,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.notes import NoteEvent
+from stemify.semicrf import SemiCRFDecoder
+from stemify.core.notes import NoteEvent
 from stemify.serving.audio import sources_from
 from stemify.serving.export import notes_csv, preview_wav
 from stemify.training.checkpoint import Checkpoint

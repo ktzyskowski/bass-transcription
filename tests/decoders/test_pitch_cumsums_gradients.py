@@ -24,8 +24,8 @@ substitute -- the forward was always correct.
 import pytest
 import torch
 
-from stemify.decoders.semicrf.cumsums import pitch_cumsums
-from stemify.features import N_BINS
+from stemify.semicrf.cumsums import pitch_cumsums
+from stemify.core.features import N_BINS
 
 
 def _grad(logits: torch.Tensor) -> torch.Tensor:

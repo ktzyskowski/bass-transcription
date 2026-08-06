@@ -5,9 +5,15 @@ The two contracts live together because they are two halves of one thing -- a
 always changes the other. Splitting them across packages is what made the semi-CRF
 spread over three directories before the training tree was sliced by strategy.
 
-The implementations live in ``training/frame`` and ``training/semicrf``, one package
+The implementations live in ``training/frame`` and ``stemify/semicrf/fit``, one package
 per paradigm; ``training/recipes.py`` is the table that names them. This module knows
 about neither, which is what lets a strategy package import it without a cycle.
+
+That the semi-CRF's half sits outside this package is the point of the split: it is an
+extension, so it depends on these contracts rather than living beside them. These three
+names -- ``Recipe``, ``Loss``, ``Batch`` -- plus ``TrainConfig`` are the entire surface
+an objective needs, and they are deliberately the only edges from ``semicrf`` into
+``training``.
 """
 
 from abc import ABC, abstractmethod
@@ -18,10 +24,10 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from stemify.cache import Cache
-from stemify.decoders.base import Decoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.base import Decoder
 from stemify.models.cuenet import CueNet
-from stemify.training.conditions import resolve
+from stemify.core.conditions import resolve
 from stemify.training.config import TrainConfig
 
 HEADS = ["onset", "voicing"]

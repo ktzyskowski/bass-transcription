@@ -16,7 +16,7 @@ import math
 import numpy as np
 import pytest
 
-from stemify.metrics.frame.pitch import PitchAccuracy
+from stemify.core.metrics.frame.pitch import PitchAccuracy
 
 A2 = 110.0  # MIDI 45
 A3 = 220.0  # MIDI 57, one octave above A2

@@ -15,12 +15,12 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.decoders.semicrf.gold import gold_segments
-from stemify.notes import NoteEvent
+from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.gold import gold_segments
+from stemify.core.notes import NoteEvent
 from stemify.training.config import TrainConfig
-from stemify.training.semicrf.dataset import Chunk, collate
-from stemify.training.semicrf.loss import SemiCRFLoss
+from stemify.semicrf.fit.dataset import Chunk, collate
+from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer
 
 DT = 0.0116
@@ -106,7 +106,7 @@ def test_decoder_from_names_a_retired_potential():
     # `scorer.w_pitch`. Refusing it is right -- those potentials were fitted against a
     # scorer that no longer exists -- but the reason has to survive into the message,
     # or it reads as a corrupt file rather than a superseded one.
-    from stemify.training.semicrf.recipe import SemiCRFRecipe
+    from stemify.semicrf.fit.recipe import SemiCRFRecipe
 
     recipe = SemiCRFRecipe(["clean"])
     state = {"loss": dict(SemiCRFDecoder().state_dict()) | {"scorer.w_pitch": 0.0}}

@@ -10,7 +10,7 @@ silently.
 import pytest
 import torch
 
-from stemify.decoders.semicrf.semiring import LOG, MAX_PLUS
+from stemify.semicrf.semiring import LOG, MAX_PLUS
 
 
 @pytest.fixture

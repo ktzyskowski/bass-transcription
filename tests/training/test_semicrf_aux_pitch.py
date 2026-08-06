@@ -15,12 +15,12 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.decoders.semicrf.gold import gold_segments
+from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.gold import gold_segments
 from stemify.models.heads import pitch_ce
-from stemify.notes import NoteEvent
-from stemify.training.semicrf.dataset import Chunk, collate
-from stemify.training.semicrf.loss import SemiCRFLoss
+from stemify.core.notes import NoteEvent
+from stemify.semicrf.fit.dataset import Chunk, collate
+from stemify.semicrf.fit.loss import SemiCRFLoss
 
 DT = 0.0116
 T = 240

@@ -14,14 +14,14 @@ share of errors attributable to pitch, holding the segmentation fixed.
 import sys
 from pathlib import Path
 
-from stemify.cache import Cache
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
-from stemify.metrics.note.fragmentation import Fragmentation
-from stemify.metrics.note.prf import PRF
-from stemify.metrics.note.scoring import score_notes
-from stemify.training.conditions import CONDITIONS
+from stemify.core.metrics.note.fragmentation import Fragmentation
+from stemify.core.metrics.note.prf import PRF
+from stemify.core.metrics.note.scoring import score_notes
+from stemify.core.conditions import CONDITIONS
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "/home/ktzys/dev/tabgen/stemify-ml/data/raw/slakh2100"

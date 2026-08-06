@@ -16,15 +16,15 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from stemify.training.conditions import CONDITIONS
+from stemify.core.conditions import CONDITIONS
 from stemify.training.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES
-from stemify.training.semicrf.recipe import (
+from stemify.semicrf.fit.recipe import (
     ONSET_WEIGHT,
     PITCH_WEIGHT,
     VOICING_WEIGHT,
 )
-from stemify.training.semicrf.terms import AUX_TERMS
+from stemify.semicrf.fit.terms import AUX_TERMS
 from stemify.training.train import train
 
 

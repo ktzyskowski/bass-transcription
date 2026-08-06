@@ -11,9 +11,9 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader
 
-from stemify.cache import Cache
-from stemify.decoders.base import Decoder
-from stemify.decoders.greedy import GreedyDecoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.base import Decoder
+from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
@@ -24,9 +24,9 @@ from stemify.training.base import (
     config_int_list,
     config_str_list,
 )
-from stemify.training.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
+from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.training.config import TrainConfig
-from stemify.training.examples import prepare_examples
+from stemify.core.examples import prepare_examples
 from stemify.training.frame import dataset as frame_ds
 from stemify.training.frame.dataset import FrameBatch
 from stemify.training.frame.loss import FrameBCELoss

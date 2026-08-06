@@ -28,17 +28,17 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.cache import Cache
-from stemify.contour import Contour
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.decoders.semicrf.gold import gold_segments
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
-from stemify.sources import Sources
-from stemify.training.conditions import CONDITIONS
-from stemify.training.semicrf.tracks import train_items
-from stemify.training.semicrf.dataset import Chunk, ChunkDataset, collate
-from stemify.training.semicrf.loss import SemiCRFLoss
+from stemify.core.cache import Cache
+from stemify.core.contour import Contour
+from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.gold import gold_segments
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
+from stemify.core.sources import Sources
+from stemify.core.conditions import CONDITIONS
+from stemify.semicrf.fit.tracks import train_items
+from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
+from stemify.semicrf.fit.loss import SemiCRFLoss
 
 N_BINS, HOP_S, STRIDE = 12, 0.0116, 3
 CHUNK, DMAX = 10, 30

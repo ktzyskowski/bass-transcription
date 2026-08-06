@@ -11,12 +11,12 @@ one track cannot collide" is now load-bearing rather than incidental.
 
 import numpy as np
 
-from stemify.cache import Cache, content_key
-from stemify.contour import Contour
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
-from stemify.sources import Sources
-from stemify.transforms import AudioTransform, Identity
+from stemify.core.cache import Cache, content_key
+from stemify.core.contour import Contour
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
+from stemify.core.sources import Sources
+from stemify.core.transforms import AudioTransform, Identity
 
 
 class _FakeSeparator(AudioTransform):
@@ -54,7 +54,7 @@ def test_feature_key_changes_with_the_cqt_signature(tmp_path, monkeypatch):
     # quietly reading features computed under the old ones.
     cache = Cache(tmp_path)
     before = cache.feature_path(tmp_path / "trk.wav")
-    monkeypatch.setattr("stemify.cache.CQT_SIGNATURE", "cqt-different-hop")
+    monkeypatch.setattr("stemify.core.cache.CQT_SIGNATURE", "cqt-different-hop")
     assert cache.feature_path(tmp_path / "trk.wav") != before
 
 
@@ -89,14 +89,14 @@ class _CountingItem:
 
 
 def _fake_extract_features(monkeypatch, calls):
-    from stemify import features as features_mod
+    from stemify.core import features as features_mod
 
     def fake(path):
         calls["n"] += 1
         t = np.arange(10) * 0.0116
         return features_mod.FrameFeatures(np.random.rand(4, 10).astype(np.float32), t)
 
-    monkeypatch.setattr("stemify.cache.extract_features", fake)
+    monkeypatch.setattr("stemify.core.cache.extract_features", fake)
 
 
 def test_ensure_features_computes_once_then_skips(tmp_path, monkeypatch):

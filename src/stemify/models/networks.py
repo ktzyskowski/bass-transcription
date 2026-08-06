@@ -22,7 +22,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
-from stemify.features import N_BINS, harmonic_shifts
+from stemify.core.features import N_BINS, harmonic_shifts
 
 
 class _ConvFrontend(nn.Module):

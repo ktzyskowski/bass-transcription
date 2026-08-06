@@ -20,7 +20,7 @@ This is the pitch-channel aligner for ``CuesEvaluation`` -- the encoder's contou
 import mir_eval
 import numpy as np
 
-from stemify.contour import Contour
+from stemify.core.contour import Contour
 
 
 def align(reference: Contour, estimate: Contour) -> tuple[np.ndarray, np.ndarray]:

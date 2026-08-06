@@ -24,20 +24,20 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from stemify.data.base import Dataset
-from stemify.data.idmt_smt_bass import IdmtDataset
-from stemify.data.mdb_bass_synth import MdbDataset
-from stemify.data.slakh import SlakhDataset
-from stemify.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
-from stemify.decoders.base import Decoder
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.encoders.base import Encoder
-from stemify.encoders.classical import ClassicalEncoder
+from stemify.core.data.base import Dataset
+from stemify.core.data.idmt_smt_bass import IdmtDataset
+from stemify.core.data.mdb_bass_synth import MdbDataset
+from stemify.core.data.slakh import SlakhDataset
+from stemify.core.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
+from stemify.core.decoders.base import Decoder
+from stemify.semicrf import SemiCRFDecoder
+from stemify.core.encoders.base import Encoder
+from stemify.core.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
-from stemify.transcriber import Transcriber
+from stemify.core.transcriber import Transcriber
 from stemify.training.checkpoint import Checkpoint, load_cuenet
-from stemify.transforms import AudioTransform, DemucsSeparator, Identity
+from stemify.core.transforms import AudioTransform, DemucsSeparator, Identity
 
 ENCODERS = ("pyin", "learned")
 
@@ -58,7 +58,7 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
         return ClassicalEncoder()
     if not args.checkpoint:
         raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
-    from stemify.encoders.learned import LearnedEncoder
+    from stemify.models.learned_encoder import LearnedEncoder
 
     return LearnedEncoder(load_cuenet(args.checkpoint), device="cpu")
 

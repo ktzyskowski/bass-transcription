@@ -13,19 +13,19 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.cache import Cache
-from stemify.training.conditions import CONDITIONS
-from stemify.contour import Contour
-from stemify.cues import Cues
-from stemify.decoders.semicrf import SemiCRFDecoder
-from stemify.decoders.semicrf.evidence import build_evidence
-from stemify.decoders.semicrf.forward import chunk_log_partition, log_partitions
-from stemify.decoders.semicrf.spans import Grid
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
-from stemify.sources import Sources
-from stemify.training.semicrf.dataset import ChunkDataset, collate
-from stemify.training.semicrf.tracks import channel_window, train_items
+from stemify.core.cache import Cache
+from stemify.core.conditions import CONDITIONS
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
+from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.evidence import build_evidence
+from stemify.semicrf.forward import chunk_log_partition, log_partitions
+from stemify.semicrf.spans import Grid
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
+from stemify.core.sources import Sources
+from stemify.semicrf.fit.dataset import ChunkDataset, collate
+from stemify.semicrf.fit.tracks import channel_window, train_items
 
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
@@ -173,7 +173,7 @@ def test_gold_segments_tile_the_track_across_chunks(tmp_path, cache):
         spans += [(i + offset, j + offset) for _, i, j in batch.golds[0]]
 
     reference = _Item("t0", n, tmp_path).reference_notes()
-    from stemify.decoders.semicrf.gold import gold_segments
+    from stemify.semicrf.gold import gold_segments
 
     whole = gold_segments(np.arange(n)[::STRIDE] * HOP_S, reference, dmax)
     covered = [(i, j) for _, i, j in whole if j <= per_track * chunk]
@@ -194,7 +194,7 @@ def test_streams_interleave_distinct_tracks(tmp_path, cache):
 def test_collate_rejects_mixed_widths(tmp_path, cache):
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=1)
     a, b = list(ds)[:2]
-    from stemify.training.semicrf.dataset import Chunk
+    from stemify.semicrf.fit.dataset import Chunk
 
     wide = Chunk(np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, [], {}, 0, False)
     narrow = Chunk(a.features[0].numpy(), a.frame_times[0], [], {}, 1, False)
@@ -211,7 +211,7 @@ def test_collate_rejects_mixed_widths(tmp_path, cache):
 def test_collate_stacks_targets_it_has_never_heard_of(tmp_path, cache):
     # The zero-plumbing claim: adding a head is a key in `y` and nothing else. If this
     # needed a change to collate, the next head would need one too.
-    from stemify.training.semicrf.dataset import Chunk
+    from stemify.semicrf.fit.dataset import Chunk
 
     ds = _dataset(tmp_path, cache, [600], chunk=40, dmax=30, batch_size=1)
     a = next(iter(ds))

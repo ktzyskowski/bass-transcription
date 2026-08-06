@@ -10,11 +10,11 @@ import soundfile as sf
 import torch
 from torch import nn
 
-from stemify.contour import Contour
-from stemify.decoders.greedy import GreedyDecoder, onset_times_from_probs
-from stemify.encoders.learned import LearnedEncoder
-from stemify.features import SAMPLE_RATE, FrameFeatures
-from stemify.sources import Sources
+from stemify.core.contour import Contour
+from stemify.core.decoders.greedy import GreedyDecoder, onset_times_from_probs
+from stemify.models.learned_encoder import LearnedEncoder
+from stemify.core.features import SAMPLE_RATE, FrameFeatures
+from stemify.core.sources import Sources
 
 
 class _FakeCueNet(nn.Module):
@@ -188,7 +188,7 @@ class _FakePitchModel(_FakeCueNet):
         self.midi = midi
 
     def forward(self, x):  # x: (1, 1, F, T)
-        from stemify.features import N_BINS
+        from stemify.core.features import N_BINS
         from stemify.models.heads import two_hot
 
         t = x.shape[-1]
@@ -200,7 +200,7 @@ class _FakePitchModel(_FakeCueNet):
 
 
 def _flat_features(t: int = 40) -> FrameFeatures:
-    from stemify.features import N_BINS
+    from stemify.core.features import N_BINS
 
     return FrameFeatures(np.zeros((N_BINS, t), dtype=np.float32), np.arange(t) * 0.01)
 

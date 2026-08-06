@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.cache import Cache
-from stemify.contour import Contour
-from stemify.notes import NoteEvent
-from stemify.serde import CachedItem
-from stemify.sources import Sources
-from stemify.training.examples import build_example
+from stemify.core.cache import Cache
+from stemify.core.contour import Contour
+from stemify.core.notes import NoteEvent
+from stemify.core.serde import CachedItem
+from stemify.core.sources import Sources
+from stemify.core.examples import build_example
 from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.frame.recipe import FrameRecipe
 
@@ -116,10 +116,10 @@ def test_channels_of_different_lengths_are_rejected(tmp_path):
 def test_prepare_backfills_missing_target_without_recomputing_features(
     tmp_path, monkeypatch
 ):
-    from stemify.contour import Contour
-    from stemify.serde import features_npy
-    from stemify.training.examples import prepare_examples
-    from stemify.transforms import Identity
+    from stemify.core.contour import Contour
+    from stemify.core.serde import features_npy
+    from stemify.core.examples import prepare_examples
+    from stemify.core.transforms import Identity
 
     # Pre-save an onset-only example, as a prior (onset-only) run would have. The
     # cache decides the filename, so the backfill has to find it by the same key the
@@ -142,7 +142,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     def _no_cqt(path):
         raise AssertionError("backfill must not recompute the CQT")
 
-    monkeypatch.setattr("stemify.cache.extract_features", _no_cqt)
+    monkeypatch.setattr("stemify.core.cache.extract_features", _no_cqt)
 
     class _Item:
         name = "trk"
@@ -173,20 +173,20 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     # exists so relaxing that filter cannot silently mislabel training data.
     import pytest
 
-    from stemify.cache import Cache
-    from stemify.contour import Contour
-    from stemify.training.examples import prepare_examples
-    from stemify.transforms import Identity
+    from stemify.core.cache import Cache
+    from stemify.core.contour import Contour
+    from stemify.core.examples import prepare_examples
+    from stemify.core.transforms import Identity
 
     audio = tmp_path / "mix.wav"
     audio.write_text("x")
     ft = np.arange(8) * 0.0116
 
     def fake_extract(path):
-        from stemify.features import FrameFeatures
+        from stemify.core.features import FrameFeatures
         return FrameFeatures(np.random.rand(5, 8).astype(np.float32), ft)
 
-    monkeypatch.setattr("stemify.cache.extract_features", fake_extract)
+    monkeypatch.setattr("stemify.core.cache.extract_features", fake_extract)
 
     class _Item:
         def __init__(self, name):
@@ -260,7 +260,7 @@ def test_val_conditions_accept_retired_names():
         "val conditions must go through the legacy mapping, like --sources does"
     )
     # And the defaults must name conditions that actually exist.
-    from stemify.training.conditions import CONDITIONS
+    from stemify.core.conditions import CONDITIONS
 
     for default in ("bichannel-clean", "bichannel-separated", "clean", "mixture",
                     "separated"):

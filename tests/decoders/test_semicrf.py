@@ -12,24 +12,24 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.contour import Contour
-from stemify.cues import Cues
-from stemify.decoders.semicrf import SemiCRFDecoder, TensorCues
-from stemify.decoders.semicrf.constants import NOTE, REST, START
-from stemify.decoders.semicrf.forward import (
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
+from stemify.semicrf import SemiCRFDecoder, TensorCues
+from stemify.semicrf.constants import NOTE, REST, START
+from stemify.semicrf.forward import (
     chunk_log_partition,
     log_partitions,
     scan,
 )
-from stemify.decoders.semicrf.marginals import segment_confidence, span_marginals
-from stemify.decoders.semicrf.semiring import MAX_PLUS
-from stemify.decoders.semicrf.spans import Grid
-from stemify.decoders.semicrf.window import initial_window
-from stemify.decoders.semicrf.viterbi import viterbi
-from stemify.decoders.semicrf.score import segmentation_score, segmentation_scores
-from stemify.decoders.semicrf.evidence import Evidence, build_evidence
-from stemify.decoders.semicrf.gold import gold_segments
-from stemify.notes import NoteEvent
+from stemify.semicrf.marginals import segment_confidence, span_marginals
+from stemify.semicrf.semiring import MAX_PLUS
+from stemify.semicrf.spans import Grid
+from stemify.semicrf.window import initial_window
+from stemify.semicrf.viterbi import viterbi
+from stemify.semicrf.score import segmentation_score, segmentation_scores
+from stemify.semicrf.evidence import Evidence, build_evidence
+from stemify.semicrf.gold import gold_segments
+from stemify.core.notes import NoteEvent
 
 SPANS = [(0.2, 0.9), (1.2, 1.9)]
 HZ = [110.0, 146.0]

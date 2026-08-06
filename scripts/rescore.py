@@ -13,13 +13,13 @@ It also settles bichannel on equal terms. ``recall-w5`` confounds the mix channe
 import argparse
 from pathlib import Path
 
-from stemify.cache import Cache
-from stemify.decoders.greedy import GreedyDecoder
-from stemify.encoders.learned import LearnedEncoder
+from stemify.core.cache import Cache
+from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
-from stemify.metrics.note.base import matched_pairs
-from stemify.metrics.note.prf import prf_rates
-from stemify.training.conditions import CONDITIONS
+from stemify.core.metrics.note.base import matched_pairs
+from stemify.core.metrics.note.prf import prf_rates
+from stemify.core.conditions import CONDITIONS
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"

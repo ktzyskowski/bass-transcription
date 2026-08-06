@@ -6,10 +6,10 @@ the reference grid), so it is exercised with a hand-built item and Cues -- no au
 
 import numpy as np
 
-from stemify.contour import Contour
-from stemify.cues import Cues
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
 from stemify.evaluation.cues import aligned_pairs
-from stemify.notes import NoteEvent
+from stemify.core.notes import NoteEvent
 
 FRAME_TIMES = np.arange(12) * 0.0116
 

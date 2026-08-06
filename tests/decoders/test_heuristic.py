@@ -7,9 +7,9 @@ peak-pick + threshold + group path is covered without a model.
 
 import numpy as np
 
-from stemify.contour import Contour
-from stemify.cues import Cues
-from stemify.decoders.greedy import GreedyDecoder, group_contour
+from stemify.core.contour import Contour
+from stemify.core.cues import Cues
+from stemify.core.decoders.greedy import GreedyDecoder, group_contour
 
 T = 100
 TIMES = np.arange(T) * 0.01  # 10 ms grid, 1 s

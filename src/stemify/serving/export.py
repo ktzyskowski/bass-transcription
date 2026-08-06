@@ -21,8 +21,8 @@ import librosa
 import numpy as np
 import soundfile as sf
 
-from stemify.features import SAMPLE_RATE, load_audio
-from stemify.notes import NoteEvent
+from stemify.core.features import SAMPLE_RATE, load_audio
+from stemify.core.notes import NoteEvent
 
 HARMONICS = (1.0, 0.5, 0.25)
 """Relative amplitude of the fundamental and its first two overtones.

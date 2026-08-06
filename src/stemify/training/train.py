@@ -11,7 +11,7 @@ Trains onset and voicing, plus a learned pitch contour with ``--pitch``, which r
 pyin as the pitch source (see docs/experiments.md for what that is worth).
 
 Domain randomisation: the input is drawn from several *conditions* (``--sources``,
-tags from ``training.conditions``) while the target is always the clean-stem MIDI, so
+tags from ``core.conditions``) while the target is always the clean-stem MIDI, so
 the heads are robust to the condition deployment actually sees. ``clean`` needs no
 separation; ``separated`` runs demucs over the train set first, cached.
 
@@ -31,7 +31,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from stemify.cache import Cache
+from stemify.core.cache import Cache
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -41,7 +41,7 @@ from stemify.training.callbacks import (
     ConsoleCallback,
     MLflowCallback,
 )
-from stemify.training.conditions import CONDITIONS, canonical
+from stemify.core.conditions import CONDITIONS, canonical
 from stemify.training.config import TrainConfig
 from stemify.training.base import epoch_batches
 from stemify.training.recipes import HEADS, RECIPES, Recipe

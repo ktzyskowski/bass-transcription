@@ -6,7 +6,7 @@ offline harness and the async validator both call, so this pins it once.
 
 import numpy as np
 
-from stemify.metrics import AlignedPairs, score_cues
+from stemify.core.metrics import AlignedPairs, score_cues
 
 
 def _names(results):

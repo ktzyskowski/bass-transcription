@@ -13,13 +13,13 @@ Three different mistakes with one symptom: nothing happens, and no loss curve sh
 import pytest
 import torch
 
-from stemify.training.semicrf.loss import SemiCRFLoss
-from stemify.training.semicrf.terms import (
+from stemify.semicrf.fit.loss import SemiCRFLoss
+from stemify.semicrf.fit.terms import (
     AUX_TERMS,
     BinaryTerm,
     CategoricalTerm,
 )
-from stemify.decoders.semicrf import SemiCRFDecoder
+from stemify.semicrf import SemiCRFDecoder
 
 
 def _loss(**kwargs):

@@ -6,7 +6,7 @@ raised NameError on ``os.getpid()`` while cache hits sailed through untouched.
 
 from pathlib import Path
 
-from stemify.transforms import AudioTransform, Identity
+from stemify.core.transforms import AudioTransform, Identity
 
 
 class _FakeTransform(AudioTransform):
@@ -77,7 +77,7 @@ def test_identity_returns_source_untouched(tmp_path):
 
 def test_identity_cache_path_is_the_source(tmp_path):
     # cache_path doubles as the resolved-audio key every derived artifact is keyed on
-    # (stemify.cache), so Identity must report the *source*. The inherited digest path
+    # (stemify.core.cache), so Identity must report the *source*. The inherited digest path
     # would name a .flac that is never written, and every cached feature for an
     # untransformed track would then address a nonexistent file.
     src = _source(tmp_path)
