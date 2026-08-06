@@ -469,11 +469,53 @@ pinned in `ablation-plan.md` — all of which the rule above already protects.
 ### Sequence
 
     B (moves) -> D (extract) -> A (registry) -> merge semicrf -> C (CLI flags)
+    ^^^^^^^^^                                   ^^^^^^^^^^^^^^
+    done e7f367c                                done e7f367c (brought forward: it is
+                                                pure file movement and needed no
+                                                registry work first)
 
 B and D are pure moves with no design content, so they go first and shrink everything
 downstream. A is the design work. C is last because it is the only step that changes
-user-facing CLI behaviour. By the time the semicrf directories merge, they are files
-with no wrong edges left.
+user-facing CLI behaviour.
+
+**Remaining, in order.** All three are enforced rather than described: `PENDING` in
+`tests/test_layers.py` names the layer edges and may only shrink, and
+`test_semicrf_touches_only_the_training_contracts` pins D's single edge.
+
+1. **D — encoder assembly into `models`** (1 edge). `SemiCRFRecipe.build_model()` builds
+   a `FrameRecipe` to reuse it. Now that `models` exists this has an obvious home:
+   a `build_cuenet(conditions, pitch=..., harmonics=...)` factory both recipes call.
+   Smallest of the three, and it removes the only plugin-to-plugin edge.
+2. **A — `CheckpointFile` split + registries** (5 edges). The design work. Note the
+   correction above: the reconstitution protocol returns `Encoder`/`Decoder`, never
+   `CueNet`.
+3. **C — recipes contribute their own CLI flags** (2 edges). Changes user-facing CLI
+   behaviour, so it goes last.
+
+The acceptance test for all three together: **adding a new objective touches one
+package.** Today it touches four files across three layers -- the new package,
+`training/recipes.py`, `training/cli.py` (twice), and `evaluation/cli.py`'s hardcoded
+`DECODERS`.
+
+### Blocking the test-set eval: the note harness is single-channel (found 2026-08-05)
+
+Unrelated to the layering, found while trying to score `tcn-v3-hcqt` on Slakh test.
+`NoteEvaluation._estimate_notes` calls `transcribe(Sources(bass=path))` -- it never
+populates `mix`, so a 2-channel checkpoint raises `this track has no 'mix' audio` on the
+first item. `Sources.role` refusing to return `None` is correct and is what surfaced it;
+the gap is that the harness predates bichannel models.
+
+Consequence worth stating plainly: **no bichannel arm has ever been scored by the note
+harness.** Every bichannel number on record comes from the training-time validator in
+`training/validation.py`, which resolves conditions and channels properly. That is the
+same "DONE is only against the pipeline it ran on" trap as before, and it means
+bichannel results are not directly comparable to the mono test-set numbers in
+`experiments.md`.
+
+The fix is small -- `EvalItem.sources()` already exists and Slakh's `BassStem`
+implements it, so the harness should use the item's own `Sources` rather than
+synthesising a bass-only one. But it changes what the note harness *measures* for
+multi-channel models, so it wants deciding rather than patching in passing.
 
 **Not while a run is in flight.** The venv is an *editable* install, so a live
 `stemify-train` resolves `stemify.*` from `src/` as it goes; relocating modules under it
@@ -532,3 +574,51 @@ Two things the move flushed out, neither of which was visible before the test ex
   `decoder_from(...) -> Decoder`) instead, which is better protocol design regardless:
   the original leaked a concrete implementation class into a contract whose whole
   purpose is to avoid naming implementations.
+
+### Second external review (2026-08-05), triaged
+
+Eight points, from a flat listing of the tree rather than the code. Two worth acting on,
+four worth watching, two that do not survive the measurements.
+
+**Act on.**
+
+- **"score" is overloaded** -- the best point of the eight. It means three different
+  things: `semicrf/score.py` is a CRF energy over a segmentation, `core/metrics/*/
+  scoring.py` is an evaluation metric, `validation.score_examples` is a validation
+  result. Renaming the semi-CRF one (`segment_energy.py`) removes the collision at its
+  source, since that is the meaning a reader is least likely to guess.
+- **Recipe explosion risk** -- fair, and already the plan: steps A and C exist so that a
+  new objective is a single-package change rather than a fifth edit to `training/cli.py`.
+
+**Watch, do not act yet.**
+
+- **`core` as a junk drawer.** Partially fair, but it has a *checkable* definition here
+  -- torch-free, zero upward edges -- rather than "everything important". It is 4,406
+  lines with real substructure already (`data/`, `decoders/`, `encoders/`, `metrics/`,
+  `pitch/`) plus 13 flat modules. The suggested seven-way split (audio/cache/data/
+  signal/domain/io/transcription) is too many buckets for 13 files, and it directly
+  contradicts the same review's next point.
+- **Depth.** Real, and partly self-inflicted: `core/` added a level to everything.
+  Mitigated by the package `__init__`s -- `from stemify.core.metrics import score_notes`
+  is the call site, not the five-segment path. In tension with the point above; you
+  cannot have both fewer junk drawers and shallower paths.
+- **Frame/note duplication.** `metrics/frame` and `metrics/note` are not duplicates --
+  frame AUROC and note-level PRF against mir_eval matching are different measurements.
+  The one real instance is already recorded above: the cues -> `AlignedPairs` adapter
+  existing in both `validation.py` and `evaluation/cues.py`.
+- **`models` mixes architectures and wrappers.** True -- `CueNet` is a system, `TCN` and
+  the heads are building blocks, `LearnedEncoder`/`NeuralPitch` are pipeline stages. But
+  that is 961 lines in 7 files; four subpackages for seven files buys nothing. Revisit
+  if a second architecture lands.
+
+**Does not survive measurement.**
+
+- **"Some modules are getting large -- I suspect 500-1000 lines."** Measured: the
+  largest file in `src/` is `validation.py` at 377. `trainer.py` 345, `transforms.py`
+  ~225, `features.py` 171. The estimate is 2-3x high; no action.
+- **Implementation-oriented names in `semicrf`.** `forward.py` holds the forward
+  algorithm -- the standard name in the literature -- and the proposed
+  `dynamic_programming.py` is *less* precise, since Viterbi is dynamic programming too
+  and lives in its own file. `window.py` is the rolling alpha buffer; the proposed
+  `beam_window.py` would be actively wrong, as nothing here does beam search. A terse
+  correct name beats a descriptive incorrect one.
