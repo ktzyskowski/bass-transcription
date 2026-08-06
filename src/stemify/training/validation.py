@@ -1,10 +1,22 @@
 """Cached validation for the async validator: note-level and cues-level.
 
-The async eval is dominated by pyin, but pyin's pitch contour is fixed across
-checkpoints -- only the onset/voicing model changes. ``CheckpointValidator`` runs pyin
-(and the CQT) over the val tracks *once* at construction and holds the results, so
-each subsequent score is just a model forward and the scoring -- seconds, not minutes.
-That is what makes async validation every few epochs cheap enough to leave on.
+``CheckpointValidator`` builds the CQT and reference notes for the val tracks *once* at
+construction and holds them, so each subsequent score is a model forward and the
+scoring -- seconds, not minutes. That is what makes async validation every few epochs
+cheap enough to leave on.
+
+**The DSP contour is deferred, not precomputed.** It used to be: pyin ran over every
+val track at construction, on the reasoning that its contour is fixed across
+checkpoints while the model is not. That reasoning stopped holding when the pitch head
+shipped. ``LearnedEncoder.encode_features`` *replaces* the contour it is handed with
+the head's own output, so for every current run this was a full pyin pass per track
+whose result was overwritten on the next line. It survived because nothing measured it
+and the docstring still explained it.
+
+So ``ValItem`` holds a *source* rather than a contour, and the caller -- which holds
+the encoder and can read ``pitch_source`` -- decides whether to read it. A pitch-head
+checkpoint never does. A headless one (five on disk, and ``--use-pyin``) reaches
+through and pays once per track, because features alone cannot give pitch.
 
 From that one forward per track it scores both altitudes: ``score_examples`` runs the
 decoder for note-level metrics, ``score_cues_examples`` scores the encoder's cues
@@ -16,6 +28,7 @@ and both are tested with synthetic inputs and a fake model, no audio.
 
 import json
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,16 +52,6 @@ from stemify.core.conditions import CONDITIONS, Condition
 from stemify.core.examples import prepare_examples
 from stemify.core.labels import onset_targets
 
-# A segmentation step: cached features + their contour -> notes. The validator
-# depends on this shape, not on any concrete encoder/decoder -- the caller wraps a
-# checkpoint's LearnedEncoder + a Decoder and passes their composed step.
-SegmentFn = Callable[[Contour, FrameFeatures], list[NoteEvent]]
-# The encode step: cached features + their contour -> the encoder's Cues. Used for
-# cues-level scoring (onset + voicing head quality) -- a checkpoint's
-# LearnedEncoder.encode_features, so the validator stays model-agnostic.
-EncodeFn = Callable[[Contour, FrameFeatures], Cues]
-
-
 @dataclass
 class ValItem:
     """One val track, everything fixed across checkpoints precomputed.
@@ -62,11 +65,32 @@ class ValItem:
     timing."""
 
     frame_times: np.ndarray       # (T,)
-    contour: Contour              # pyin pitch, fixed
     notes: list[NoteEvent]        # reference notes
     features: np.ndarray | None = None      # (n_bins, T) or (C, n_bins, T), if resident
     feature_paths: tuple[Path, ...] = ()    # else load from disk on demand, per channel
     voicing_target: np.ndarray | None = None  # (T,) gt voiced mask, for voicing AUROC
+    # How to obtain a DSP contour for channel 0, *if* anything asks. Deferred rather
+    # than precomputed: a model with a pitch head produces its own contour and
+    # overwrites whatever it is handed, so for every such run this was a pyin pass per
+    # val track whose result was discarded on the next line. Only a headless
+    # checkpoint (or --use-pyin) reaches through here, and then it pays once.
+    contour_source: Callable[[], Contour] | None = None
+    _contour: Contour | None = None
+
+    @property
+    def contour(self) -> Contour:
+        """The DSP contour, computed on first read. Raises rather than returning a
+        placeholder: a caller reaching for this has no pitch head, so an empty contour
+        would silently transcribe every track as unvoiced."""
+        if self._contour is None:
+            if self.contour_source is None:
+                raise ValueError(
+                    "this ValItem was built without a contour source, so it can only "
+                    "score an encoder that supplies its own pitch (a model with a "
+                    "pitch head). Pass contour_source to score a headless checkpoint."
+                )
+            self._contour = self.contour_source()
+        return self._contour
 
     def load_features(self) -> FrameFeatures:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
@@ -81,6 +105,18 @@ class ValItem:
             for p in self.feature_paths
         ]
         return stack_channels(channels)
+
+
+# A segmentation step: one val example -> notes. Takes the whole ``ValItem`` rather
+# than ``(contour, features)`` so that *the caller* decides whether a contour is
+# needed at all -- it holds the encoder and can read ``pitch_source``, which the
+# validator cannot. That is what keeps a pitch-head run from touching pyin: nothing
+# reads ``ex.contour``, so nothing computes it.
+SegmentFn = Callable[[ValItem], list[NoteEvent]]
+# The encode step: one val example -> the encoder's Cues. Used for cues-level scoring
+# (onset + voicing head quality) -- a checkpoint's LearnedEncoder.encode_features,
+# so the validator stays model-agnostic.
+EncodeFn = Callable[[ValItem], Cues]
 
 
 def score_examples(
@@ -99,7 +135,7 @@ def score_examples(
     refs: list[list[NoteEvent]] = []
     ests: list[list[NoteEvent]] = []
     for ex in examples:
-        ests.append(segment(ex.contour, ex.load_features()))
+        ests.append(segment(ex))
         refs.append(ex.notes)
     # Score through the shared note core, so the val numbers use the same metrics and
     # tolerances the offline NoteEvaluation reports. Flatten to the MLflow-friendly
@@ -146,7 +182,7 @@ def score_cues_examples(
     the offline harness."""
     tracks: list[AlignedPairs] = []
     for ex in examples:
-        cues = encode(ex.contour, ex.load_features())
+        cues = encode(ex)
         onset_true = onset_targets(
             np.array([n.onset for n in ex.notes], dtype=float), cues.frame_times
         )
@@ -158,7 +194,8 @@ def score_cues_examples(
 
 
 class CheckpointValidator:
-    """Precompute pyin contours + CQT + reference notes once; score models cheaply."""
+    """Precompute CQT + reference notes once; score models cheaply. The DSP contour is
+    deferred to a source read only if the scored encoder has no pitch head."""
 
     def __init__(
         self,
@@ -205,7 +242,7 @@ class CheckpointValidator:
                     cached["target_voicing"] if "target_voicing" in cached.files else None
                 )
                 features = None
-                contour = cache.contour(estimator, primary)
+                contour_source = partial(cache.contour, estimator, primary)
             else:
                 # No cache: featurise each channel now and hold them resident. Only
                 # the small-set/test path takes this branch.
@@ -216,11 +253,11 @@ class CheckpointValidator:
                 features = feats.values
                 voicing_target = None
                 fpaths = ()
-                contour = estimator.estimate(primary)
+                contour_source = partial(estimator.estimate, primary)
             self.examples.append(
                 ValItem(
                     frame_times=frame_times,
-                    contour=contour,
+                    contour_source=contour_source,
                     notes=item.reference_notes(),
                     features=features,
                     feature_paths=fpaths,
@@ -341,8 +378,19 @@ def build_eval_fn(
         encoder = LearnedEncoder(model, device="cpu")
         decoder = build_decoder(state)
 
-        def segment(contour: Contour, features: FrameFeatures) -> list[NoteEvent]:
-            return decoder.decode(encoder.encode_features(contour, features))
+        # Whether this checkpoint needs a DSP contour at all. The encoder is the only
+        # thing that can answer -- ``pitch_source`` is "learned" when a FrequencyHead
+        # names the pitch and "pyin" when nothing else can -- and the validator holds
+        # no opinion. This is what keeps a pitch-head run from touching pyin: nothing
+        # reads ``ex.contour``, so the deferred source is never called.
+        needs_contour = encoder.pitch_source == "pyin"
+
+        def encode(ex: ValItem) -> Cues:
+            contour = ex.contour if needs_contour else None
+            return encoder.encode_features(contour, ex.load_features())
+
+        def segment(ex: ValItem) -> list[NoteEvent]:
+            return decoder.decode(encode(ex))
 
         metrics: dict[str, float] = {}
         # ``pitch_source`` is recorded because it silently decides ~5 F1: an encoder
@@ -361,7 +409,7 @@ def build_eval_fn(
                 metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
             # Cues-level (encoder) quality: onset-curve AP and voicing-head AUROC,
             # threshold-free. Empty voicing for an onset-only model.
-            cues = {r.name: r.scalars for r in validator.score_cues(encoder.encode_features)}
+            cues = {r.name: r.scalars for r in validator.score_cues(encode)}
             for scalars in cues.values():
                 for key, value in scalars.items():
                     metrics[f"cues/{tag}/{key}"] = value

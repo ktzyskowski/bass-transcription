@@ -23,12 +23,14 @@ N_BINS = 8
 
 def _segment(model):
     """The segment step the validator scores: the LearnedEncoder + GreedyDecoder
-    pair deployment composes, fed cached (contour, features) -- the same path."""
+    pair deployment composes, fed one ValItem -- the same path."""
     encoder = LearnedEncoder(model, device="cpu")
     decoder = GreedyDecoder()
+    needs_contour = encoder.pitch_source == "pyin"
 
-    def segment(contour, features):
-        return decoder.decode(encoder.encode_features(contour, features))
+    def segment(ex):
+        contour = ex.contour if needs_contour else None
+        return decoder.decode(encoder.encode_features(contour, ex.load_features()))
 
     return segment
 
@@ -79,8 +81,8 @@ def _example(n_frames, hop, held_pitch, onset_frames):
     features = np.random.rand(N_BINS, n_frames).astype(np.float32)  # (n_bins, T) CQT
     notes = [NoteEvent(onset=frame_times[f], offset=frame_times[f] + 0.2,
                        midi_pitch=held_pitch) for f in onset_frames]
-    ex = ValItem(frame_times=frame_times, contour=contour, notes=notes,
-                    features=features)
+    ex = ValItem(frame_times=frame_times, contour_source=lambda: contour,
+                    notes=notes, features=features)
     return ex, frame_times
 
 
@@ -126,8 +128,15 @@ class _FakeVoicingModel(_FakeCueNet):
 
 def _encode(model):
     """The encode step the validator scores cues through: a checkpoint's
-    LearnedEncoder over cached (contour, features)."""
-    return LearnedEncoder(model, device="cpu").encode_features
+    LearnedEncoder over one ValItem."""
+    encoder = LearnedEncoder(model, device="cpu")
+    needs_contour = encoder.pitch_source == "pyin"
+
+    def encode(ex):
+        contour = ex.contour if needs_contour else None
+        return encoder.encode_features(contour, ex.load_features())
+
+    return encode
 
 
 def test_score_cues_returns_voicing_auroc_against_the_label():
@@ -184,3 +193,62 @@ def test_the_validation_report_records_the_pitch_source(tmp_path):
 
     assert report_for(True)["pitch_source"] == "learned"
     assert report_for(False)["pitch_source"] == "pyin"
+
+
+class _FakePitchHeadModel(_FakeCueNet):
+    """Onset logits plus a ``pitch`` frequency head, i.e. the shape every current
+    checkpoint has. Declaring ``frequency_heads`` is what makes ``pitch_source``
+    report "learned" -- the encoder reads that, not the weights."""
+
+    frequency_heads = {"pitch": object()}
+
+    def forward(self, x):  # (1, 1, F, T)
+        t = x.shape[-1]
+        onset = torch.full((1, t, 1), -10.0)
+        onset[0, 0, 0] = 10.0
+        voicing = torch.full((1, t, 1), 5.0)
+        # Peaked on one bin so decode_contour has something unambiguous to read.
+        pitch = torch.full((1, t, N_BINS), -10.0)
+        pitch[0, :, N_BINS // 2] = 10.0
+        return {"onset": onset, "voicing": voicing, "pitch": pitch}
+
+
+def test_pitch_head_model_never_reaches_for_pyin():
+    """The point of deferring the contour: a checkpoint that names its own pitch must
+    not cause a DSP contour to be computed.
+
+    It used to. ``CheckpointValidator`` ran pyin over every val track at construction,
+    and ``encode_features`` overwrote the result on the next line for any model with a
+    ``FrequencyHead`` -- a full pyin pass per track, discarded. This asserts on the
+    *source* rather than on timing, so it fails if anything starts reading the contour
+    again regardless of how fast pyin happens to be.
+    """
+    ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0])
+
+    def explode() -> Contour:
+        raise AssertionError(
+            "a pitch-head checkpoint asked for a pyin contour; the head already "
+            "supplies one and it would be discarded"
+        )
+
+    ex.contour_source = explode
+    ex._contour = None
+
+    scores = score_examples(_segment(_FakePitchHeadModel()), [ex])
+    assert "note_f1" in scores
+
+
+def test_headless_model_still_gets_its_contour():
+    """The other half: a model with no pitch head has no other pitch source, so the
+    deferred contour must still be reachable -- five checkpoints on disk are this
+    shape. Counts calls to pin that it is fetched once, not per score."""
+    ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0])
+    calls = []
+    contour = ex.contour  # the fixture's contour, before we wrap the source
+    ex._contour = None
+    ex.contour_source = lambda: (calls.append(1), contour)[1]
+
+    segment = _segment(_FakeOnsetModel([0]))
+    segment(ex)
+    segment(ex)
+    assert calls == [1], "the contour should be computed once and memoised"

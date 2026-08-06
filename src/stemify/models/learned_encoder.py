@@ -142,19 +142,32 @@ class LearnedEncoder(Encoder):
         contour = self.pitch.estimate(sources.bass)
         return self.encode_features(contour, stack_channels(channels))
 
-    def encode_features(self, contour: Contour, features: FrameFeatures) -> Cues:
-        """``Cues`` from a precomputed CQT and contour -- the cache-friendly path the
-        async validator uses (no CQT/pyin recompute, both already cached per track).
-        ``encode`` is this over a freshly computed CQT and pyin contour.
+    def encode_features(
+        self, contour: Contour | None, features: FrameFeatures
+    ) -> Cues:
+        """``Cues`` from a precomputed CQT, and a contour only if this encoder needs
+        one -- the cache-friendly path the async validator uses (no CQT recompute).
+        ``encode`` is this over a freshly computed CQT.
 
         When the model has a pitch head, the ``contour`` argument is *replaced* by the
         one the head produced rather than merged with it. Two contours cannot both be
-        the pitch source, and the caller's is the cached pyin track this run exists to
-        do without. ``use_pyin`` is how the caller asks for the other choice.
+        the pitch source. ``use_pyin`` is how the caller asks for the other choice.
+
+        ``None`` is therefore allowed exactly when the head will supply it, and
+        ``pitch_source`` is the property that says which case a caller is in. Passing
+        ``None`` to an encoder that needs one raises rather than defaulting: a silent
+        fallback here is how a run reports numbers under a pitch source nobody chose,
+        and the difference is worth ~5 F1.
         """
         onset, voicing, pitch_logits = self._forward(features.values)
         if pitch_logits is not None and not self.use_pyin:
             contour = self.contour_from(pitch_logits, features.frame_times, voicing)
+        elif contour is None:
+            raise ValueError(
+                f"this encoder's pitch source is {self.pitch_source!r}, so "
+                "encode_features needs a contour: the model has no pitch head "
+                "(or use_pyin was set), and features alone cannot give pitch."
+            )
         return Cues(
             contour=contour,
             onset=onset,
