@@ -389,6 +389,15 @@ points and invented notes more than double. Caveat: a zeroed channel is
 out-of-distribution rather than "absent", so the magnitude overstates the dependence —
 but the direction and the fact of it are not in doubt.
 
+> ⚠️ **The numbers in this table do not measure what they say (2026-08-08).** The CQT
+> is `amplitude_to_db(ref=np.max, top_db=80)`, so its range is `[-80, 0]` and **zero is
+> the loudest bin in the track**. "Muting" by zeroing fed the encoder full-scale
+> broadband, not an absent channel. Re-measured against the dB floor, the −0.168 is not
+> an overstatement of the dependence — it is a different quantity: zeroing *destroys*
+> the model (F1 0.004), while a genuinely silent channel costs 0.236. **The conclusion
+> survives** — the mixture is load-bearing on separated audio — but the magnitude here
+> should not be quoted. See *The pad fill was never silence* below.
+
 #### What actually caps note F1 — pitch or the decoder?
 
 > **Replicated 2026-07-30 on independently retrained checkpoints** (6 epochs rather
@@ -1131,6 +1140,138 @@ actually uses. Costs a retrain, an L2 term (the hinge is satisfiable by inflatin
 scale, which `log Z` self-normalises against), a re-derived aux-term balance (a hinge is
 in score units, not nats/frame), and permanently loses probabilistic outputs — including
 the per-note confidence column and the `E[count]` diagnostic that found this bug.
+
+## The pad fill was never silence (2026-08-08)
+
+The CQT is `amplitude_to_db(ref=np.max, top_db=80)`. Measured on a cached feature file:
+
+    min -80.00   max 0.00   median -74.83   fraction exactly 0.0: 0.0000
+
+**Silence is −80 dB. Zero is the loudest bin in the track.** Three sites filled an
+absent or padded channel with zeros, so each fed the encoder full-scale broadband where
+it meant "nothing here". `channel_window` was the live one: every track's *first* chunk
+carries `dmax` = 345 CQT frames of it, 45% of that window. Nothing raised, because the
+DP gives those positions a `NEG` alpha and the auxiliary terms slice them out — the
+encoder and BatchNorm read them anyway.
+
+### What it costs at inference
+
+Muting a bichannel checkpoint's context channel, 37 validation tracks,
+`bichannel-separated`:
+
+| checkpoint | as-trained | silence (−80 dB) | zeros (0 dB) |
+|---|---|---|---|
+| `tcn-v3-hcqt` | 0.9123 | 0.6762 (**−0.2361**) | 0.0044 (**−0.9079**) |
+| `tcn-v4-stemdrop` | 0.9077 | **0.8737** (−0.0341) | 0.0189 (−0.8889) |
+
+`as-trained` reproduces tcn-v3-hcqt's recorded epoch-2 val F1 exactly, so the harness is
+sound. Two things follow. The 2026-07-30 mute ablation above was measuring a pathological
+input, not an absent one — and **the mixture really is load-bearing**: a properly silent
+channel still costs 23.6 points on a model that never trained without it. The earlier
+"the magnitude overstates the dependence" caveat had the sign of its own error backwards.
+
+Fixed by `core.features.SILENCE_DB`, used by both pad sites.
+
+### Stem dropout
+
+Silence the context channel with probability `p` during training, so a bichannel model
+also learns to transcribe an isolated bass. Only correct given the fix above — dropping
+to zeros would train against full-scale noise. Channel 0 is never dropped; training
+split only; recorded in the recipe config so a checkpoint can say whether it was trained
+under it. Per-track in the chunked path, per-window in the frame path.
+
+`tcn-v4-stemdrop`, `--stem-dropout 0.3`, otherwise identical to `tcn-v3-hcqt`:
+
+| | val F1 (as trained) | mix-absent penalty |
+|---|---|---|
+| `tcn-v3-hcqt` | 0.9123 | −0.2361 |
+| `tcn-v4-stemdrop` | 0.9078 | **−0.0341** |
+
+**0.46 points of bichannel performance buys 20 points of stem-only robustness.** Note
+`zeros` stays catastrophic for both: the model is trained against −80, so the constant
+is load-bearing rather than cosmetic.
+
+This also makes true the claim `core/sources.py` has always made — that an encoder
+wanting the mix "falls back to bass-only when it is `None`, which stem-dropout training
+makes robust". Stem dropout did not exist when that was written.
+
+## FiloBass: the first out-of-domain set (2026-08-08)
+
+48 jazz standards, 12 named upright bassists, 52,558 notes, ~4.9 h.
+[Zenodo 10069709](https://zenodo.org/records/10069709). See `docs/datasets.md`.
+
+**The stems are `separated`, not clean.** The bassists are the Aebersold session players
+(Ron Carter, Rufus Reid, …) — nobody was commissioned. The paper takes the releases'
+bass+drums channel through **Demucs**, the same separator our `separated` condition
+uses. Read as clean, the transfer gap looks ~10 points worse than it is. Confirmed three
+ways: the paper's own text, the roster, and the spectrum (≥80 dB down above 4 kHz).
+
+### Results, 48 tracks, greedy decoder
+
+| checkpoint | FiloBass F1 | Slakh baseline | gap |
+|---|---|---|---|
+| `rung4-pitch` (1ch, no HCQT) | **0.657** | 0.8638 separated (test) | **−20.7** |
+| `tcn-v4-mono-hcqt` (1ch, HCQT) | 0.642 | — | — |
+| `tcn-v4-stemdrop` (2ch, HCQT, silenced context) | 0.645 | — | — |
+
+**HCQT does not transfer.** Worth +2.7 val on Slakh, ~1.3 points *negative* here.
+
+### Where the error is, and it is not where we expected
+
+False-positive decomposition, and it holds across three independently trained
+checkpoints — 64–72% wrong pitch against 13–15% fragmentation. The corpus is the densest
+segmentation task available (~3.1 notes/s, ~400 ms median), so the expectation was
+fragmentation; the measurement says pitch.
+
+`scripts`-free probe (session scratchpad, ~130 lines) partitions the wrong-pitch bucket
+with the same rule `Fragmentation.compute` uses:
+
+| | `rung4-pitch` | `tcn-v4-mono-hcqt` | `tcn-v4-stemdrop` |
+|---|---|---|---|
+| ±12 (octave) | 12.1% | 9.2% | **7.5%** |
+| within 1.5 semitones | 17.4% | 17.4% | 21.5% |
+| median error | +1.67 | +2.03 | +2.00 |
+| share sharp | 60.4% | 66.2% | 66.4% |
+| 50–150 ms from a right-pitch note | 29.6% | 30.1% | **42.3%** |
+| >1 s from one (genuine) | 49.3% | 45.7% | **39.4%** |
+
+Three findings:
+
+1. **Not octave errors.** 7.5–12.1%, two-octave slips absent. The pitch head is not
+   locking onto a partial — the scattered hypothesis, which is the harder one.
+2. **HCQT works as designed on the bucket it targets.** Octave errors fall monotonically
+   with harmonic stacking, 12.1% → 9.2% → 7.5%. It just is not the binding constraint.
+3. **~30–42% of the "wrong pitch" bucket is misattributed timing.** A reference note of
+   exactly the estimated pitch sits 50–150 ms away — ~15× above the chance rate for this
+   note density. Those are correctly-named notes placed outside the ±50 ms tolerance,
+   drifting into a neighbour's span.
+
+Re-partitioning false positives:
+
+| | genuine pitch | timing + fragmentation | voicing |
+|---|---|---|---|
+| `rung4-pitch` | 46.0% | 32.9% | 21.1% |
+| `tcn-v4-mono-hcqt` | 44.7% | 34.4% | 20.9% |
+| `tcn-v4-stemdrop` | **41.6%** | **43.4%** | **15.0%** |
+
+**The F1 ranking is the inverse of the pitch-error ranking.** `tcn-v4-stemdrop` has the
+fewest genuine pitch errors *and* the fewest voicing errors, and trails `rung4-pitch`
+purely on placement. The encoder gains are already there and are being lost downstream —
+which puts 43% of its false positives inside the decoder's reach, well above the 13% the
+report's `fragmentation` line alone suggests.
+
+### Open
+
+- **A +2-semitone sharp bias**, 66% of errors sharp, **present pre-HCQT** (60.4%) so it
+  is not the front-end. Either the head reads sharp or the span median is contaminated
+  by late/long spans. Frame-level pitch metrics (`--level cues`) separate the two.
+- Voicing AUROC will be near-meaningless here: the reference is **98.8% voiced**, so the
+  negative class barely exists. Walking bass essentially never rests.
+- **No mixture ships**, so bichannel checkpoints run only with a silenced context
+  channel. The missing audio is `Bass_Drums.wav` — *the exact mixture these stems were
+  separated from* — rebuildable by FiloSax's `Compile_Backing.py` from ~25–35 purchased
+  Aebersold volumes (~$450–600, MD5-verified). That would make this a true
+  `bichannel-separated` set rather than an analogue of one.
 
 ## Future experiments
 

@@ -217,6 +217,85 @@ dataset here without a non-commercial restriction.
 > Separation Some Slakh: A Dataset to Study the Impact of Training Data Quality
 > and Quantity." *WASPAA*, 2019.
 
+## FiloBass
+
+48 jazz standards played by 12 professional upright bassists — Ron Carter, Rufus Reid,
+Ray Drummond and others — with manually verified, audio-aligned note transcriptions.
+52,558 notes, ~4.9 h. The only **out-of-domain** set here: everything else is isolated
+notes, resynthesized bass, or bass rendered from MIDI by a sample library.
+
+### Download
+
+Open access, a single 434 MB zip. `unzip` is not required — `python -m zipfile` works.
+
+```sh
+mkdir -p data/raw && cd data/raw
+curl -fL -o FiloBass_v1.0.0.zip \
+  "https://zenodo.org/records/10069709/files/FiloBass_v1.0.0.zip?download=1"
+python3 -c "
+import zipfile
+z = zipfile.ZipFile('FiloBass_v1.0.0.zip')
+keep = [n for n in z.namelist() if not n.startswith('__MACOSX') and '.DS_Store' not in n]
+z.extractall('filobass', members=keep)"
+mv filobass/'FiloBass ISMIR Publication'/* filobass/ && rmdir filobass/'FiloBass ISMIR Publication'
+rm FiloBass_v1.0.0.zip
+```
+
+The archive nests everything under a directory whose name contains a space; the `mv`
+flattens it, which is what `index()` expects. The macOS resource forks double the entry
+count and are worth skipping.
+
+### These stems are `separated`, not clean
+
+**The single most important fact about this dataset for our purposes.** The bassists are
+the Aebersold session players; nobody recorded them for the dataset. The releases carry
+bass+drums on one stereo channel, and the paper takes that channel through **Demucs** —
+the same separator our `separated` condition uses. So a FiloBass number compares against
+a model's `separated` score, never its `clean` one; read as clean the transfer gap looks
+~10 points worse than it is. The spectrum agrees: ≥80 dB down above 4 kHz.
+
+### Contents
+
+| directory | what |
+|---|---|
+| `audio_bass_stems/` | 48 × mp3, 44.1 kHz stereo, ~6 min (decodes natively via libsndfile ≥1.1, no ffmpeg) |
+| **`midi_fully_aligned/`** | **the only usable MIDI** — note-level, aligned to the audio |
+| `midi_downbeat_aligned/` | anchored at bar lines only; onsets drift by most of a beat |
+| `midi_from_score/` | notation timing, none of the performance |
+| `syncpoints/` | `[[bar_index, seconds], …]` |
+| `notebooks_and_scripts/note_data.csv` | per-note chord/degree/measure, and the player |
+
+One file per tune in every directory, sharing an exact stem. **MIDI is at sounding
+pitch** — no `BASS_TRANSPOSE`, unlike Slakh.
+
+### No mixture, and it is a paywall rather than a gap
+
+Only stems ship, so a bichannel checkpoint runs here only with a silenced context
+channel. The missing audio is `Bass_Drums.wav` — *the exact mixture these stems were
+separated from* — which FiloSax's `Compile_Backing.py` rebuilds from **commercially
+purchased** Aebersold play-alongs (jazzbooks.com, $17.50/volume, ~25–35 volumes,
+MD5-verified so only the exact files work). Obtaining it would make this a true
+`bichannel-separated` set.
+
+`Piano_Drums.wav` is the wrong channel and holds no bass at all.
+
+### License — contradictory, treat as non-commercial
+
+| Source | License |
+|---|---|
+| [Zenodo record 10069709](https://zenodo.org/records/10069709) | CC BY 4.0 |
+| [Project page](https://aim-qmul.github.io/FiloBass/) | Non-commercial research only; no redistribution |
+
+Same shape as IDMT-SMT-Bass. **Assume the restrictive reading** — the corpus is built on
+copyrighted jazz standards, which is very likely why the two disagree. Fine for research
+and evaluation; get written clarification from Xavier Riley (j.x.riley@qmul.ac.uk) before
+anything commercial touches it.
+
+### Citation
+
+> Riley, X.; Dixon, S. "FiloBass: A Dataset and Corpus Based Study of Jazz Basslines."
+> *ISMIR*, 2023. DOI: [10.5281/zenodo.10069709](https://doi.org/10.5281/zenodo.10069709)
+
 ## Planned
 
 Not yet downloaded — see the staged data plan.
@@ -324,6 +403,7 @@ has to triangulate. Two consequences:
 | IDMT-SMT-Bass | CC BY-NC-ND 4.0 (assumed — contradictory, see above) | ✗ | ✗ |
 | MDB-bass-synth | CC BY-NC 4.0 | ✗ | ✓ |
 | Slakh2100 (planned) | CC BY 4.0 | ✓ | ✓ |
+| FiloBass | CC BY 4.0 vs non-commercial (contradictory, see above) | ✗ | ✗ |
 
 **Everything currently on disk is non-commercial.** That is fine for research and
 architecture validation, which is all this repo does today, but it means no model
