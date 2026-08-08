@@ -1,4 +1,5 @@
 # datasets (anchored to repo root so it doesn't match src/stemify/data/)
+/transcriptions/
 /data/
 *.wav
 *.flac
@@ -21,3 +22,4 @@ mlruns*/
 # env
 .venv
 logs/
+reports/
