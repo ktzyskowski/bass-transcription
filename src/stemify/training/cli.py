@@ -114,6 +114,13 @@ def main() -> None:
                          "Onsets are ~7%% of frames after +-1 widening, so >1 trades "
                          "precision for recall -- the candidate-generator setting for a "
                          "two-stage decoder. Unset (the default) is plain unweighted BCE")
+    ap.add_argument("--stem-dropout", type=float, default=0.0,
+                    help="frame objective, multi-channel only: probability of "
+                         "silencing the context channel(s) so the model also learns "
+                         "to transcribe an isolated bass. Applied to the training "
+                         "split only. 0 (default) reproduces every existing arm; "
+                         "0.3-0.5 is the usual range for modality dropout. Silence "
+                         "is the dB floor, not zero -- see core/features.SILENCE_DB.")
     ap.add_argument("--harmonics", default="1",
                     help="objective frame only: stack each CQT channel against itself "
                          "at these harmonics, e.g. '1,2,3,4'. A note at bin b also "
@@ -215,6 +222,7 @@ def main() -> None:
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
         strategy_kwargs["harmonics"] = _parse_harmonics(args.harmonics)
+        strategy_kwargs["stem_dropout"] = args.stem_dropout
         for flag, value in (("--pitch-weight", args.pitch_weight),
                             ("--voicing-weight", args.voicing_weight),
                             ("--onset-weight", args.onset_weight)):
@@ -229,6 +237,14 @@ def main() -> None:
         # structured NLL takes no class weights. It does now: the auxiliary onset and
         # voicing terms are the *same* BCE the frame path runs, so the same imbalance
         # applies and the same knob corrects it.
+        if args.stem_dropout:
+            raise SystemExit(
+                "--stem-dropout is not wired for --objective semicrf yet. "
+                "`ChunkDataset` takes the argument, but `SemiCRFRecipe` does not "
+                "record it, so a checkpoint could not say whether it was trained "
+                "under the augmentation -- and two arms differing only in this would "
+                "be indistinguishable after the fact."
+            )
         if args.pos_weight:
             # Asked of the term rather than compared against the string "pitch". That
             # comparison was a second copy of a fact `AUX_TERMS` already holds, and it

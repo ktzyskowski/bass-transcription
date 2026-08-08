@@ -45,6 +45,16 @@ HOP_LENGTH = 256  # ~11.6 ms per frame at 22.05 kHz
 # landing the contour on *this* grid.
 TOP_DB = 80.0     # dB floor for the log-magnitude conversion
 
+# What *silence* is in this feature space, and it is not zero. ``cqt`` returns
+# ``amplitude_to_db(..., ref=np.max, top_db=TOP_DB)``, so a frame's value is its level
+# relative to the track's own peak: the range is ``[-TOP_DB, 0]`` and **0 dB is the
+# loudest bin in the track**. Filling a channel with zeros therefore feeds full-scale
+# broadband energy, not an absent input -- the opposite of the intent, and a plausible
+# enough array that nothing downstream can notice.
+#
+# Anywhere a channel is padded, masked or dropped must use this constant.
+SILENCE_DB = -TOP_DB
+
 # Identity of the CQT *as configured here* -- the producer half of a cached feature's
 # key (see ``stemify.core.cache``). It names every constant above that changes the output,
 # so editing one invalidates the cache instead of silently serving features computed

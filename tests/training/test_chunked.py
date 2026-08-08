@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import torch
 
+from stemify.core.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.conditions import CONDITIONS
 from stemify.core.contour import Contour
@@ -111,17 +112,19 @@ def test_every_window_has_the_same_width_and_context(tmp_path, cache):
         assert batch.features.shape[:3] == (2, 1, N_BINS)
 
 
-def test_a_tracks_first_chunk_is_left_padded_with_zeros(tmp_path, cache):
-    # The pad exists so context is uniform; it must be zeros, since the scan relies on
-    # the carry's NEG (not on the features) to make it contribute nothing.
+def test_a_tracks_first_chunk_is_left_padded_with_silence(tmp_path, cache):
+    # The pad exists so context is uniform, and the scan relies on the carry's NEG (not
+    # on the features) to make it contribute nothing to the DP. The *encoder* still
+    # reads it, though, so the fill has to mean silence: features are dB relative to
+    # the track's peak, and zero there is full scale rather than an absent input.
     ds = _dataset(tmp_path, cache, [600, 600], chunk=40, dmax=30, batch_size=2)
     first = next(iter(ds))
     assert all(first.resets)
-    assert torch.count_nonzero(first.features[:, :, :, : 30 * STRIDE]) == 0
-    assert torch.count_nonzero(first.features[:, :, :, 30 * STRIDE :]) > 0
+    assert (first.features[:, :, :, : 30 * STRIDE] == SILENCE_DB).all()
+    assert (first.features[:, :, :, 30 * STRIDE :] != SILENCE_DB).any()
 
 
-def test_channel_window_stacks_channels_in_order_and_pads_with_zeros():
+def test_channel_window_stacks_channels_in_order_and_pads_with_silence():
     # The structured path's peer of test_frame's bichannel check. Constant-valued
     # channels so a swap or a duplicated channel is visible: channel 0 is the bass,
     # the channel the labels describe, and nothing downstream re-derives that.
@@ -136,11 +139,11 @@ def test_channel_window_stacks_channels_in_order_and_pads_with_zeros():
     assert (window[1] == 2.0).all()
 
     # Off both ends: a chunk's context margins run past the track, and the pad must be
-    # zeros on *every* channel, not just the one the slice happened to start from.
+    # SILENCE_DB on *every* channel, not just the one the slice happened to start from.
     overhang = channel_window(examples, -2, n + 4)
     assert overhang.shape == (2, N_BINS, n + 4)
-    assert (overhang[:, :, :2] == 0.0).all()
-    assert (overhang[:, :, -2:] == 0.0).all()
+    assert (overhang[:, :, :2] == SILENCE_DB).all()
+    assert (overhang[:, :, -2:] == SILENCE_DB).all()
     assert (overhang[0, :, 2:-2] == 1.0).all()
     assert (overhang[1, :, 2:-2] == 2.0).all()
 

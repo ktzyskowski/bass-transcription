@@ -28,6 +28,7 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
+from stemify.core.features import SILENCE_DB
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.fit.tracks import (
     TrainItem, channel_window, target_windows,
@@ -134,10 +135,15 @@ class _Track:
 
     def __init__(
         self, track: TrainItem, chunk: int, dmax: int, stride: int, right: int,
-        heads: Sequence[str] = (),
+        heads: Sequence[str] = (), drop_context: bool = False,
     ) -> None:
         self._examples = track.open(mmap=True)
         self._heads = heads
+        # Whole-track rather than per-chunk, because that is the case it simulates: a
+        # user uploads an isolated bass and *every* chunk of it lacks the mixture. Per
+        # chunk would also make the carry cross a domain change mid-track, which is a
+        # second thing to explain in any run that used it.
+        self._drop_context = drop_context
         self._chunk, self._dmax, self._stride = chunk, dmax, stride
         ft = self._examples[0].frame_times
         self._n_cqt = ft.size
@@ -158,9 +164,11 @@ class _Track:
         a_dp = lo - self._dmax                      # negative on a track's first chunk
         a, w = a_dp * self._stride, self._w_dp * self._stride
 
-        # (C, n_bins, w) -- every input channel, zero-padded where the window runs off
-        # either end of the track.
+        # (C, n_bins, w) -- every input channel, silence-padded where the window runs
+        # off either end of the track.
         window = channel_window(self._examples, a, w)
+        if self._drop_context:
+            window[1:] = SILENCE_DB      # channel 0 is the bass and always stays
         times = (np.arange(a, a + w) * self._hop).astype(np.float64)
 
         # A gold segment is assigned to the chunk holding its END. Its start is then at
@@ -207,6 +215,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         right_context: int = 0,
         heads: Sequence[str] = (),
         seed: int = 0,
+        stem_dropout: float = 0.0,
     ) -> None:
         """``heads`` are the per-frame targets served beside each chunk, for the
         auxiliary losses stacked on the NLL. Empty by default: the structured
@@ -227,9 +236,17 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         Both train on the union and report the right ``--sources`` while never mixing
         conditions in a batch. Seeded so a run is still reproducible.
         """
+        if not 0.0 <= stem_dropout <= 1.0:
+            raise ValueError(f"stem_dropout must be in [0, 1], got {stem_dropout}")
         self.heads = list(heads)
         self._items = list(items)
         random.Random(seed).shuffle(self._items)
+        self.seed = seed
+        # Per-track probability of silencing every context channel, so a bichannel
+        # model also learns to transcribe the bass alone. Zero by default: it changes
+        # the input distribution, so an arm that gains it is not comparable to one
+        # that did not.
+        self.stem_dropout = stem_dropout
         self.chunk_frames = chunk_frames
         self.dmax = dmax
         self.stride = stride
@@ -264,6 +281,10 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         cursors = [0] * self.batch_size          # index into this stream's track list
         opened: list[_Track | None] = [None] * self.batch_size
         chunk_no = [0] * self.batch_size
+        # Its own generator, seeded per worker: workers are forks that would otherwise
+        # inherit one stream and drop the mixture on the *same* tracks in each. Derived
+        # from `base` (worker id * batch_size) so it is still reproducible.
+        rng = random.Random(self.seed + 1_000_003 * (base + 1))
 
         while True:
             row: list[Chunk] = []
@@ -281,6 +302,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
                     track = opened[b] = _Track(
                         streams[b][cursors[b]], self.chunk_frames, self.dmax,
                         self.stride, self.right_context, self.heads,
+                        drop_context=rng.random() < self.stem_dropout,
                     )
                     chunk_no[b], reset = 0, True
                 feats, ft, gold, y = track[chunk_no[b]]

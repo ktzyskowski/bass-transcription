@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from stemify.core.cache import Cache
+from stemify.core.features import SILENCE_DB
 from stemify.core.data.base import Dataset as SlakhLikeDataset
 from stemify.core.notes import NoteEvent
 from stemify.core.serde import CachedItem
@@ -65,9 +66,16 @@ def channel_window(
     normal for a chunk's context margins, and the padding is what keeps every window
     the same width -- which is what lets chunks from streams at different positions
     share a batch and keeps the DP's shapes static.
+
+    Padded with ``SILENCE_DB``, not zero. The features are dB relative to the track's
+    own peak, so zero is the *loudest* bin, and every track's first chunk carries
+    ``dmax`` frames of it -- 345 CQT frames, 45% of that window, of full-scale
+    broadband handed to the conv front-end and to BatchNorm's running statistics. The
+    DP ignores those positions (their alpha is ``NEG``) and the auxiliary terms slice
+    them out, so nothing raised; the encoder saw them anyway.
     """
     n_bins, n_frames = examples[0].features.shape
-    out = np.zeros((len(examples), n_bins, width), dtype=np.float32)
+    out = np.full((len(examples), n_bins, width), SILENCE_DB, dtype=np.float32)
     lo, hi = max(0, start), min(n_frames, start + width)
     if lo < hi:
         for c, ex in enumerate(examples):

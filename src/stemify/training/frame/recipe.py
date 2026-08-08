@@ -52,6 +52,7 @@ class FrameRecipe(Recipe):
         hop_frames: int = HOP_FRAMES,
         pos_weight: dict[str, float | None] | None = None,
         harmonics: Sequence[int] | None = None,
+        stem_dropout: float = 0.0,
     ) -> None:
         """These three used to live on ``TrainConfig``, and only this recipe read them.
 
@@ -74,6 +75,11 @@ class FrameRecipe(Recipe):
         # `_ConvFrontend.stack` returns its input untouched. Kept as the default so
         # every checkpoint trained before harmonic stacking rebuilds unchanged.
         self.harmonics = tuple(harmonics or (1,))
+        # Per-window probability of silencing each context channel, so a bichannel
+        # model can also transcribe an isolated bass. Recorded in `config` because it
+        # changes the input distribution: a checkpoint has to say whether it was
+        # trained under it, or two arms differing only in this look identical.
+        self.stem_dropout = float(stem_dropout)
 
     @property
     def heads(self) -> list[str]:
@@ -94,6 +100,7 @@ class FrameRecipe(Recipe):
             "hop_frames": self.hop_frames,
             "pos_weight": dict(self.pos_weight),
             "harmonics": list(self.harmonics),
+            "stem_dropout": self.stem_dropout,
         }
 
     @classmethod
@@ -112,6 +119,7 @@ class FrameRecipe(Recipe):
             hop_frames=config_field(config, "hop_frames", int, HOP_FRAMES),
             pos_weight={str(h): float(w) for h, w in weights.items()},
             harmonics=[int(h) for h in config_int_list(config, "harmonics")] or None,
+            stem_dropout=config_field(config, "stem_dropout", float, 0.0),
         )
 
     @property
@@ -150,9 +158,16 @@ class FrameRecipe(Recipe):
     def build_loss(self) -> Loss[FrameBatch]:
         return FrameBCELoss(self.heads, self.pos_weight)
 
-    def _windows(self, tracks: list[tuple[Path, ...]]) -> frame_ds.FrameWindowDataset:
+    def _windows(
+        self, tracks: list[tuple[Path, ...]], train: bool
+    ) -> frame_ds.FrameWindowDataset:
+        """``train`` gates stem dropout, which is an augmentation and belongs to the
+        training split alone. Applying it to validation would move the metric under the
+        model rather than measuring it -- val F1 would drift with the dropout rate and
+        no longer compare against any other arm."""
         return frame_ds.FrameWindowDataset(
-            tracks, self.heads, self.window_frames, self.hop_frames
+            tracks, self.heads, self.window_frames, self.hop_frames,
+            stem_dropout=self.stem_dropout if train else 0.0,
         )
 
     def _tracks(
@@ -188,7 +203,7 @@ class FrameRecipe(Recipe):
         is paid every epoch -- which cancels the benefit on short epochs.
         """
         return DataLoader(
-            self._windows(tracks),
+            self._windows(tracks, train=shuffle),
             batch_size=config.batch_size,
             shuffle=shuffle,
             num_workers=config.num_workers,

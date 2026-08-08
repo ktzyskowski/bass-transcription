@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+from stemify.core.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.contour import Contour
 from stemify.core.notes import NoteEvent
@@ -72,8 +73,10 @@ def test_short_track_is_padded_not_dropped(tmp_path):
     assert len(ds) == 1
     x, y = ds[0]
     assert x.shape == (1, 5, 4)
-    assert x[0, :, 3].sum() == 0.0        # feature pad is zero
-    assert y["onset"][3] == 0.0           # target pad is zero
+    # Feature pad is SILENCE_DB, not zero: the CQT is dB relative to the track's own
+    # peak, so a zero-filled tail would be the loudest thing in the window.
+    assert (x[0, :, 3] == SILENCE_DB).all()
+    assert y["onset"][3] == 0.0           # target pad is zero -- "no onset" is a label
 
 
 def test_bichannel_window_stacks_channels_in_order(tmp_path):
@@ -91,6 +94,43 @@ def test_bichannel_window_stacks_channels_in_order(tmp_path):
     # Targets come from channel 0 alone -- the mixture's npz is read for features
     # only, so its (here all-zero) targets must not reach the batch.
     assert (y["onset"] == torch.arange(4, dtype=torch.float32)).all()
+
+
+def _bichannel(tmp_path, **kwargs) -> FrameWindowDataset:
+    bass = _save_example(tmp_path, "bass", np.full((5, 10), 1.0), np.arange(10))
+    mix = _save_example(tmp_path, "mix", np.full((5, 10), 2.0), np.zeros(10))
+    return FrameWindowDataset(
+        [(bass, mix)], heads=["onset"], window_frames=4, hop_frames=2, **kwargs
+    )
+
+
+def test_stem_dropout_silences_the_context_channel_and_never_the_bass(tmp_path):
+    # p=1 so the draw is not being tested, only what a drop *does*: the context
+    # channel becomes SILENCE_DB (the dB floor) rather than zero, which in this
+    # feature space would be full-scale energy -- the opposite of an absent input.
+    x, y = _bichannel(tmp_path, stem_dropout=1.0)[0]
+    assert (x[0] == 1.0).all(), "channel 0 is the bass and must never be dropped"
+    assert (x[1] == SILENCE_DB).all()
+    # Dropping a channel must not touch the labels: the question is unchanged, only
+    # the evidence available to answer it.
+    assert (y["onset"] == torch.arange(4, dtype=torch.float32)).all()
+
+
+def test_stem_dropout_defaults_to_off(tmp_path):
+    # Load-bearing: it changes the input distribution, so every arm trained before it
+    # existed must rebuild identically. A default that silently augmented would make
+    # those runs incomparable with no error anywhere.
+    x, _ = _bichannel(tmp_path)[0]
+    assert (x[0] == 1.0).all()
+    assert (x[1] == 2.0).all()
+
+
+def test_stem_dropout_rejects_a_probability_outside_the_unit_interval(tmp_path):
+    # A fraction typed as a percentage is the plausible slip, and at p=50 every
+    # context channel is silenced on every window -- which trains a model that
+    # ignores the mixture while reporting the flag as set.
+    with pytest.raises(ValueError, match=r"stem_dropout must be in \[0, 1\]"):
+        _bichannel(tmp_path, stem_dropout=50.0)
 
 
 def test_bichannel_collate_keeps_the_channel_axis(tmp_path):
