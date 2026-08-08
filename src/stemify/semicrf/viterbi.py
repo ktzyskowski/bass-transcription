@@ -12,7 +12,6 @@ step's segment start decides where the next lookup lands -- but it runs once per
 
 import torch
 
-from stemify.semicrf.constants import NOTE, REST, START
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import candidate_starts, scan
 from stemify.semicrf.semiring import MAX_PLUS
@@ -52,16 +51,21 @@ def viterbi(
     T = ev.lengths[0]
     if T == 0:
         return []
-    bias = ev.onset_logit.new_zeros(2)
-    bias[NOTE] = note_bias
-    back = ev.onset_logit.new_zeros((T + 1, ev.B, 2), dtype=torch.long)
+    # Every *pitch* label collects the bias, rest collects none -- the correction is
+    # per emitted note, and under a wide alphabet "a note" is any of the pitch labels
+    # rather than the integer 0. At two labels this is exactly `bias[NOTE]`.
+    bias = ev.onset_logit.new_zeros(scorer.labels.n_labels)
+    bias[: scorer.labels.n_pitches] = note_bias
+    back = ev.onset_logit.new_zeros(
+        (T + 1, ev.B, scorer.labels.n_labels), dtype=torch.long
+    )
     window = scan(
-        scorer, ev, grid, initial_window(ev.onset_logit, ev.B, grid.dmax),
+        scorer, ev, grid, initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows),
         stop=T, semiring=MAX_PLUS, bias=bias, witness=back,
     )
 
     last = window[:, -1]
-    label = int(torch.stack([last[0, NOTE], last[0, REST]]).argmax())
+    label = int(last[0, : scorer.labels.n_labels].argmax())
     cpu_back = back[:, 0].cpu()                             # the one transfer
     cpu = torch.device("cpu")
     j, segs = T, []
@@ -71,11 +75,12 @@ def viterbi(
         # through the *same* clamped start table the recurrence scored against,
         # rather than through a second copy of that arithmetic.
         flat = int(cpu_back[j, label])
-        i = int(candidate_starts(grid, j, cpu)[flat // 3])
-        prev = flat % 3
+        n_rows = scorer.labels.n_rows
+        i = int(candidate_starts(grid, j, cpu)[flat // n_rows])
+        prev = flat % n_rows
         segs.append((label, i, j))
         j, label = i, prev
-        if label == START:
+        if label == scorer.labels.START:
             break
     segs.reverse()
     return segs

@@ -339,11 +339,12 @@ def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
         _score_by_loop(dec.scorer, e, s, grid).item()
         for s in _all_segmentations(T, dmax)
     )
+    rows = dec.scorer.labels.n_rows
     window = scan(
-        dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax),
+        dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax, rows),
         stop=T, semiring=MAX_PLUS,
     )
-    got = float(window[0, -1, :2].max().detach())
+    got = float(window[0, -1, : dec.scorer.labels.n_labels].max().detach())
     assert abs(got - best) < 1e-4, f"max-plus scan says {got}, enumeration says {best}"
 
 
@@ -416,10 +417,14 @@ def test_asking_the_log_semiring_for_backpointers_is_refused():
     T, dmax = 6, 3
     e = _random_emissions(T, seed=2)
     grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+    labels = dec.scorer.labels
     with pytest.raises(ValueError, match="backpointer"):
         scan(
-            dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax), stop=T,
-            witness=e.onset_logit.new_zeros((T + 1, 1, 2), dtype=torch.long),
+            dec.scorer, e, grid,
+            initial_window(e.onset_logit, 1, dmax, labels.n_rows), stop=T,
+            witness=e.onset_logit.new_zeros(
+                (T + 1, 1, labels.n_labels), dtype=torch.long
+            ),
         )
 
 

@@ -85,12 +85,12 @@ def forward_retaining(
     Correctness is checked against ``log_partitions`` by the caller rather than argued
     -- the two must agree to float tolerance or this is scanning a different model.
     """
-    window = initial_window(ev.onset_logit, 1, grid.dmax)
+    window = initial_window(ev.onset_logit, 1, grid.dmax, scorer.labels.n_rows)
     alphas = [window[:, -1, :]]                                        # alpha at j = 0
     terms: list[torch.Tensor] = [ev.onset_logit.new_zeros(1, grid.dmax, 3, 2)]  # j=0 unused
     neg_col = ev.onset_logit.new_full((1, 1), NEG)
     for j in range(1, ev.T + 1):
-        term = step_terms(scorer, ev, grid, window, j)                 # (1, dmax, 3, 2)
+        term, _ = step_terms(scorer, ev, grid, window, j)          # (1, dmax, n_labels)
         terms.append(term)
         val = torch.logsumexp(term.reshape(1, -1, 2), dim=1)           # (1, 2)
         new = torch.cat([val, neg_col], dim=1)                         # (1, 3)

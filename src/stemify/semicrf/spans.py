@@ -28,6 +28,7 @@ from torch import nn
 
 from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, NOTE, REST
 from stemify.semicrf.evidence import Evidence
+from stemify.semicrf.labelset import BINARY, LabelSet
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,16 @@ class SpanScorer(nn.Module, ABC):
     # are the log-linear scorer's parameterisation, and a neural scorer may model
     # duration continuously with no edges at all.
     dmax_s: float
+
+    labels: LabelSet
+    """The alphabet this scorer emits potentials over.
+
+    Declared on the contract because it is what every consumer needs to know a shape:
+    the recurrence sizes its alpha window from ``n_rows``, ``unary`` returns
+    ``n_labels`` columns, ``transitions`` is ``(n_rows, n_labels)``, and the decoder
+    reads a segment's pitch back off its label. A scorer that names pitches and one
+    that does not are the same contract at different widths.
+    """
 
     @abstractmethod
     def unary(
@@ -115,6 +126,10 @@ class LinearSpanScorer(SpanScorer):
     ) -> None:
         super().__init__()
         self.dmax_s = dmax_s
+        # Two labels: this scorer has no pitch potential, so there is nothing for a
+        # wider alphabet to score with. `BINARY`'s integers are exactly NOTE/REST/START,
+        # so every checkpoint of this class keeps loading unchanged.
+        self.labels = BINARY
         self.register_buffer(
             "dur_edges_s", torch.as_tensor(dur_edges_s, dtype=torch.float32)
         )

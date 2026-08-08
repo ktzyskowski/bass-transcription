@@ -55,7 +55,8 @@ def _backward(
 
     _, grid = decoder._prepare([cues])
     gold = gold_segments(TIMES[:: decoder.stride], NOTES if notes else [], grid.dmax)
-    carry = initial_window(torch.zeros(grid.dmax, 3), 1, grid.dmax)
+    rows = decoder.scorer.labels.n_rows
+    carry = initial_window(torch.zeros(grid.dmax, rows), 1, grid.dmax, rows)
     A, gold_score, _ = decoder.nll_chunk([cues], [gold], carry, 0, 0)
 
     loss = (A - gold_score).mean()

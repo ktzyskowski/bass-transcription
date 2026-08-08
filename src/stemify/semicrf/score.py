@@ -18,7 +18,6 @@ objective simply stops being a likelihood.
 
 import torch
 
-from stemify.semicrf.constants import START
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.spans import Grid, SpanScorer
 
@@ -26,10 +25,16 @@ from stemify.semicrf.spans import Grid, SpanScorer
 Segmentation = list[tuple[int, int, int]]
 
 
-def _prev_labels(lab: torch.Tensor, first: torch.Tensor) -> torch.Tensor:
-    """The label preceding each segment, ``START`` wherever ``first`` is set."""
-    prev = torch.cat([lab.new_full((1,), START), lab[:-1]])
-    return torch.where(first, torch.full_like(prev, START), prev)
+def _prev_labels(lab: torch.Tensor, first: torch.Tensor, start: int) -> torch.Tensor:
+    """The label preceding each segment, ``START`` wherever ``first`` is set.
+
+    ``start`` is passed rather than imported: it is the *scorer's* ``START`` row, which
+    sits one past its alphabet and so moves with the alphabet's width. Reading the
+    two-label constant here would index a pitch label instead on any wider scorer --
+    silently, since it is a valid row, and visibly only in the first segment of each
+    track."""
+    prev = torch.cat([lab.new_full((1,), start), lab[:-1]])
+    return torch.where(first, torch.full_like(prev, start), prev)
 
 
 def segmentation_scores(
@@ -62,7 +67,8 @@ def segmentation_scores(
 
     both = scorer.unary(ev, grid, b, i, j)                       # (S, 2)
     unary = both.gather(-1, lab.unsqueeze(-1)).squeeze(-1)       # (S,)
-    terms = unary + scorer.transitions()[_prev_labels(lab, first), lab]
+    prev = _prev_labels(lab, first, scorer.labels.START)
+    terms = unary + scorer.transitions()[prev, lab]
     return out.index_add(0, b, terms)
 
 

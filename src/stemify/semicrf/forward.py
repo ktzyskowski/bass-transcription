@@ -48,35 +48,57 @@ def candidate_starts(grid: Grid, j: int, device: torch.device) -> torch.Tensor:
 
 
 def step_terms(
-    scorer: SpanScorer, ev: Evidence, grid: Grid, window: torch.Tensor, j: int
-) -> torch.Tensor:
-    """``(B, dmax, 3, 2)``: ``alpha[i][prev] + trans(prev -> next) + unary(next, i, j)``
-    for every candidate start ``i`` and every label pair, at position ``j``.
+    scorer: SpanScorer,
+    ev: Evidence,
+    grid: Grid,
+    window: torch.Tensor,
+    j: int,
+    semiring: Semiring = LOG,
+    witness: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """``(B, dmax, n_labels)``: the score of ending a span at ``j`` from each candidate
+    start, with the previous label already summed (or maxed) out.
 
-    Reducing this over its middle two axes is the recurrence: ``logsumexp`` gives the
-    forward pass, ``max`` gives Viterbi. Everything above the reduction is shared, and
-    this is the only function that knows the recurrence's shape.
+    This is **the** recurrence. Reducing the result over ``dim=1`` finishes the step:
+    ``logsumexp`` gives the forward pass, ``max`` gives Viterbi.
+
+    **The previous-label axis is contracted here rather than returned.** Written as one
+    broadcast, ``alpha[i][prev] + trans[prev][next] + unary[next, i, j]`` is
+    ``(B, dmax, n_rows, n_labels)`` -- fine at two labels, 9 MB per step at forty-nine
+    and ~1.15 GB retained across a chunk. ``semiring.contract`` does the same arithmetic
+    without materialising it, because ⊗ distributes over ⊕: the shared ``unary`` factors
+    out of the sum over ``prev``, which is the identity the whole dynamic program rests
+    on, applied once more.
+
+    ``witness`` asks for the argmax over ``prev`` alongside, which Viterbi needs and the
+    forward pass must not pay for. Returned as ``(term, arg_prev)``; ``arg_prev`` is
+    ``None`` under a semiring with no survivor to point at.
 
     The window is read at its **full** ``dmax`` width rather than trimmed for
-    ``j < dmax``. Out-of-range positions hold ``NEG``, so ``exp(NEG - max)`` underflows
-    to exactly 0 in float32 and they contribute nothing: identical arithmetic, one
-    *static* shape at every step. That is what makes the loop capturable as a single
-    CUDA graph, and what lets a chunk resume from a previous chunk's carry.
+    ``j < dmax``. Out-of-range positions hold ``NEG``, so they contribute nothing:
+    identical arithmetic, one *static* shape at every step. That is what makes the loop
+    capturable as a single CUDA graph, and what lets a chunk resume from a carry.
 
     Candidate starts are clamped at 0 so the ramp steps never index out of bounds. The
-    potentials they produce are meaningless, but they are *finite*, and they are added
-    to a ``NEG`` alpha, so they cannot perturb the result.
+    potentials they produce are meaningless, but they are *finite*, and they pair with a
+    ``NEG`` alpha, so they cannot perturb the result.
     """
     B = window.shape[0]
     device = ev.device
     starts = candidate_starts(grid, j, device)                              # (dmax,)
     rows = torch.arange(B, device=device).unsqueeze(1)                      # (B, 1)
-    unary = scorer.unary(ev, grid, rows, starts.unsqueeze(0), j)            # (B, dmax, 2)
-    return (
-        window.unsqueeze(-1)                        # (B, dmax, 3=prev, 1)
-        + scorer.transitions().view(1, 1, 3, 2)     # (1, 1,    3, 2=next)
-        + unary.unsqueeze(2)                        # (B, dmax, 1, 2)
-    )
+    unary = scorer.unary(ev, grid, rows, starts.unsqueeze(0), j)     # (B, dmax, n_labels)
+    trans = scorer.transitions()                                    # (n_rows, n_labels)
+    if not witness:
+        return semiring.contract(window, trans) + unary, None
+    survivor = semiring.contract_with_witness(window, trans)
+    if survivor is None:
+        raise ValueError(
+            f"{type(semiring).__name__} combines the previous-label alternatives "
+            "without keeping one, so it has no backpointer to record"
+        )
+    inner, arg_prev = survivor
+    return inner + unary, arg_prev
 
 
 def scan(
@@ -137,21 +159,24 @@ def scan(
         )
     B = ev.B
     stop = ev.T if stop is None else stop
+    n_rows = scorer.labels.n_rows
     neg_col = ev.onset_logit.new_full((B, 1), semiring.zero)
     for j in range(start + 1, stop + 1):
-        term = step_terms(scorer, ev, grid, window, j)
+        term, arg_prev = step_terms(
+            scorer, ev, grid, window, j, semiring, witness=witness is not None
+        )
         if bias is not None:
             term = term + bias
         if perturb is not None:
-            # (B, dmax, 2) -> (B, dmax, 1, 2): one epsilon per (start, label), shared
-            # across the `prev` axis, because a span's identity does not include what
-            # preceded it.
-            term = term + perturb[:, j].unsqueeze(-2)
-        flat = term.reshape(B, -1, 2)
+            # (B, dmax, n_labels): one epsilon per (start, label). The `prev` axis this
+            # used to broadcast over is contracted away inside `step_terms` now, which
+            # says the same thing it always did -- a span's identity does not include
+            # what preceded it.
+            term = term + perturb[:, j]
         if witness is None:
-            val = semiring.reduce(flat, dim=1)                 # (B, 2)
+            val = semiring.reduce(term, dim=1)                 # (B, n_labels)
         else:
-            survivor = semiring.reduce_with_witness(flat, dim=1)
+            survivor = semiring.reduce_with_witness(term, dim=1)
             if survivor is None:
                 raise ValueError(
                     f"{type(semiring).__name__} combines alternatives without keeping "
@@ -159,8 +184,16 @@ def scan(
                     "semiring would read an all-zero table and return a wrong "
                     "segmentation that looks like a right one"
                 )
-            val, witness[j] = survivor
-        new = torch.cat([val, neg_col], dim=1)                 # (B, 3)
+            val, arg_start = survivor                          # both (B, n_labels)
+            assert arg_prev is not None                        # `witness` implies it
+            # One packed backpointer per label, `offset * n_rows + prev` -- exactly the
+            # layout the single flat argmax produced before the reduction was split in
+            # two. The winning `prev` is the one belonging to the winning *start*, so it
+            # is gathered at `arg_start`; reducing `arg_prev` again here would pick a
+            # `prev` from some other start and return a path that was never scored.
+            best_prev = arg_prev.gather(1, arg_start.unsqueeze(1)).squeeze(1)
+            witness[j] = arg_start * n_rows + best_prev
+        new = torch.cat([val, neg_col], dim=1)                 # (B, n_rows)
         if ends is not None and captured is not None:
             for b in ends.get(j, ()):
                 captured[b] = new[b]
@@ -178,7 +211,7 @@ def log_partitions(
 
     ``perturb`` rides through to ``scan``; see ``marginals`` for what differentiating
     with respect to it buys."""
-    window = initial_window(ev.onset_logit, ev.B, grid.dmax)
+    window = initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows)
 
     # Each track is read out at its *own* length, which the rolling window cannot hold:
     # lengths differ by far more than dmax (16617 vs 23355 on a real batch). So capture
@@ -204,7 +237,7 @@ def log_partitions(
             f"[1, {ev.T}]"
         )
     alphas = cast(list[torch.Tensor], captured)
-    return torch.logsumexp(torch.stack(alphas)[:, :2], dim=1)
+    return torch.logsumexp(torch.stack(alphas)[:, : scorer.labels.n_labels], dim=1)
 
 
 def chunk_log_partition(
@@ -256,6 +289,9 @@ def chunk_log_partition(
             f"right must be in [0, Tmax-context={Tmax - context}), got {right}; "
             "the chunk needs at least one frame of its own to scan"
         )
-    window = initial_window(ev.onset_logit, ev.B, grid.dmax) if carry is None else carry
+    window = (
+        initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows)
+        if carry is None else carry
+    )
     window = scan(scorer, ev, grid, window, start=context, stop=Tmax - right)
-    return torch.logsumexp(window[:, -1, :2], dim=1), window
+    return torch.logsumexp(window[:, -1, : scorer.labels.n_labels], dim=1), window

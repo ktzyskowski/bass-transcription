@@ -221,7 +221,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         # starts at `context`. The chunk's leading zero-padding is then read against a
         # NEG alpha and contributes exp(NEG - max) == 0.
         template = next(iter(self._carry.values()))[0]   # (dmax, 3)
-        fresh = initial_window(template, 1, template.shape[0])[0]
+        fresh = initial_window(template, 1, template.shape[0], template.shape[1])[0]
         windows, prev = [], []
         for stream, reset in zip(batch.streams, batch.resets, strict=True):
             if reset:

@@ -57,6 +57,33 @@ class Semiring(Protocol):
         """
         ...
 
+    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """⊕ over the shared axis of ``a ⊗ b``: ``(..., K)`` and ``(K, N)`` -> ``(..., N)``.
+
+        The semiring matmul, and the reason it exists is memory. The recurrence combines
+        an alpha window with a transition matrix over the *previous* label, and doing
+        that by broadcasting materialises ``(B, dmax, n_rows, n_labels)`` -- 9 MB per
+        step at a 49-label alphabet, ~1.15 GB retained across a chunk. Contracting the
+        previous-label axis first never builds it: the result is ``(B, dmax, n_labels)``,
+        ~180 KB, and the arithmetic is identical.
+
+        At two labels the saving is nothing and the broadcast would be simpler. At
+        forty-nine it is the difference between fitting and not, which is why this is on
+        the algebra rather than written out at the one call site.
+        """
+        ...
+
+    def contract_with_witness(
+        self, a: torch.Tensor, b: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """``(contracted, index into K of the survivor)``, or ``None`` for a ⊕ with none.
+
+        Viterbi's backpointer now spans *two* reductions -- which previous label won the
+        contraction, and which start frame won the reduction after it -- so the traceback
+        needs this one as well as ``reduce_with_witness``.
+        """
+        ...
+
 
 class _Log:
     """⊕ = ``logsumexp``. Sums over every segmentation, giving ``log Z``.
@@ -78,6 +105,27 @@ class _Log:
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         return None
 
+    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """``logsumexp_k(a[..., k] + b[k, n])``, as a shifted matmul.
+
+        ``log(exp(a - ma) @ exp(b - mb)) + ma + mb`` -- the log-domain matmul. Both
+        operands are shifted to a maximum of 0 before the exponential, so nothing
+        overflows and the underflow that remains is correct: a term ``NEG`` below the
+        max contributes exactly 0, which is the mass of an unreachable path.
+
+        A row of ``a`` that is *entirely* ``NEG`` (the ramp positions before a track has
+        dmax frames behind it) shifts to 0 and comes back at ``NEG + O(log K)``, i.e.
+        still unreachable. That is the property ``initial_window`` relies on.
+        """
+        ma = a.max(dim=-1, keepdim=True).values
+        mb = b.max()
+        return torch.log(torch.exp(a - ma) @ torch.exp(b - mb)) + ma + mb
+
+    def contract_with_witness(
+        self, a: torch.Tensor, b: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        return None
+
 
 class _MaxPlus:
     """⊕ = ``max``. Keeps the single best segmentation -- Viterbi, the tropical semiring.
@@ -95,6 +143,23 @@ class _MaxPlus:
         self, terms: torch.Tensor, dim: int
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         best = terms.max(dim=dim)
+        return best.values, best.indices
+
+    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """``max_k(a[..., k] + b[k, n])``. There is no max-plus matmul primitive, so
+        this broadcasts and reduces.
+
+        That rebuilds exactly the tensor ``LOG.contract`` exists to avoid -- and it is
+        fine here, because max-plus runs only under ``viterbi``'s ``no_grad``. Nothing
+        is retained for a backward pass, so the peak is one step's worth rather than a
+        chunk's.
+        """
+        return (a.unsqueeze(-1) + b).max(dim=-2).values
+
+    def contract_with_witness(
+        self, a: torch.Tensor, b: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        best = (a.unsqueeze(-1) + b).max(dim=-2)
         return best.values, best.indices
 
 
