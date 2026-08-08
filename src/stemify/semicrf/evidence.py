@@ -35,7 +35,10 @@ import torch
 
 from stemify.core.contour import Contour
 from stemify.core.cues import Cues
-from stemify.semicrf.cumsums import pitch_cumsums, voiced_logcumsum
+from stemify.core.features import BINS_PER_SEMITONE
+from stemify.semicrf.cumsums import (
+    pitch_cumsums, pitch_logprob_cumsum, voiced_logcumsum,
+)
 from stemify.semicrf.tensor_cues import (
     TensorCues, check_one_device, cues_device, on_device,
 )
@@ -77,6 +80,13 @@ class Evidence:
     path_c: torch.Tensor | None = None      # (B, Tmax+1) cumsum of 1 - BC(p_t, p_t-1)
     entropy_c: torch.Tensor | None = None   # (B, Tmax+1) cumsum of H(p_t)
     pitch_c: torch.Tensor | None = None     # (B, Tmax+1, K) cumsum of p_t
+    # (B, Tmax+1, n_semitones) cumsum of log P(pitch in this semitone). The only
+    # pitch-*valued* evidence the DP has: everything else here measures change or
+    # disagreement and is invariant to which pitch is named. Width comes from the
+    # head's own axis (K // BINS_PER_SEMITONE), which is the same rule
+    # `LabelSet.from_bins` uses -- so a scorer's alphabet and this agree by
+    # construction rather than by a constant someone keeps in step.
+    pitch_logprob_c: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         check_one_device(
@@ -117,6 +127,7 @@ class Evidence:
             path_c=cut(self.path_c),
             entropy_c=cut(self.entropy_c),
             pitch_c=cut(self.pitch_c),
+            pitch_logprob_c=cut(self.pitch_logprob_c),
         )
 
     # --- span accessors: the index conventions, in one place --------------------
@@ -178,6 +189,29 @@ class Evidence:
         d = span if isinstance(span, int) else span.unsqueeze(-1)
         return (self.pitch_c[b, j] - self.pitch_c[b, i]) / d
 
+    def mean_pitch_logprob(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
+        """Mean per-frame log-probability of each semitone across ``[i, j)``.
+
+        ``(..., n_semitones)`` -- one score per pitch the head can name, which is what
+        lets a ``note@p`` span be worth something different from ``note@q``. Raises
+        rather than zeroing when the model has no pitch head, unlike its pitch-invariant
+        siblings above: a scorer whose alphabet names pitches cannot fall back to
+        scoring them all alike, because then every pitch relabelling of a segmentation
+        is equally good and ``log Z`` spreads its mass over all of them.
+
+        A *mean*, so the value does not grow with span length and a long note is not
+        penalised for being long -- duration is the duration potential's job.
+        """
+        if self.pitch_logprob_c is None:
+            raise ValueError(
+                "no pitch-valued evidence: this Evidence carries no pitch head, so a "
+                "pitch-labelled alphabet has nothing to score. Use a {note, rest} "
+                "scorer, or decode through cues from a model with a pitch head."
+            )
+        span = j - i
+        d = span if isinstance(span, int) else span.unsqueeze(-1)
+        return (self.pitch_logprob_c[b, j] - self.pitch_logprob_c[b, i]) / d
+
     def pitch_spread(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
         """Generalised Jensen-Shannon divergence of the span's frames.
 
@@ -206,7 +240,7 @@ def _track_tensors(
     torch.Tensor,
     torch.Tensor,
     np.ndarray,
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None,
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None,
 ]:
     """One track's per-frame tensors, pitch cumsums included when it has a pitch head."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
@@ -220,7 +254,14 @@ def _track_tensors(
     # the probe that used to stand here is what let the numpy path silently arrive
     # without one -- zeroing the learned span features at decode.
     logits = cues.pitch_logits
-    pitch = None if logits is None else pitch_cumsums(on_device(logits, device)[::stride])
+    pitch = None
+    if logits is not None:
+        strided = on_device(logits, device)[::stride]
+        n_semitones = strided.shape[-1] // BINS_PER_SEMITONE
+        pitch = (
+            *pitch_cumsums(strided),
+            pitch_logprob_cumsum(strided, n_semitones),
+        )
     return onset_logit, Vc, Uc, frame_times, pitch
 
 
@@ -265,24 +306,26 @@ def build_evidence(
             "must come from the same model, or the span features silently read zeros "
             "for some rows and real evidence for others"
         )
-    Pc = Hc = Dc = None
+    Pc = Hc = Dc = Lc = None
     if first_pitch is not None:
         K = first_pitch[2].shape[-1]
         Pc = onset.new_zeros(B, Tmax + 1)
         Hc = onset.new_zeros(B, Tmax + 1)
         Dc = onset.new_zeros(B, Tmax + 1, K)
+        Lc = onset.new_zeros(B, Tmax + 1, first_pitch[3].shape[-1])
 
     for b, (o, v, u, _, pitch) in enumerate(built):
         t = lengths[b]
         onset[b, :t] = o
         Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
         Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
-        if pitch is None or Pc is None or Hc is None or Dc is None:
+        if pitch is None or Pc is None or Hc is None or Dc is None or Lc is None:
             continue
-        pc, hc, dc = pitch
+        pc, hc, dc, lc = pitch
         Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
         Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
         Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
+        Lc[b, : t + 1], Lc[b, t + 1 :] = lc, lc[-1]
 
     # A batch of contours only when every track has one: a partial list would silently
     # give some decoded notes a pyin pitch and others none.
@@ -291,5 +334,5 @@ def build_evidence(
     return Evidence(
         onset_logit=onset, voiced_c=Vc, rest_c=Uc, lengths=lengths,
         frame_times=[t[3] for t in built], contours=contours,
-        path_c=Pc, entropy_c=Hc, pitch_c=Dc,
+        path_c=Pc, entropy_c=Hc, pitch_c=Dc, pitch_logprob_c=Lc,
     )

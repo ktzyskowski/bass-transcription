@@ -121,13 +121,18 @@ class LabelSet:
         return label != self.REST and label != self.START
 
     def bin_of(self, label: int) -> int:
-        """The pitch label's *centre* bin on the head's frequency axis.
+        """The bin whose centre frequency *is* this label's pitch.
 
-        The bridge between the alphabet and the evidence: a span's pitch potential reads
-        the head's log-probability at this bin. Rounded rather than interpolated because
-        a semitone label names a semitone, and ``two_hot`` already put the head's mass on
-        the two bins around the true fractional pitch -- so the centre bin carries the
-        bulk of it for any note actually at this semitone.
+        The bridge between the alphabet and the evidence. Exactly
+        ``BINS_PER_SEMITONE * label``, since both axes are logarithmic from the same
+        ``FMIN`` -- but derived through ``midi_to_bin`` rather than asserted, so it
+        follows the frequency axis if that is ever reconfigured.
+
+        Note this is the semitone's **centre**, not the bottom of a block. Anything
+        pooling bins into semitones has to straddle it (``[b-1, b+2)`` at three
+        bins/semitone); pooling ``[b, b+3)`` instead is half a semitone sharp, and a
+        note tuned slightly flat then reads as the semitone below. See
+        ``cumsums.pitch_logprob_cumsum``.
         """
         return int(round(midi_to_bin(float(self.midi_of(label)))))
 

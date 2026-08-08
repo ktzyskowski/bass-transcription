@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from stemify.core.contour import Contour
+from stemify.core.features import BINS_PER_SEMITONE
 from stemify.semicrf.tensor_cues import on_device
 from stemify.core.grids import resample_mask
 
@@ -54,6 +55,59 @@ def voiced_logcumsum(
     Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
     Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
     return Vc, Uc
+
+
+def pitch_logprob_cumsum(
+    logits: torch.Tensor, n_pitches: int, bins_per_semitone: int = BINS_PER_SEMITONE
+) -> torch.Tensor:
+    """Per-bin pitch logits ``(T, K)`` -> ``(T+1, n_pitches)`` cumsum of semitone log-probs.
+
+    **The potential that lets the CRF supervise pitch value at all.** With a
+    ``{note, rest}`` alphabet the span features are all pitch-*invariant* -- how far the
+    distribution moved, how much its frames disagree -- so nothing in the structured
+    objective says which pitch is right. A span labelled ``note@p`` can read the head's
+    own log-probability of ``p`` across the span, and then ``d NLL / d(pitch head)`` is a
+    segment-level pitch signal instead of nothing.
+
+    Bins are pooled to semitones by ``logsumexp``, which is the marginal "the pitch lies
+    somewhere in this semitone" rather than a pick of the centre bin. That matters
+    because ``two_hot`` deliberately splits a note's mass across the two bins straddling
+    its true fractional pitch, so the centre bin alone under-counts every note not
+    exactly at a semitone -- systematically, and worst for the in-tune ones.
+
+    The axis is truncated to a whole number of semitones *before* the softmax, so the
+    result is a proper distribution over the pitches the alphabet can name rather than
+    one leaking mass into bins no label reads.
+
+    Cumulative because a span reads it as ``(C[j] - C[i]) / (j - i)`` -- the **mean**
+    log-probability, so a geometric mean of the frame posteriors. That is the right
+    aggregate here and the arithmetic mean is not: one frame confidently disagreeing
+    should veto a span's pitch, which is exactly what a geometric mean does and what
+    ``pitch_mean``'s arithmetic mixture deliberately does not (it preserves both modes of
+    a straddle, because ``pitch_spread`` needs them).
+    """
+    need = n_pitches * bins_per_semitone
+    if logits.shape[-1] + 1 < need:
+        raise ValueError(
+            f"pitch head emits {logits.shape[-1]} bins, which cannot cover the "
+            f"{n_pitches} semitones the alphabet names at {bins_per_semitone} "
+            "bins/semitone. The label set is derived from the head's axis "
+            "(LabelSet.from_bins); they have drifted."
+        )
+    lp = torch.log_softmax(logits, dim=-1)
+    # **Pooling blocks are centred on the semitone, which costs one bin of padding.**
+    # Semitone `s` sits at bin `bins_per_semitone * s` exactly (that is what
+    # `LabelSet.bin_of` returns), so its block has to be the bins *around* that, not
+    # the ones above it. Reshaping the raw axis would give `[3s, 3s+3)` -- half a
+    # semitone sharp -- and a note tuned slightly flat would be credited to the
+    # semitone below. Padding one `log 0` bin at the bottom shifts every block down by
+    # one, making them `[3s-1, 3s+2)`.
+    pad = lp.new_full((lp.shape[0], 1), float("-inf"))
+    blocks = torch.cat([pad, lp], dim=-1)[:, :need]
+    pooled = torch.logsumexp(
+        blocks.reshape(lp.shape[0], n_pitches, bins_per_semitone), dim=-1
+    )                                                         # (T, n_pitches)
+    return torch.cat([pooled.new_zeros(1, n_pitches), torch.cumsum(pooled, 0)])
 
 
 def pitch_cumsums(

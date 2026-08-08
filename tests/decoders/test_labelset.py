@@ -85,3 +85,64 @@ def test_an_empty_range_is_refused():
 def test_a_sub_semitone_axis_has_no_alphabet_to_derive():
     with pytest.raises(ValueError, match="under one semitone"):
         LabelSet.from_bins(BINS_PER_SEMITONE - 1)
+
+
+def test_pitch_logprob_cumsum_scores_the_right_semitone():
+    """The one pitch-*valued* quantity the DP has, and the reason to widen the alphabet.
+
+    Every other span feature measures change or disagreement and is invariant to which
+    pitch is named -- so without this, `note@p` and `note@q` score identically and log Z
+    spreads its mass over every relabelling of the same segmentation."""
+    import torch
+
+    from stemify.semicrf.cumsums import pitch_logprob_cumsum
+
+    labels = LabelSet.from_bins(144)
+    want = labels.label_of(40)                       # E2
+    logits = torch.full((20, 144), -5.0)
+    centre = labels.bin_of(want)
+    logits[:, centre - 1 : centre + 2] = 20.0
+
+    c = pitch_logprob_cumsum(logits, labels.n_pitches)
+    assert c.shape == (21, labels.n_pitches)
+    assert bool((c[0] == 0).all()), "cumsum needs a zero row so C[j]-C[i] spans [i, j)"
+
+    mean_lp = (c[20] - c[0]) / 20                    # the span's mean log-probability
+    assert int(mean_lp.argmax()) == want
+    assert float(mean_lp.max()) > -0.05              # ~certain at the right semitone
+    assert float(mean_lp[0]) < -5.0                  # and far from it elsewhere
+
+
+def test_pitch_logprob_pools_semitones_rather_than_picking_a_centre_bin():
+    """`two_hot` splits a note's mass across the two bins straddling its true
+    fractional pitch, so reading the centre bin alone under-counts every note that is
+    not exactly at a semitone -- systematically, and worst for the in-tune ones.
+    Pooling by logsumexp is the marginal 'somewhere in this semitone'."""
+    import torch
+
+    from stemify.semicrf.cumsums import pitch_logprob_cumsum
+
+    labels = LabelSet.from_bins(144)
+    want = labels.label_of(40)
+    centre = labels.bin_of(want)
+    # Mass split evenly across two neighbouring bins of the same semitone, nothing on
+    # the centre: a centre-bin reading would call this pitch unlikely.
+    logits = torch.full((4, 144), -20.0)
+    logits[:, centre - 1] = 5.0
+    logits[:, centre + 1] = 5.0
+
+    mean_lp = (pitch_logprob_cumsum(logits, labels.n_pitches)[4]) / 4
+    assert int(mean_lp.argmax()) == want
+    assert float(mean_lp.max()) > -0.2
+
+
+def test_a_head_narrower_than_the_alphabet_is_refused():
+    import pytest as _pytest
+    import torch
+
+    from stemify.semicrf.cumsums import pitch_logprob_cumsum
+
+    # The alphabet is derived from the head, so a mismatch means they have drifted --
+    # and the silent version scores pitches against evidence that does not exist.
+    with _pytest.raises(ValueError, match="have drifted"):
+        pitch_logprob_cumsum(torch.zeros(3, 30), n_pitches=48)
