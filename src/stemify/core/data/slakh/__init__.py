@@ -56,7 +56,11 @@ from stemify.core.data.slakh.dataset import SlakhDataset
 from stemify.core.data.slakh.index import (
     ARCHIVE_DIR, SPLITS, bass_stem_ids, index, read_metadata, resolve_root,
 )
-from stemify.core.data.slakh.item import BASS_TRANSPOSE, REFERENCE_HOP_S, BassStem
+# REFERENCE_HOP_S comes from ``midi_contour`` rather than through ``item``: the grid
+# belongs to the shared MIDI->contour gate now, and re-exporting it from here keeps
+# ``from stemify.core.data.slakh import REFERENCE_HOP_S`` working for callers outside.
+from stemify.core.data.midi_contour import REFERENCE_HOP_S
+from stemify.core.data.slakh.item import BASS_TRANSPOSE, BassStem
 
 __all__ = [
     "ARCHIVE_DIR", "BASS_TRANSPOSE", "BassStem", "REFERENCE_HOP_S", "SPLITS",

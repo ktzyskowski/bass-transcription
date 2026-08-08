@@ -25,6 +25,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from stemify.core.data.base import Dataset
+from stemify.core.data.filobass import FiloBassDataset
 from stemify.core.data.idmt_smt_bass import IdmtDataset
 from stemify.core.data.mdb_bass_synth import MdbDataset
 from stemify.core.data.slakh import SlakhDataset
@@ -107,6 +108,12 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
 # dataset owns how its own references are built. Factories take the parsed args so a
 # dataset can read whichever flags it cares about and ignore the rest.
 DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset]]] = {
+    # Stems only, so it ignores --source: FiloBass ships no mixture and a bichannel
+    # checkpoint cannot be scored on it. See core/data/filobass.py.
+    "filobass": (
+        "data/raw/filobass",
+        lambda root, a: FiloBassDataset(root, limit=a.limit),
+    ),
     "idmt": (
         "data/raw/idmt_smt_bass",
         lambda root, a: IdmtDataset(root, limit=a.limit),

@@ -11,26 +11,20 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
-import librosa
 import numpy as np
 
 from stemify.core.contour import Contour
 from stemify.core.data.base import EvalItem
+from stemify.core.data.midi_contour import (
+    NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
+)
 from stemify.core.notes import NoteEvent
 from stemify.core.sources import Sources
 
-# Frame grid for the reference contour. 10 ms is the mir_eval melody convention
-# and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our
-# choice, since MIDI is event-based and has no native grid.
-REFERENCE_HOP_S = 0.01
-
-# Per-note voicing gate. A note stays voiced from onset until its energy falls
-# NOTE_DECAY_DB below that note's *own* attack peak (measured over the first
-# ATTACK_WINDOW_S). Relative to the note, not the track: a quiet note gets the
-# same proportional decay window as a loud one, where a track-relative floor
-# would gate the quiet note out early.
-NOTE_DECAY_DB = 40.0
-ATTACK_WINDOW_S = 0.05
+# ``REFERENCE_HOP_S`` and ``NOTE_DECAY_DB`` are imported rather than defined here: the
+# grid and the decay gate are facts about *bass*, not about Slakh, and FiloBass needs
+# the same ones. They stay importable from this module because ``slakh/__init__``
+# re-exports ``REFERENCE_HOP_S`` and callers outside the package read it there.
 
 # Slakh's rendered bass audio sounds one octave BELOW its MIDI note numbers.
 # Electric bass is a transposing instrument -- written an octave above where it
@@ -137,42 +131,14 @@ class BassStem(EvalItem):
         The gate reads the *stem* even when the mix will be scored, because this
         is ground truth about the bass, independent of what a baseline listens
         to. Overlapping notes collapse to the lowest voice (``np.fmin``).
+
+        The gate itself lives in ``core.data.midi_contour``: it is a fact about bass
+        decay rather than about Slakh, and FiloBass reads the same one. What stays
+        here is the only part that is Slakh's own -- ``BASS_TRANSPOSE``.
         """
-        notes = self._notes
-        if not notes:
-            return Contour.empty()
-
-        audio, sr = librosa.load(self.stem_path, sr=None, mono=True)
-        hop = max(1, round(sr * hop_s))
-        rms = librosa.feature.rms(y=audio, frame_length=hop * 4, hop_length=hop)[0]
-        # The audio grid may run past the last note-off -- that overhang is the
-        # decay this gate exists to keep, so times come from the audio.
-        times = librosa.times_like(rms, sr=sr, hop_length=hop)
-        energy_db = librosa.amplitude_to_db(rms, ref=np.max)
-        attack_frames = max(1, round(ATTACK_WINDOW_S / hop_s))
-        onsets = [n[0] for n in notes]
-
-        midi = np.full(times.shape, np.nan)
-        for i, (start, end, pitch) in enumerate(notes):
-            lo = int(np.searchsorted(times, start))
-            # A note owns frames up to the next onset; its decay lives in there.
-            nxt = onsets[i + 1] if i + 1 < len(notes) else times[-1] + hop_s
-            hi = int(np.searchsorted(times, nxt))
-            if hi <= lo:
-                continue
-            peak_db = energy_db[lo : min(lo + attack_frames, hi)].max()
-            off = int(np.searchsorted(times, end))
-            # Voiced across the MIDI span (precise onsets), then through decay
-            # while energy stays within decay_db of this note's own attack.
-            active = np.arange(lo, hi) < off
-            seg_voiced = active | (energy_db[lo:hi] > peak_db - decay_db)
-            vals = np.where(seg_voiced, pitch - BASS_TRANSPOSE, np.nan)
-            midi[lo:hi] = np.fmin(midi[lo:hi], vals)
-
-        freqs = np.zeros_like(times)
-        sounding = ~np.isnan(midi)
-        freqs[sounding] = 440.0 * 2.0 ** ((midi[sounding] - 69.0) / 12.0)
-        return Contour(times, freqs)
+        return notes_to_contour(
+            self._notes, self.stem_path, BASS_TRANSPOSE, hop_s, decay_db
+        )
 
     def reference_notes(self) -> list[NoteEvent]:
         """The MIDI notes as events, octave-corrected like ``reference``.
