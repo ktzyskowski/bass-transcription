@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import torch
 import numpy as np
 
 from stemify.core.cache import Cache
@@ -271,9 +272,20 @@ class CheckpointValidator:
                 )
             )
 
+    @torch.no_grad()
     def score(self, segment: SegmentFn) -> dict[str, float]:
+        """Note-level metrics. **Under ``no_grad``**, which is not merely an economy.
+
+        Everything here is inference, but nothing on this path used to say so: the
+        encoder's own forward is guarded, and the *decoder's* was not. That cost nothing
+        while every span potential was a handful of adds over cumsums -- and it stopped
+        being free the moment a scorer became a network. ``NeuralSpanScorer.precompute``
+        materialises one MLP evaluation per span, so a six-minute track retains ~5 GB of
+        graph that no backward will ever consume, on top of the training step's own.
+        """
         return score_examples(segment, self.examples)
 
+    @torch.no_grad()
     def score_cues(self, encode: EncodeFn) -> list[MetricResult]:
         return score_cues_examples(encode, self.examples)
 
