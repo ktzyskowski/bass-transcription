@@ -135,9 +135,9 @@ def scan(
     zero-padding at the chunk's right edge, and which the DP must not consume.
 
     ``bias`` is added to every step's terms before the reduction, broadcast against
-    ``(B, dmax, 3, 2)`` -- one constant for the whole scan.
+    ``(B, dmax, n_rows, n_labels)`` -- one constant for the whole scan.
 
-    ``perturb`` is its per-span twin, ``(B, stop+1, dmax, 2)``, sliced at each step. It
+    ``perturb`` is its per-span twin, ``(B, stop+1, dmax, n_labels)``, sliced per step. It
     exists to be differentiated rather than to change an answer: with it left at zero
     the scan returns exactly what it otherwise would, and ``d log Z / d perturb`` is the
     posterior probability of each span. The two are separate parameters because they are
@@ -145,7 +145,7 @@ def scan(
     reads a marginal off. Collapsing them into one shape-polymorphic argument would save
     a line and lose that.
 
-    ``witness`` is a ``(stop+1, B, 2)`` int64 table filled with the
+    ``witness`` is a ``(stop+1, B, n_labels)`` int64 table filled with the
     index of each step's surviving alternative -- backpointers, for a caller that means
     to reconstruct the path. Requesting one from a semiring that has no survivor to
     point at is an error rather than a silent no-op, because the traceback that follows

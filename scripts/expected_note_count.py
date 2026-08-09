@@ -36,9 +36,8 @@ from pathlib import Path
 import torch
 
 from stemify.core.cache import Cache
-from stemify.semicrf.forward import log_partitions
+from stemify.semicrf.marginals import span_marginals
 from stemify.semicrf.viterbi import viterbi
-from stemify.semicrf.constants import NOTE
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators
@@ -53,14 +52,20 @@ def expected_notes(decoder, cues) -> tuple[float, int]:
     The expectation comes from ``autograd``, not a hand-written backward recursion:
     reverse mode through the forward scan *is* the backward algorithm, so the quantity
     is already being computed on every training step and only needs reading out.
+
+    Summed out of the span marginals rather than differentiated against a *named*
+    parameter. It used to read ``d log Z / d b_note``, which is the same number only
+    while a scorer happens to carry a scalar that adds one to every note span --
+    ``LinearSpanScorer`` does, a neural one does not. By linearity of expectation
+    ``E[count] = sum over spans of P(span)``, so summing the marginals over the pitch
+    labels asks the distribution directly and works for any scorer.
     """
     ev, grid = decoder._prepare([cues])
-    b_note = decoder.scorer.b_note
-    with torch.enable_grad():
-        logz = log_partitions(decoder.scorer, ev, grid).sum()
-        (grad,) = torch.autograd.grad(logz, b_note, retain_graph=False)
+    labels = decoder.scorer.labels
+    marginal = span_marginals(decoder.scorer, ev, grid)   # (1, T+1, dmax, n_labels)
+    expected = float(marginal[..., : labels.n_pitches].sum())
     segs = viterbi(decoder.scorer, ev, grid)
-    return float(grad), sum(1 for label, _, _ in segs if label == NOTE)
+    return expected, sum(1 for label, _, _ in segs if labels.is_note(label))
 
 
 def solve_bias(decoder, cues, target: float, lo: float = -2.0, hi: float = 3.0,
@@ -71,9 +76,10 @@ def solve_bias(decoder, cues, target: float, lo: float = -2.0, hi: float = 3.0,
     has increasing differences in ``(b, k)``, pinned by a test in ``test_semicrf``.
     """
     ev, grid = decoder._prepare([cues])
+    labels = decoder.scorer.labels
     count = lambda b: sum(
         1 for label, _, _ in viterbi(decoder.scorer, ev, grid, note_bias=b)
-        if label == NOTE
+        if labels.is_note(label)
     )
     for _ in range(iters):
         mid = (lo + hi) / 2

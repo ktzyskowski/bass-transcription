@@ -185,3 +185,45 @@ def test_a_hop_the_duration_table_was_not_fitted_for_is_refused():
     scorer = _scorer()
     with pytest.raises(ValueError, match="duration embedding is sized"):
         scorer.grid(np.arange(T) * (DT / 2))
+
+
+def test_span_marginals_match_brute_force(setup):
+    """``P(span | x)`` from autograd against the enumerated posterior.
+
+    ``span_marginals`` sized its perturbation tensor with a literal 2, which was right
+    for exactly as long as every scorer was ``{note, rest}``. Under a pitch alphabet it
+    raises -- taking the confidence decode and the expected-note-count diagnostic with
+    it -- so this pins the width to the scorer's own alphabet.
+    """
+    from stemify.semicrf.marginals import span_marginals
+
+    scorer, ev, grid, segs, scored = setup
+    posterior = torch.softmax(scored, dim=0)
+    brute = torch.zeros(1, T + 1, DMAX, LABELS.n_labels)
+    for p, seg in zip(posterior, segs, strict=True):
+        for label, i, j in seg:
+            brute[0, j, i - j + DMAX, label] += p
+    got = span_marginals(scorer, ev, grid)
+    assert got.shape == brute.shape
+    assert torch.allclose(got, brute, atol=1e-4), (
+        f"max |diff| {(got - brute).abs().max().item()}"
+    )
+
+
+def test_expected_note_count_equals_the_enumerated_expectation(setup):
+    """The diagnostic that separates "the readout under-produces" from "the model does".
+
+    ``E[count] = sum over spans of P(span)`` by linearity, so it is a sum over the
+    marginals' pitch labels -- no scorer parameter named, which is what lets it read a
+    neural scorer as well as the linear one it was written against.
+    """
+    from stemify.semicrf.marginals import span_marginals
+
+    scorer, ev, grid, segs, scored = setup
+    posterior = torch.softmax(scored, dim=0)
+    brute = sum(
+        float(p) * sum(1 for lab, _, _ in seg if LABELS.is_note(lab))
+        for p, seg in zip(posterior, segs, strict=True)
+    )
+    got = float(span_marginals(scorer, ev, grid)[..., : LABELS.n_pitches].sum())
+    assert got == pytest.approx(brute, abs=1e-3), f"{got} != {brute}"

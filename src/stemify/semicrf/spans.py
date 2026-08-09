@@ -87,24 +87,24 @@ class SpanScorer(nn.Module, ABC):
         i: torch.Tensor | int,
         j: torch.Tensor | int,
     ) -> torch.Tensor:
-        """Score of span ``[i, j)`` in batch row ``b``, for **both** labels.
+        """Score of span ``[i, j)`` in batch row ``b``, for **every** label.
 
         ``b``/``i``/``j`` broadcast against each other, and the result is their
-        broadcast shape plus a trailing axis of 2 ordered ``(NOTE, REST)``. That is
-        what lets one implementation serve both access patterns: the scan passes
-        ``b=(B,1)``, ``i=(1,dmax)``, scalar ``j`` and gets ``(B, dmax, 2)``; the gold
-        scorer passes three ``(S,)`` tensors and gets ``(S, 2)``.
+        broadcast shape plus a trailing axis of ``labels.n_labels``. That is what
+        lets one implementation serve both access patterns: the scan passes
+        ``b=(B,1)``, ``i=(1,dmax)``, scalar ``j`` and gets ``(B, dmax, n_labels)``;
+        the gold scorer passes three ``(S,)`` tensors and gets ``(S, n_labels)``.
 
-        Both labels are always computed rather than selected first. It is ~2x the
-        arithmetic and a fraction of the cost of branching -- and it keeps the shape
-        static, which is what the scan's CUDA-graph capture needs.
+        Every label is computed rather than selected first. It is more arithmetic
+        and a fraction of the cost of branching -- and it keeps the shape static,
+        which is what the scan's CUDA-graph capture needs.
         """
 
     @abstractmethod
     def transitions(self) -> torch.Tensor:
-        """``(3, 2)``: rows are the previous label in ``{NOTE, REST, START}``, columns
-        the next in ``{NOTE, REST}``. ``START`` is a row rather than a special case so
-        the first segment falls out of the same recurrence step as every other one."""
+        """``(n_rows, n_labels)``: rows are the previous label, plus ``START``;
+        columns the next. ``START`` is a row rather than a special case so the first
+        segment falls out of the same recurrence step as every other one."""
 
     @abstractmethod
     def grid(self, frame_times: np.ndarray) -> Grid:

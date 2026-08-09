@@ -29,7 +29,7 @@ from stemify.semicrf.spans import Grid, SpanScorer
 
 
 def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor:
-    """``(B, T+1, dmax, 2)``: ``P(span | x)`` for every candidate span and label.
+    """``(B, T+1, dmax, n_labels)``: ``P(span | x)`` for every candidate span and label.
 
     Indexed the way the scan enumerates rather than by ``(i, j)``: entry ``[b, j, d, L]``
     is the span ending at ``j`` that starts at the ``d``-th candidate start, so it lines
@@ -39,8 +39,12 @@ def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
     caller may -- cannot silently turn this into a tensor of zeros. Only the scan is
     differentiated: ``inputs=[eps]`` keeps the scorer's own parameters out of it.
     """
+    # Width from the scorer's own alphabet. This was a literal `2`, which was right
+    # for as long as every scorer was {note, rest} -- and under a pitch alphabet it
+    # raises on the first `term + perturb[:, j]`, taking the confidence decode and
+    # the expected-note-count diagnostic with it.
     eps = torch.zeros(
-        (ev.B, ev.T + 1, grid.dmax, 2),
+        (ev.B, ev.T + 1, grid.dmax, scorer.labels.n_labels),
         dtype=ev.onset_logit.dtype, device=ev.device, requires_grad=True,
     )
     with torch.enable_grad():

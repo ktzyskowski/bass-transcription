@@ -45,7 +45,7 @@ def viterbi(
 
     Backpointers accumulate as **one device tensor**, read back after the scan rather
     than element by element inside it: converting an argmax to a Python ``int`` mid-loop
-    is a device-to-host sync, and a sync drains the queue. A ``(T+1, B, 2)`` int64 table
+    is a device-to-host sync, and a sync drains the queue. A ``(T+1, B, n_labels)`` int64 table
     buys one transfer in place of O(T) of them.
     """
     T = ev.lengths[0]
