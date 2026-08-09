@@ -45,6 +45,8 @@ spend the capacity twice.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import torch
@@ -147,6 +149,38 @@ class NeuralSpanScorer(SpanScorer):
         # and needs no clipping constant -- there are exactly 2*n_pitches - 1 of them.
         self.class_trans = nn.Parameter(torch.zeros(3, 2))     # {pitch,rest,START}x{p,r}
         self.interval = nn.Parameter(torch.zeros(2 * labels.n_pitches - 1))
+
+    @property
+    def config(self) -> dict[str, object]:
+        # The alphabet travels as its two endpoints rather than as a width: a
+        # checkpoint that recorded only `n_pitches` would rebuild an alphabet of the
+        # right size starting at the wrong semitone, and every label would then name
+        # a pitch transposed by the difference.
+        return {
+            "kind": "neural",
+            "lo": self.labels.lo,
+            "hi": self.labels.hi,
+            "trunk_dim": self.trunk_dim,
+            "frame_dim": self.frame_dim,
+            "order": self.order,
+            "span_dim": int(self.label_emb.embedding_dim),
+            "dur_dim": int(self.dur.embedding_dim),
+            "dmax_s": self.dmax_s,
+            "dmax_frames": self.dmax_frames,
+        }
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "NeuralSpanScorer":
+        return cls(
+            labels=LabelSet(lo=int(config["lo"]), hi=int(config["hi"])),
+            trunk_dim=int(config["trunk_dim"]),
+            frame_dim=int(config["frame_dim"]),
+            order=int(config["order"]),
+            span_dim=int(config["span_dim"]),
+            dur_dim=int(config["dur_dim"]),
+            dmax_s=float(config["dmax_s"]),
+            dmax_frames=int(config["dmax_frames"]),
+        )
 
     def grid(self, frame_times: np.ndarray) -> Grid:
         """``dmax`` for a frame hop, checked against the duration table's width."""

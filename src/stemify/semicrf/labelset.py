@@ -120,6 +120,17 @@ class LabelSet:
     def is_note(self, label: int) -> bool:
         return label != self.REST and label != self.START
 
+    @property
+    def names_pitch(self) -> bool:
+        """Whether a ``note`` label says *which* pitch, or only that there is one.
+
+        False exactly for ``BINARY``, whose single pitch label means `note` and
+        nothing more -- ``midi_of`` would answer ``lo``, which is a number and not an
+        answer. Consumers that read a pitch off a label ask this first and fall back
+        to the contour, which is what lets one decoder serve both alphabets.
+        """
+        return self.n_pitches > 1
+
     def bin_of(self, label: int) -> int:
         """The bin whose centre frequency *is* this label's pitch.
 

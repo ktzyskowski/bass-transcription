@@ -19,10 +19,13 @@ from torch.utils.data import DataLoader
 from stemify.core.cache import Cache
 from stemify.core.decoders.base import Decoder
 from stemify.semicrf import SemiCRFDecoder
-from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, STRIDE
-from stemify.semicrf.spans import LinearSpanScorer
+from stemify.semicrf.constants import DMAX_S, STRIDE
+from stemify.semicrf.build import build_scorer
+from stemify.semicrf.labelset import LabelSet
+from stemify.semicrf.neural import NeuralSpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.core.features import HOP_LENGTH, SAMPLE_RATE
-from stemify.models.networks import tcn_receptive_field
+from stemify.models.networks import TCN, tcn_receptive_field
 from stemify.models.cuenet import CueNet
 from stemify.training.base import Loss, Recipe, config_field, config_str_list
 from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
@@ -104,6 +107,7 @@ class SemiCRFRecipe(Recipe):
         voicing_weight: float = VOICING_WEIGHT,
         onset_weight: float = ONSET_WEIGHT,
         pos_weight: Mapping[str, float] | None = None,
+        scorer: str = "linear",
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -112,12 +116,50 @@ class SemiCRFRecipe(Recipe):
         path and spread features -- both are functions of the head's distribution.
         """
         super().__init__(conditions)
-        self.decoder = decoder or SemiCRFDecoder()
+        # An explicit decoder wins: `from_config` rebuilds one whole, and a caller
+        # passing both would otherwise get the string's scorer silently.
+        self.decoder = decoder or SemiCRFDecoder(
+            scorer=None if scorer == "linear" else self._neural_scorer(scorer, pitch)
+        )
         self.pitch = pitch
         self.pitch_weight = pitch_weight
         self.voicing_weight = voicing_weight
         self.onset_weight = onset_weight
         self.pos_weight = dict(pos_weight or {})
+
+    @staticmethod
+    def _neural_scorer(kind: str, pitch: bool) -> SpanScorer:
+        """A ``NeuralSpanScorer`` sized to the backbone this recipe will build.
+
+        Both widths come off a throwaway ``TCN`` rather than from constants: the
+        trunk width is what ``phi`` projects from, and the pitch axis is what the
+        alphabet is derived from (``LabelSet.from_bins``), so a change to either --
+        harmonic stacking crops the axis, for one -- has to reach the scorer or the
+        two disagree about how many semitones exist.
+        """
+        if kind != "neural":
+            raise ValueError(f"unknown scorer {kind!r}; have 'linear' and 'neural'")
+        if not pitch:
+            raise ValueError(
+                "--scorer neural needs --pitch. Its alphabet names semitones and "
+                "every pitch label is scored against the pitch head's own "
+                "per-semitone log-probability; without that head there is no "
+                "pitch-valued evidence at all, and the 73 labels would score "
+                "identically -- log Z spread over every relabelling of one "
+                "segmentation, which is strictly worse than {note, rest}."
+            )
+        # A throwaway backbone, discarded after two reads. Cheaper than the drift:
+        # both numbers are the model's, and a constant repeated here would be wrong
+        # the first time the frontend's crop or the trunk's width moved.
+        backbone = TCN(in_channels=1)
+        return NeuralSpanScorer(
+            labels=LabelSet.from_bins(backbone.frontend.n_bins),
+            trunk_dim=backbone.hidden,
+            # `_geometry` derives the same dmax from the scorer's own `grid`, and
+            # this scorer's `grid` raises when the two disagree -- so a mistake here
+            # surfaces at the first batch rather than as a mis-sized table.
+            dmax_frames=round(DMAX_S / (HOP_LENGTH / SAMPLE_RATE * STRIDE)),
+        )
 
     @property
     def heads(self) -> list[str]:
@@ -125,27 +167,6 @@ class SemiCRFRecipe(Recipe):
         cached targets and the checkpoint's head list, which must agree with the
         branches the model actually holds."""
         return [*super().heads, "pitch"] if self.pitch else super().heads
-
-    def _serialisable_scorer(self) -> LinearSpanScorer:
-        """This recipe's scorer, narrowed to the one shape a checkpoint can rebuild.
-
-        Duration-bucket edges are a ``LinearSpanScorer`` parameterisation, not part of
-        the ``SpanScorer`` contract -- ``dmax_s`` is the geometry every scorer has, and
-        it lives on the ABC. So recording the edges means asserting the scorer is
-        linear, and the assertion belongs here, once and loudly.
-
-        A neural scorer will have its own configuration to serialise. Raising is what
-        keeps that an explicit gap rather than a checkpoint that records linear
-        geometry for a scorer that never had any, and rebuilds as the wrong model.
-        """
-        scorer = self.decoder.scorer
-        if not isinstance(scorer, LinearSpanScorer):
-            raise NotImplementedError(
-                f"{type(scorer).__name__} has no checkpoint representation yet: only "
-                "LinearSpanScorer's duration-bucket edges are serialised. Give the "
-                "scorer its own config before training a run you intend to reload."
-            )
-        return scorer
 
     @property
     def config(self) -> dict[str, object]:
@@ -166,7 +187,7 @@ class SemiCRFRecipe(Recipe):
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
-                "dur_edges_s": self._serialisable_scorer().dur_edges.cpu().tolist(),
+                "scorer": self.decoder.scorer.config,
             },
         }
 
@@ -185,14 +206,19 @@ class SemiCRFRecipe(Recipe):
         # throwaway ``SemiCRFDecoder()`` built only to be measured. Same values, one
         # fewer object -- and it no longer assumes the default decoder's scorer is the
         # linear one just to recover a number that never depended on the scorer.
-        edges = geometry.get("dur_edges_s")
+        # A checkpoint predating `SpanScorer.config` records the linear scorer's
+        # duration edges directly under `decoder`. Reading that shape as a linear
+        # config keeps those checkpoints loadable, and is why `kind` defaults.
+        scorer_config = geometry.get("scorer")
+        if not isinstance(scorer_config, Mapping):
+            scorer_config = {
+                "kind": "linear",
+                "dmax_s": config_field(geometry, "dmax_s", float, DMAX_S),
+                "dur_edges_s": geometry.get("dur_edges_s"),
+            }
         decoder = SemiCRFDecoder(
             stride=config_field(geometry, "stride", int, STRIDE),
-            dmax_s=config_field(geometry, "dmax_s", float, DMAX_S),
-            dur_edges_s=(
-                DUR_EDGES_S if edges is None
-                else np.asarray(edges, dtype=np.float32)
-            ),
+            scorer=build_scorer(scorer_config),
         )
         return cls(
             conditions=config_str_list(config, "conditions"),
@@ -326,6 +352,7 @@ class SemiCRFRecipe(Recipe):
             chunk_frames=CHUNK_FRAMES, dmax=dmax, stride=self.decoder.stride,
             batch_size=config.batch_size, right_context=right,
             heads=self.aux_heads,
+            labels=self.decoder.scorer.labels,
         )
 
     def _loader(self, dataset: chunked_ds.ChunkDataset) -> DataLoader[ChunkBatch]:
@@ -354,8 +381,7 @@ class SemiCRFRecipe(Recipe):
     def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
         decoder = SemiCRFDecoder(
             stride=self.decoder.stride,
-            dmax_s=self.decoder.scorer.dmax_s,
-            dur_edges_s=self._serialisable_scorer().dur_edges.cpu().numpy(),
+            scorer=build_scorer(self.decoder.scorer.config),
         )
         # A checkpoint from before the pyin span features were removed carries
         # `scorer.w_pitch`. Loading it strictly fails, which is right -- the scorer it

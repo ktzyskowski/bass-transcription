@@ -19,8 +19,9 @@ implementation of the same contract, not a different DP.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -110,6 +111,43 @@ class SpanScorer(nn.Module, ABC):
         """The ``Grid`` for a frame hop. Derived rather than stored, so one scorer
         decodes cue grids of different resolutions."""
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Everything ``__init__`` takes, as plain data, tagged with a ``kind``.
+
+        On the contract rather than on each scorer's recipe, because a checkpoint
+        records *the model it was trained as* and the scorer is half of that. It used
+        to be the recipe's job, which meant the recipe had to narrow to
+        ``LinearSpanScorer`` and raise for anything else -- so a second scorer could
+        not be trained into a reloadable checkpoint at all.
+
+        ``kind`` is what ``build_scorer`` dispatches on. Weights ride in the state
+        dict as usual; this is only the shape they load into.
+
+        **Not abstract, because being reloadable is a capability and not part of
+        what a span is worth.** A scorer written for an experiment or a test has no
+        business declaring a checkpoint format, and requiring one taxed every double
+        with a method nothing would ever call. Raising instead keeps the gap explicit
+        at the point a checkpoint is actually written.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no checkpoint representation: it does not "
+            "record what its __init__ takes, so a checkpoint of it could not be "
+            "rebuilt. Give it `config`/`from_config` before training a run you "
+            "intend to reload."
+        )
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "SpanScorer":
+        """The inverse of ``config``, beside it so the two cannot drift apart.
+
+        ``Any`` rather than ``object`` because the values are plain JSON off disk and
+        every read would otherwise need a narrowing helper. A wrong type raises from
+        the ``int``/``float`` conversion, naming the field."""
+        raise NotImplementedError(
+            f"{cls.__name__} records no config, so there is nothing to rebuild from"
+        )
+
 
 class LinearSpanScorer(SpanScorer):
     """The log-linear scorer: ``w . f(span)`` over hand-built features.
@@ -172,6 +210,25 @@ class LinearSpanScorer(SpanScorer):
         edges = torch.round(self.dur_edges / hop).to(torch.int64)
         lengths = torch.arange(dmax + 1, device=edges.device)
         return Grid(dmax, torch.searchsorted(edges, lengths))
+
+    @property
+    def config(self) -> dict[str, object]:
+        return {
+            "kind": "linear",
+            "dmax_s": self.dmax_s,
+            "dur_edges_s": self.dur_edges.cpu().tolist(),
+        }
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "LinearSpanScorer":
+        edges = config.get("dur_edges_s")
+        return cls(
+            dmax_s=float(config.get("dmax_s", DMAX_S)),
+            dur_edges_s=(
+                DUR_EDGES_S if edges is None
+                else np.asarray(edges, dtype=np.float32)
+            ),
+        )
 
     def transitions(self) -> torch.Tensor:
         return torch.stack([self.trans[NOTE], self.trans[REST], self.init])

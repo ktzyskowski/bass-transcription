@@ -15,12 +15,12 @@ Two faces over the same recurrence:
     algorithm for ``log Z`` and subtract the gold score. Over grad-bearing ``Frames``
     the gradient reaches the encoder; over numpy ones it is an inference-only score.
 
-Pitch is never invented: it is read from the contour after decoding, exactly as the
-greedy decoder does. See ``docs/semi-crf.md``, which carries the theory and a ledger of
-where this implementation departs from it.
+Pitch is never invented: a pitch alphabet names it in the label the DP scored, and a
+{note, rest} alphabet reads it off the contour, as the greedy decoder does. See
+``docs/semi-crf.md`` for the theory and a ledger of where this departs from it.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import librosa
 import numpy as np
@@ -29,7 +29,7 @@ from torch import nn
 
 from stemify.core.frames import Frames
 from stemify.core.decoders.base import Decoder
-from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, NOTE, STRIDE
+from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, STRIDE
 from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.gold import gold_segments
@@ -106,7 +106,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         track's true length, so the flat padding beyond it is never gathered."""
         ev, grid = self._prepare(frames_list)
         golds = [
-            gold_segments(ft, n, grid.dmax)
+            gold_segments(ft, n, grid.dmax, self.scorer.labels)
             for ft, n in zip(ev.frame_times, notes_list, strict=True)
         ]
         return log_partitions(self.scorer, ev, grid) - segmentation_scores(
@@ -169,37 +169,54 @@ class SemiCRFDecoder(Decoder, nn.Module):
         ev: Evidence,
         confidence: Mapping[tuple[int, int, int], float] | None = None,
     ) -> list[NoteEvent]:
-        """Turn ``note`` segments into ``NoteEvent``s, reading each note's pitch as the
-        median contour pitch over its span -- pitch comes from the contour, never
-        invented. A span the contour left entirely pitchless yields no note.
+        """Turn ``note`` segments into ``NoteEvent``s, from whichever pitch source the
+        scorer's alphabet implies.
 
-        The contour is pyin's or the model's own, and this cannot tell: ``LearnedEncoder``
-        already substitutes the pitch head's ``decode_contour`` output when the model
-        has that head, so both arrive here as a plain ``Contour``. That is why no
-        potential reads it and why ``models`` is not imported here."""
-        if ev.contours is None:
-            raise ValueError(
-                "cannot name note pitches: this Evidence carries no contour. The DP "
-                "scores spans without one, but a NoteEvent needs a pitch -- decode "
-                "through Frames from an encoder (pyin or a pitch head), not a "
-                "contour-less training batch."
-            )
-        ft, contour = ev.frame_times[0], ev.contours[0]
+        **Under a pitch alphabet the label already is the answer.** The segment was
+        scored as ``note@p`` against the pitch head's own log-probability of ``p`` across
+        it, so reading a median off the contour afterwards would discard the decision the
+        DP just made -- and could name a pitch the segmentation was never scored under.
+
+        Under ``BINARY`` the label says only *note*, so the pitch is the median contour
+        pitch over the span, and a span the contour left entirely pitchless yields no
+        note. That contour is pyin's or the model's own and this cannot tell:
+        ``LearnedEncoder`` substitutes the pitch head's ``decode_contour`` output when the
+        model has that head, so both arrive as a plain ``Contour``."""
+        labels = self.scorer.labels
+        ft = ev.frame_times[0]
         hop = float(np.median(np.diff(ft))) if ft.size > 1 else 0.01 * self.stride
-        ct, cf = contour.times, contour.freqs
-        cmidi = np.full(cf.shape, np.nan)
-        voiced = cf > 0
-        cmidi[voiced] = librosa.hz_to_midi(cf[voiced])
+        pitch_of: Callable[[int, float, float], float | None]
+        if labels.names_pitch:
+            def pitch_of(label: int, onset: float, offset: float) -> float | None:
+                return float(labels.midi_of(label))
+        else:
+            if ev.contours is None:
+                raise ValueError(
+                    "cannot name note pitches: this scorer's alphabet does not name "
+                    "them and this Evidence carries no contour. The DP scores spans "
+                    "without one, but a NoteEvent needs a pitch -- decode through "
+                    "Frames from an encoder (pyin or a pitch head), not a contour-less "
+                    "training batch."
+                )
+            contour = ev.contours[0]
+            ct, cf = contour.times, contour.freqs
+            cmidi = np.full(cf.shape, np.nan)
+            cmidi[cf > 0] = librosa.hz_to_midi(cf[cf > 0])
+
+            def pitch_of(label: int, onset: float, offset: float) -> float | None:
+                sel = (ct >= onset) & (ct < offset)
+                if not sel.any() or np.isnan(cmidi[sel]).all():
+                    return None
+                median = float(np.nanmedian(cmidi[sel]))
+                return None if np.isnan(median) else median
+
         notes: list[NoteEvent] = []
         for label, i, j in segs:
-            if label != NOTE:
+            if not labels.is_note(label):
                 continue
             onset, offset = float(ft[i]), float(ft[j - 1] + hop)
-            sel = (ct >= onset) & (ct < offset)
-            if not sel.any() or np.isnan(cmidi[sel]).all():
-                continue
-            pitch = float(np.nanmedian(cmidi[sel]))
-            if np.isnan(pitch):
+            pitch = pitch_of(label, onset, offset)
+            if pitch is None:
                 continue
             notes.append(NoteEvent(
                 onset=onset, offset=offset, midi_pitch=pitch,

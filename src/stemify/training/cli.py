@@ -105,6 +105,16 @@ def main() -> None:
                          "windows grouped by the greedy decoder; 'semicrf' trains the "
                          "segmental decoder jointly with the encoder, over ordered "
                          "chunks of a track carrying the alpha window between them")
+    ap.add_argument("--scorer", default="linear", choices=("linear", "neural"),
+                    help="objective semicrf only: what a span is worth. 'linear' is "
+                         "the classical log-linear form -- ~15 scalars against "
+                         "hand-built features, over a {note, rest} alphabet. "
+                         "'neural' learns a per-frame projection of the backbone, "
+                         "pools it over each span by position-weighted moments, and "
+                         "scores an alphabet that names every semitone the pitch "
+                         "head can resolve. Needs --pitch: a pitch label is scored "
+                         "against that head's own per-semitone log-probability, and "
+                         "without it every pitch label scores alike")
     ap.add_argument("--init-from", type=Path,
                     help="warm-start the encoder from a checkpoint's state_dict "
                          "(objective parameters are not restored)")
@@ -223,6 +233,11 @@ def main() -> None:
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
         strategy_kwargs["harmonics"] = _parse_harmonics(args.harmonics)
         strategy_kwargs["stem_dropout"] = args.stem_dropout
+        if args.scorer != "linear":
+            raise SystemExit(
+                "--scorer applies to --objective semicrf, not 'frame'. The frame "
+                "objective has no span potentials to parameterise."
+            )
         for flag, value in (("--pitch-weight", args.pitch_weight),
                             ("--voicing-weight", args.voicing_weight),
                             ("--onset-weight", args.onset_weight)):
@@ -274,6 +289,7 @@ def main() -> None:
             strategy_kwargs["voicing_weight"] = args.voicing_weight
         if args.onset_weight is not None:
             strategy_kwargs["onset_weight"] = args.onset_weight
+        strategy_kwargs["scorer"] = args.scorer
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,

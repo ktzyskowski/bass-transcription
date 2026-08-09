@@ -30,6 +30,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from stemify.core.features import SILENCE_DB
 from stemify.semicrf.gold import gold_segments
+from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.tracks import (
     TrainItem, channel_window, target_windows,
 )
@@ -136,6 +137,7 @@ class _Track:
     def __init__(
         self, track: TrainItem, chunk: int, dmax: int, stride: int, right: int,
         heads: Sequence[str] = (), drop_context: bool = False,
+        labels: LabelSet = BINARY,
     ) -> None:
         self._examples = track.open(mmap=True)
         self._heads = heads
@@ -154,7 +156,7 @@ class _Track:
         self._w_dp = dmax + chunk + right
         # Gold is built once over the whole track, then split by chunk, so the pieces
         # tile it exactly -- which is what makes the per-chunk losses telescope.
-        self._gold = gold_segments(ft[::stride], track.notes, dmax)
+        self._gold = gold_segments(ft[::stride], track.notes, dmax, labels)
         self.n_chunks = self._n_dp // chunk  # a ragged tail would break static shapes
 
     def __getitem__(
@@ -216,6 +218,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         heads: Sequence[str] = (),
         seed: int = 0,
         stem_dropout: float = 0.0,
+        labels: LabelSet = BINARY,
     ) -> None:
         """``heads`` are the per-frame targets served beside each chunk, for the
         auxiliary losses stacked on the NLL. Empty by default: the structured
@@ -247,6 +250,11 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         # the input distribution, so an arm that gains it is not comparable to one
         # that did not.
         self.stem_dropout = stem_dropout
+        # The alphabet gold is written in. It has to be the scorer's: a gold built
+        # under BINARY labels every note 0, and under a pitch alphabet 0 is the
+        # lowest representable semitone -- so the mismatch trains every note toward
+        # E1 without changing a single shape.
+        self.labels = labels
         self.chunk_frames = chunk_frames
         self.dmax = dmax
         self.stride = stride
@@ -303,6 +311,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
                         streams[b][cursors[b]], self.chunk_frames, self.dmax,
                         self.stride, self.right_context, self.heads,
                         drop_context=rng.random() < self.stem_dropout,
+                        labels=self.labels,
                     )
                     chunk_no[b], reset = 0, True
                 feats, ft, gold, y = track[chunk_no[b]]
