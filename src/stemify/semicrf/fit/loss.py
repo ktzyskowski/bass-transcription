@@ -33,7 +33,6 @@ from collections.abc import Iterable, Mapping, Sequence
 import torch
 from torch import nn
 
-from stemify.models.cuenet import CueNet
 from stemify.models.frames import frames_from_output
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.window import initial_window
@@ -244,9 +243,16 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         # therefore a real state rather than a fallback, and a scorer that needs the
         # trunk raises when it is missing -- at the scorer, which knows it needs it.
         features = batch.features.to(device)
+        # Asked for by *capability*, not by type. An `isinstance(model, CueNet)` here
+        # made the trunk unreachable for anything else -- including this loss's own
+        # test doubles, so the one combination that needed covering (a neural scorer
+        # under chunking) could not be written at all. Duck typing is safe because
+        # the fallback is not silent: `Frames.hidden` is legitimately None for a
+        # producer with no backbone, and a scorer that pools it raises saying so.
+        tap = getattr(model, "heads_and_hidden", None)
         out, hidden = (
-            model.heads_and_hidden(features)     # {head: (B, window, 1)}, (B, window, C)
-            if isinstance(model, CueNet)
+            tap(features)                        # {head: (B, window, 1)}, (B, window, C)
+            if callable(tap)
             else (model(features), None)
         )
         # No contour: nothing the scan reads needs one, and every recipe builds a
