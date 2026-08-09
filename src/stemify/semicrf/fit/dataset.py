@@ -57,7 +57,8 @@ class Chunk:
     gold: Segmentation         # window-local DP indices, ends inside this chunk
     y: dict[str, np.ndarray]   # {head: (window CQT frames,)}, NaN where off the track
     stream: int                # which stream row this continues
-    reset: bool                # first chunk of a track: the carry starts fresh
+    reset: bool                # the carry starts fresh here: a track's or a segment's
+    prev: int                  # label of the gold segment preceding this chunk's first
 
 
 @dataclass
@@ -77,6 +78,7 @@ class ChunkBatch:
     right: int                      # DP frames the scan must not read; ditto
     streams: list[int]
     resets: list[bool]
+    prevs: list[int]                # per row: what precedes its first gold segment
 
     def __len__(self) -> int:
         return len(self.streams)
@@ -114,6 +116,7 @@ def collate(chunks: list[Chunk], context: int, right: int) -> ChunkBatch:
         right=right,
         streams=[c.stream for c in chunks],
         resets=[c.reset for c in chunks],
+        prevs=[c.prev for c in chunks],
     )
 
 
@@ -157,11 +160,12 @@ class _Track:
         # Gold is built once over the whole track, then split by chunk, so the pieces
         # tile it exactly -- which is what makes the per-chunk losses telescope.
         self._gold = gold_segments(ft[::stride], track.notes, dmax, labels)
+        self._start = labels.START
         self.n_chunks = self._n_dp // chunk  # a ragged tail would break static shapes
 
     def __getitem__(
         self, c: int
-    ) -> tuple[np.ndarray, np.ndarray, Segmentation, dict[str, np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray, Segmentation, dict[str, np.ndarray], int]:
         lo, hi = c * self._chunk, (c + 1) * self._chunk
         a_dp = lo - self._dmax                      # negative on a track's first chunk
         a, w = a_dp * self._stride, self._w_dp * self._stride
@@ -176,12 +180,23 @@ class _Track:
         # A gold segment is assigned to the chunk holding its END. Its start is then at
         # worst dmax earlier, so a dmax left context always covers it -- the same
         # constant the scan needs for its own candidate starts.
-        gold = [(lab, i - a_dp, j - a_dp) for lab, i, j in self._gold if lo < j <= hi]
+        keep = [k for k, (_, _, j) in enumerate(self._gold) if lo < j <= hi]
+        gold = [
+            (self._gold[k][0], self._gold[k][1] - a_dp, self._gold[k][2] - a_dp)
+            for k in keep
+        ]
+        # What the *previous* chunk ended on. Gold tiles the track contiguously, so the
+        # segment before this chunk's first is simply the one before it in that tiling
+        # -- and on a track's first chunk there is none, which is the only place START
+        # genuinely belongs. Scoring every chunk's first segment against START instead
+        # was a real defect: `log Z` applies the true transition, so the two halves of
+        # the NLL disagreed by ~0.9 nats per chunk boundary once transitions trained.
+        prev = self._gold[keep[0] - 1][0] if keep and keep[0] > 0 else self._start
         # Targets span the whole window, not just the chunk's own frames, so they stay
         # index-aligned with the features and the model's output; the loss slices the
         # scanned range out. Channel 0 only -- the channel the labels describe.
         y = target_windows(self._examples[0], self._heads, a, w)
-        return window, times, gold, y
+        return window, times, gold, y, prev
 
 
 class ChunkDataset(IterableDataset[ChunkBatch]):
@@ -219,6 +234,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         seed: int = 0,
         stem_dropout: float = 0.0,
         labels: LabelSet = BINARY,
+        segment_chunks: int = 0,
     ) -> None:
         """``heads`` are the per-frame targets served beside each chunk, for the
         auxiliary losses stacked on the NLL. Empty by default: the structured
@@ -238,9 +254,30 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
 
         Both train on the union and report the right ``--sources`` while never mixing
         conditions in a batch. Seeded so a run is still reproducible.
+
+        ``segment_chunks`` breaks each track into independent runs of that many chunks,
+        raising ``reset`` at each one's first chunk; ``0`` carries alpha across a whole
+        track, which is what every run before this did.
+
+        It exists to make the gradient exact. A carry passed *undetached* is the only
+        way ``d(chunk k)/d(theta)`` reaches back through ``alpha_{k-1}``, and without it
+        the loop's step is not a derivative of the loss it reports -- measured cosine
+        0.9999 at initialisation falling to -0.02 after sixty steps, i.e. an ascent
+        direction. But an undetached carry also means one backward per unbroken chain,
+        so the chain length is the dial: shorter chains buy optimiser steps and bounded
+        activation memory, longer ones buy an objective closer to the whole track's.
+
+        Chunks stay fixed-width and every stream resets on the same chunk index, so the
+        batch stays synchronised and one backward covers every row.
         """
         if not 0.0 <= stem_dropout <= 1.0:
             raise ValueError(f"stem_dropout must be in [0, 1], got {stem_dropout}")
+        if segment_chunks < 0:
+            raise ValueError(
+                f"segment_chunks must be >= 0, got {segment_chunks}; 0 means carry "
+                "alpha across the whole track"
+            )
+        self.segment_chunks = segment_chunks
         self.heads = list(heads)
         self._items = list(items)
         random.Random(seed).shuffle(self._items)
@@ -314,9 +351,17 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
                         labels=self.labels,
                     )
                     chunk_no[b], reset = 0, True
-                feats, ft, gold, y = track[chunk_no[b]]
+                feats, ft, gold, y, prev = track[chunk_no[b]]
+                # A segment boundary resets the carry exactly as a track boundary does.
+                # Taken on the chunk *index*, identical across streams, so every row of
+                # a batch resets together and the segment's single backward covers all
+                # of them -- a per-track boundary rule (at rests, say) would desync the
+                # rows and leave whichever row straddled the backward truncated again.
+                if self.segment_chunks and chunk_no[b] % self.segment_chunks == 0:
+                    reset = True
                 chunk_no[b] += 1
                 row.append(
-                    Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset)
+                    Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset,
+                          prev=prev)
                 )
             yield collate(row, context=self.dmax, right=self.right_context)

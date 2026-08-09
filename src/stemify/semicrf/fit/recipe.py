@@ -111,12 +111,25 @@ class SemiCRFRecipe(Recipe):
         pos_weight: Mapping[str, float] | None = None,
         scorer: str = "linear",
         harmonics: Sequence[int] | None = None,
+        segment_chunks: int = 0,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
         that the DP scored onset and voicing only and a pitch branch would train a
         head no potential read. That stopped being true when the scorer gained its
         path and spread features -- both are functions of the head's distribution.
+
+        ``segment_chunks`` cuts each track into independent chains of that many chunks
+        and carries alpha *undetached* within one, which is what makes the gradient the
+        objective's own. ``0`` keeps the whole-track carry and the detached, truncated
+        gradient every earlier run used -- kept as the default so a checkpoint or a
+        replay of an old command reproduces what it did before, not silently better.
+
+        The chain length is the whole trade. Backprop through an undetached carry means
+        one optimiser step per chain, so short chains buy steps and bounded activation
+        memory while long ones buy an objective closer to the whole track's. Four is
+        ~18 s at the pinned hop -- several times the longest representable segment, so
+        the conditioning at each chain's start reaches nothing that matters.
         """
         super().__init__(conditions)
         # The *encoder's* configuration, and it belongs to the encoder rather than to
@@ -137,6 +150,7 @@ class SemiCRFRecipe(Recipe):
         self.voicing_weight = voicing_weight
         self.onset_weight = onset_weight
         self.pos_weight = dict(pos_weight or {})
+        self.segment_chunks = segment_chunks
 
     @staticmethod
     def _neural_scorer(
@@ -200,6 +214,7 @@ class SemiCRFRecipe(Recipe):
             "voicing_weight": self.voicing_weight,
             "onset_weight": self.onset_weight,
             "pos_weight": self.pos_weight,
+            "segment_chunks": self.segment_chunks,
             "decoder": {
                 "stride": self.decoder.stride,
                 "dmax_s": self.decoder.scorer.dmax_s,
@@ -248,6 +263,9 @@ class SemiCRFRecipe(Recipe):
             voicing_weight=config_field(config, "voicing_weight", float, 0.0),
             onset_weight=config_field(config, "onset_weight", float, 0.0),
             pos_weight=_config_weights(config, "pos_weight"),
+            # 0 for a checkpoint written before segments existed, which is what those
+            # runs did: one carry per track, detached, truncated gradient.
+            segment_chunks=config_field(config, "segment_chunks", int, 0),
         )
 
     @property
@@ -302,6 +320,10 @@ class SemiCRFRecipe(Recipe):
     def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:
         return SemiCRFLoss(
             self.decoder,
+            # Undetached exactly when the chains are bounded. Detaching is what makes
+            # the gradient truncated, and truncation is only affordable because the
+            # chain is short enough to backprop through -- so the two are one decision.
+            detach_carry=self.segment_chunks == 0,
             aux_heads=self.aux_heads,
             # Filtered to the declared heads: a zero weight drops the head from
             # `aux_heads` entirely, and naming a weight for an undeclared head is
@@ -361,6 +383,18 @@ class SemiCRFRecipe(Recipe):
         union this way; the structured objective was the odd one out, which made any
         comparison against a frame baseline vary two things at once.
         """
+        # Before the corpus sweep, not after: this is a settings contradiction, and
+        # finding it takes no data. Checked here rather than in `__init__` because
+        # `accumulate_steps` belongs to the loop's config, which the recipe first sees
+        # at this call.
+        if self.segment_chunks and config.accumulate_steps != self.segment_chunks:
+            raise ValueError(
+                f"segment_chunks={self.segment_chunks} needs accumulate_steps to match "
+                f"it, got {config.accumulate_steps}. The carry is undetached within a "
+                "segment, so the optimiser step -- and the single backward it triggers "
+                "-- has to land exactly on a segment boundary: earlier and the next "
+                "chunk reads a freed graph, later and the step spans a reset."
+            )
         dmax, right = self._geometry
         items: list[TrainItem] = []
         for c in conditions:
@@ -373,6 +407,7 @@ class SemiCRFRecipe(Recipe):
             batch_size=config.batch_size, right_context=right,
             heads=self.aux_heads,
             labels=self.decoder.scorer.labels,
+            segment_chunks=self.segment_chunks,
         )
 
     def _loader(self, dataset: chunked_ds.ChunkDataset) -> DataLoader[ChunkBatch]:

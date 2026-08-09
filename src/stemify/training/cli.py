@@ -105,6 +105,16 @@ def main() -> None:
                          "windows grouped by the greedy decoder; 'semicrf' trains the "
                          "segmental decoder jointly with the encoder, over ordered "
                          "chunks of a track carrying the alpha window between them")
+    ap.add_argument("--segment-chunks", type=int, default=0,
+                    help="objective semicrf only: cut each track into independent "
+                         "chains of this many chunks and carry alpha *undetached* "
+                         "within one, so the gradient reaches back through it. 0 (the "
+                         "default, and what every run before this did) carries alpha "
+                         "across a whole track and detaches it, which truncates the "
+                         "gradient -- measured cosine against the exact one falls from "
+                         "0.9999 at init to -0.02 after sixty steps, i.e. it becomes an "
+                         "ascent direction. Sets --accumulate-steps, since the single "
+                         "backward has to land on a segment boundary. 4 is ~18s")
     ap.add_argument("--scorer", default="linear", choices=("linear", "neural"),
                     help="objective semicrf only: what a span is worth. 'linear' is "
                          "the classical log-linear form -- ~15 scalars against "
@@ -244,6 +254,12 @@ def main() -> None:
                 "--scorer applies to --objective semicrf, not 'frame'. The frame "
                 "objective has no span potentials to parameterise."
             )
+        if args.segment_chunks:
+            raise SystemExit(
+                "--segment-chunks applies to --objective semicrf, not 'frame'. It "
+                "bounds a carried alpha window, and the frame objective carries no "
+                "state between batches at all."
+            )
         for flag, value in (("--pitch-weight", args.pitch_weight),
                             ("--voicing-weight", args.voicing_weight),
                             ("--onset-weight", args.onset_weight)):
@@ -296,7 +312,20 @@ def main() -> None:
         if args.onset_weight is not None:
             strategy_kwargs["onset_weight"] = args.onset_weight
         strategy_kwargs["scorer"] = args.scorer
+        strategy_kwargs["segment_chunks"] = args.segment_chunks
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
+    # Derived, not asked for twice. The undetached carry means one backward per
+    # segment, so the optimiser step *is* the segment boundary -- two flags that had to
+    # agree would be two flags someone eventually sets inconsistently, and the failure
+    # is a freed-graph crash several minutes into a run.
+    if args.segment_chunks:
+        if args.accumulate_steps not in (1, args.segment_chunks):
+            raise SystemExit(
+                f"--accumulate-steps {args.accumulate_steps} conflicts with "
+                f"--segment-chunks {args.segment_chunks}, which sets it: the single "
+                "backward has to land exactly on a segment boundary."
+            )
+        args.accumulate_steps = args.segment_chunks
     config = TrainConfig(
         max_epochs=args.epochs, batch_size=args.batch_size,
         num_workers=args.num_workers, patience=args.patience,

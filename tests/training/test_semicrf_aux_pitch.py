@@ -17,6 +17,7 @@ from torch import nn
 
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
+from stemify.semicrf.labelset import BINARY
 from stemify.models.heads import pitch_ce
 from stemify.core.notes import NoteEvent
 from stemify.semicrf.fit.dataset import Chunk, collate
@@ -83,6 +84,7 @@ def _chunk(spans, stream: int, *, midi: float | None = 45.0) -> Chunk:
         y={"pitch": y_pitch},
         stream=stream,
         reset=True,
+        prev=BINARY.START,
     )
 
 

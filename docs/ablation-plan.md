@@ -94,6 +94,7 @@ protocol. Run at 200 tracks unless the result is close, then confirm at full cor
 | 3 | note verifier | `group()` vs `group()`+verifier | does pruning beat the heuristic? | **weakened** — headroom fell from ~+12 to ~+3 once the decoder fix and pitch head landed; it cannot raise recall at all |
 | 4 | pitch head | pyin vs learned | does the 1/3 pitch bucket shrink? | **DONE — the big one.** `rung4-pitch`, separated **0.8638** test (+5.0 over pyin on the same checkpoint). Recall 0.876 → 0.939: the "structural" ceiling *was* pyin |
 | 5 | semi-CRF decoder | `group()` vs CRF | parked — but the parked result tested the *weakest form* (20 linear scalars over 3 hand-crafted features, one of them corrupted by pyin's lag), not a neural segment scorer | parked — rebuild with learned potentials before believing it lost |
+| 6 | long-range encoder context | TCN vs TCN + passage self-similarity | can a clean passage lend evidence to a degraded repeat of itself? | **filed 2026-08-09, not started** — see below |
 
 **Rungs 1–4 were all decided by the same thing.** Every one of them turned on the pitch
 source or the decoder, never on encoder capacity: bichannel's cue gain would not convert
@@ -115,6 +116,47 @@ encoder (+4.3 onset AP) without moving note F1, and recall weighting cannot lift
 candidate recall past ~0.90. **The cue->note step is the binding constraint, and the
 ~0.90 recall ceiling is structural** — it now holds across data scale, loss weighting
 and decode threshold alike. Rung 3 is where the remaining headroom is.
+
+### Rung 6: long-range context is an *encoder* rung, and it has to be
+
+Filed 2026-08-09 out of a design discussion about resetting the semi-CRF's alpha carry.
+The question was whether two structurally similar passages — a bridge at 0:30 and its
+repeat at 3:00, one of them carrying more separation bleed — should inform each other's
+segmentation.
+
+**The decoder cannot host this, at any carry length.** A semi-CRF's score decomposes
+over segments with first-order transitions, and that decomposition is exactly what makes
+the forward algorithm O(T·dmax). A "segment *i* resembles segment *j*" term is pairwise
+over segments and exact inference dies with it. The alpha carry does not help either:
+given the label and endpoint of the segment covering time *t*, past and future are
+conditionally independent, so *all* long-range influence is mediated by one
+(position, label) pair over a `dmax` = 4 s window. The transition table is a shared,
+content-blind `(label -> label)` matrix — it has no way to say that one passage
+resembles another. So the capability was never in the decoder to lose, which is what
+makes segment-length carry resets cheap.
+
+**The encoder can host it, and `Frames` already carries it.** Self-similarity is
+pairwise (T x T), but attention reads the pairwise structure and writes a per-frame
+summary, so the output is still `(T, ...)` per head plus `hidden` — no contract change.
+`NeuralSpanScorer.phi` pools `hidden` and the onset/voicing logits directly, so an
+encoder gain propagates into every span potential without the scorer changing. That is
+new: while the scorer was five hand-crafted features, encoder gains were bottlenecked by
+what those features could express.
+
+Two costs, both real:
+
+- **It fights chunked training.** The encoder sees `dmax + chunk + right` today. Global
+  context wants the whole track, which reintroduces an activation-memory problem on the
+  encoder side of the same shape as the one truncated backprop caused on the DP side.
+  Pooled or strided attention at a coarse resolution rather than frame-level is the
+  likely answer, and it is real work, not a layer swap.
+- **It is behind HCQT.** Onset localisation is a filter-bandwidth problem — the CQT
+  integrates over 1248 ms at an open E. Importing evidence from a similar passage does
+  not sharpen a smeared onset, it averages two smeared onsets. HCQT attacks the cause.
+
+Run it after HCQT resolves, and only against an encoder whose onsets are already
+localisable — otherwise the arm measures whether attention can paper over a
+representation defect, which is not the question.
 
 ### Ordering rationale
 

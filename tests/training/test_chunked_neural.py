@@ -83,31 +83,41 @@ class _PointwiseTrunk(nn.Module):
         return self.heads_and_hidden(x)[0]
 
 
-def _decoder() -> SemiCRFDecoder:
+def _decoder(transitions: bool = False) -> SemiCRFDecoder:
     # Seeded, because the two sides of the comparison build their own decoder and
     # this scorer -- unlike `LinearSpanScorer`, whose parameters are deterministic
     # constants -- is randomly initialised. Without this the test compares two
     # different models and reports the difference as a broken invariant.
     torch.manual_seed(1234)
-    return SemiCRFDecoder(
+    decoder = SemiCRFDecoder(
         stride=STRIDE,
         scorer=NeuralSpanScorer(
             LABELS, trunk_dim=_PointwiseTrunk.HIDDEN, frame_dim=4, order=2,
             span_dim=6, dur_dim=3, dmax_s=DMAX_S, dmax_frames=DMAX,
         ),
     )
+    if transitions:
+        # `NeuralSpanScorer` zero-inits `class_trans` and `interval`, so at rest every
+        # transition scores 0 -- including `START -> y`. Any test that only ever runs
+        # an untrained scorer therefore cannot tell `START` from a real predecessor,
+        # which is exactly how the chunked gold score got away with assuming one.
+        with torch.no_grad():
+            g = torch.Generator().manual_seed(7)
+            for p in (decoder.scorer.class_trans, decoder.scorer.interval):
+                p.add_(torch.randn(p.shape, generator=g))
+    return decoder
 
 
-def _whole_track_nll(model, items, feats) -> float:
+def _whole_track_nll(model, items, feats, transitions: bool = False) -> float:
     times = np.arange(N_CQT) * HOP_S
-    decoder = _decoder()
+    decoder = _decoder(transitions)
     chunk = Chunk(
         features=feats[None],
         frame_times=times,
         gold=gold_segments(
             times[::STRIDE], items[0].reference_notes(), DMAX, decoder.scorer.labels
         ),
-        y={}, stream=0, reset=True,
+        y={}, stream=0, reset=True, prev=LABELS.START,
     )
     loss = SemiCRFLoss(decoder)
     batch = collate([chunk], context=0, right=0)
@@ -116,13 +126,13 @@ def _whole_track_nll(model, items, feats) -> float:
     return metrics["total"] * loss.scored_frames(batch, batch.features.shape[-1])
 
 
-def _chunked_nll(model, cache, items) -> float:
+def _chunked_nll(model, cache, items, transitions: bool = False) -> float:
     dataset = ChunkDataset(
         train_items(items, CONDITIONS["clean"], cache),
         chunk_frames=CHUNK, dmax=DMAX, stride=STRIDE, batch_size=1,
         right_context=0, labels=LABELS,
     )
-    loss = SemiCRFLoss(_decoder())
+    loss = SemiCRFLoss(_decoder(transitions))
     total = 0.0
     with torch.no_grad():
         for batch in dataset:
@@ -133,7 +143,8 @@ def _chunked_nll(model, cache, items) -> float:
     return total
 
 
-def test_the_neural_scorer_telescopes_across_chunks(track):  # noqa: F811
+@pytest.mark.parametrize("transitions", [False, True], ids=["zero-init", "trained"])
+def test_the_neural_scorer_telescopes_across_chunks(track, transitions):  # noqa: F811
     """The suite's strongest invariant, applied to the scorer that has never seen it.
 
     Its potentials come from prefix sums over *absolute* frame index, and chunking moves
@@ -141,11 +152,21 @@ def test_the_neural_scorer_telescopes_across_chunks(track):  # noqa: F811
     on paper -- ``(t - a)^k`` does not care where zero is -- but the implementation
     reconstructs it from ``P_p`` by binomial expansion in ``a``, which is where an origin
     could leak in without changing a single shape.
+
+    **The ``trained`` arm is the one that found a bug**, and it is worth saying why the
+    ``zero-init`` arm could not. ``segmentation_scores`` marked a row's first segment as
+    following ``START``, which is true of a whole track and false of a chunk cut out of
+    one -- there the predecessor is whatever the last chunk ended on, and ``log Z``
+    applies exactly that. Two halves of the NLL, two different quantities. But an
+    untrained ``NeuralSpanScorer`` has every transition at zero, so ``START -> y`` and
+    ``note -> y`` are the same number and the identity holds anyway. Perturbing the
+    transition table is the whole difference: 5.18 nats over these six chunks before the
+    fix, ~0.9 per chunk boundary, in every run that ever trained a transition.
     """
     items, cache, feats = track
     model = _PointwiseTrunk()
-    whole = _whole_track_nll(model, items, feats)
-    chunked = _chunked_nll(model, cache, items)
+    whole = _whole_track_nll(model, items, feats, transitions)
+    chunked = _chunked_nll(model, cache, items, transitions)
     assert chunked == pytest.approx(whole, rel=1e-3, abs=1e-2), (
         f"chunked {chunked} != whole-track {whole}: the neural scorer's chunked "
         "objective is not the one it reports"

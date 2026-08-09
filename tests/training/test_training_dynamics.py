@@ -34,6 +34,13 @@ is why this went unnoticed for as long as every scorer was log-linear.
 The value being *bit-identical* is what made it invisible. Every number a run logs is
 correct; only the direction it steps in is wrong.
 
+**The answer is ``--segment-chunks``** (``tests/training/test_segments.py``): bounded
+carry chains, undetached within one, so the gradient is the objective's. Truncation
+remains the default because every earlier run used it and a checkpoint should reproduce
+what it did, not silently better. What is tested here is therefore the *price* of that
+default, not an open defect -- dropping ``d(alpha_k)/d(theta)`` is what truncation is,
+and no implementation of it agrees with the exact gradient.
+
 Everything here is pointwise in time, so a chunk's frames get identical activations to
 the whole track's at the same absolute positions -- which is what makes ``_true_nll``, a
 single uninterrupted scan at the live weights, a legitimate reference for what the loop
@@ -205,7 +212,7 @@ def _true_nll(model: nn.Module, decoder: SemiCRFDecoder, items, feats) -> float:
         features=feats[None],
         frame_times=times,
         gold=gold_segments(times[::STRIDE], items[0].reference_notes(), DMAX, LABELS),
-        y={}, stream=0, reset=True,
+        y={}, stream=0, reset=True, prev=LABELS.START,
     )
     probe = SemiCRFLoss(decoder)
     batch = collate([chunk], context=0, right=0)
@@ -286,34 +293,33 @@ def test_the_chunked_loss_reports_the_right_value(sharpened):
     assert truncated == pytest.approx(exact, rel=1e-9)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known defect, measured not assumed: the detached carry drops "
-        "d(alpha_k)/d(theta), so the loop's step is not a derivative of the loss it "
-        "reports. Cosine falls 0.9999 -> -0.02 over 60 steps and the neural scorer "
-        "then climbs to 3e5 while the exact gradient descends to 13.7. Fix is a "
-        "design decision (checkpointed whole-track backprop, or shorter independent "
-        "segments); this marker comes off with it."
-    ),
-)
-def test_the_loop_steps_along_the_gradient_of_the_loss_it_reports(sharpened):
-    """The one property that makes a training loop a training loop.
+def test_detaching_the_carry_rotates_the_gradient_it_does_not_shrink_it(sharpened):
+    """The measured price of ``--segment-chunks 0``, and why the flag exists.
 
     Compared as a *direction*, not a magnitude: a systematically small gradient is a
     learning-rate question, while a rotated one is not descent at all. At a positive
     cosine the truncated step still decreases the objective, however inefficiently; at
     zero it is orthogonal, and below zero every step provably increases the loss it is
     minimising.
+
+    Asserted rather than xfailed, because this is not a bug awaiting a fix: dropping
+    ``d(alpha_k)/d(theta)`` is what truncation *is*, and no implementation of it can
+    agree with the exact gradient. What was a defect was having no alternative --
+    ``detach_carry=False`` could not run through ``Trainer`` at all. Bounded chains are
+    that alternative, and this test is the number that says what taking them costs.
     """
     model, decoder, loader = sharpened
-    _, truncated = _flat_grad(model, decoder, loader, detach_carry=True)
-    _, exact = _flat_grad(model, decoder, loader, detach_carry=False)
+    truncated_value, truncated = _flat_grad(model, decoder, loader, detach_carry=True)
+    exact_value, exact = _flat_grad(model, decoder, loader, detach_carry=False)
     cos = float(torch.nn.functional.cosine_similarity(truncated, exact, dim=0))
-    assert cos > 0.99, (
-        f"the step the loop takes points {cos:.4f} along the objective's gradient; "
-        "the carry is detached, so d(chunk k)/d(theta) stops at chunk k's own "
-        "activations and the path through alpha_{k-1} is dropped"
+    assert truncated_value == pytest.approx(exact_value, rel=1e-9), (
+        "the two must agree on the loss exactly -- that they do is what made the "
+        "gradient defect invisible to every value-based test in the suite"
+    )
+    assert cos < 0.5, (
+        f"the truncated gradient points {cos:.4f} along the objective's own, which is "
+        "closer than measured (-0.02 at this warm-up) -- if truncation has become "
+        "harmless then bounded chains are buying nothing and should go"
     )
 
 

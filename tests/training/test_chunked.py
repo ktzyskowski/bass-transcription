@@ -199,8 +199,8 @@ def test_collate_rejects_mixed_widths(tmp_path, cache):
     a, b = list(ds)[:2]
     from stemify.semicrf.fit.dataset import Chunk
 
-    wide = Chunk(np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, [], {}, 0, False)
-    narrow = Chunk(a.features[0].numpy(), a.frame_times[0], [], {}, 1, False)
+    wide = Chunk(np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, [], {}, 0, False, 0)
+    narrow = Chunk(a.features[0].numpy(), a.frame_times[0], [], {}, 1, False, 0)
     with pytest.raises(ValueError, match="share a shape"):
         collate([wide, narrow], context=30, right=0)
 
@@ -221,7 +221,7 @@ def test_collate_stacks_targets_it_has_never_heard_of(tmp_path, cache):
     w = a.features.shape[-1]
     rows = [
         Chunk(a.features[0].numpy(), a.frame_times[0], [],
-              {"nonsense": np.full(w, float(i))}, i, False)
+              {"nonsense": np.full(w, float(i))}, i, False, 0)
         for i in range(2)
     ]
     batch = collate(rows, context=30, right=0)

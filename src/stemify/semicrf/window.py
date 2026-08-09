@@ -16,24 +16,58 @@ import torch
 from stemify.semicrf.constants import NEG
 
 
-def initial_window(ref: torch.Tensor, B: int, dmax: int, n_rows: int) -> torch.Tensor:
-    """The alpha window a track *starts* from: position 0 is ``START``, and every
-    earlier position is ``NEG`` (unreachable).
+def initial_window(
+    ref: torch.Tensor,
+    B: int,
+    dmax: int,
+    n_rows: int,
+    slot: torch.Tensor | None = None,
+    label: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """The alpha window a scan *starts* from: one reachable (position, label), all
+    ``NEG`` elsewhere.
 
     ``ref`` only supplies dtype and device. ``n_rows`` is the transition matrix's row
     count (``LabelSet.n_rows``), and ``START`` is its last row by construction -- so it
     is indexed as ``-1`` here rather than imported, which is what lets one buffer serve
     an alphabet of any width without this module knowing the width.
 
+    Defaulting to ``(dmax - 1, START)`` is a track's beginning: the scan's first step is
+    ``j = start + 1`` and reads window index ``k`` as position ``j - dmax + k``, so the
+    last slot is position ``start`` -- "no frames consumed yet".
+
+    ``slot`` and ``label`` move that seed **per row**, which is what lets a scan begin
+    partway into a track. Both are needed together and for the same reason: a segment
+    of a track begins at a real gold boundary, not at a chunk's edge, and the segment
+    before it carried a real label, not ``START``. Seeding at the chunk's edge instead
+    puts gold's own tiling outside the partition -- ``log Z`` sums only what is
+    reachable while ``score(gold)`` is computed straight off the gold list, so the NLL
+    goes negative and unbounded, and the model farms the one span nothing normalises.
+
     Holding the positions as one tensor is what makes the recurrence's ``prev`` a free
     *view*. As a Python list, every one of the T steps had to ``torch.stack`` up to
     ``dmax`` small tensors -- O(T * dmax) copies, ~900k on a 5-minute track, which is
     the shape that punishes a GPU hardest (all launch overhead, no arithmetic).
     """
-    a0 = ref.new_full((B, n_rows), NEG)
-    a0[:, -1] = 0.0                    # START is the last row, whatever the width
-    pad = ref.new_full((B, dmax - 1, n_rows), NEG)
-    return torch.cat([pad, a0.unsqueeze(1)], dim=1)
+    window = ref.new_full((B, dmax, n_rows), NEG)
+    rows = torch.arange(B, device=window.device)
+    at = (
+        torch.full((B,), dmax - 1, dtype=torch.long, device=window.device)
+        if slot is None else slot.to(window.device)
+    )
+    row = (
+        torch.full((B,), n_rows - 1, dtype=torch.long, device=window.device)
+        if label is None else label.to(window.device)
+    )
+    if int(at.min()) < 0 or int(at.max()) >= dmax:
+        raise ValueError(
+            f"seed slots {at.tolist()} fall outside the {dmax}-wide alpha window. A "
+            "slot is `position - scan_start - 1 + dmax`, and a gold segment ending "
+            "inside the chunk starts at most dmax back, so an out-of-range slot means "
+            "the gold pieces and the scan disagree about where the chunk begins"
+        )
+    window[rows, at, row] = 0.0
+    return window
 
 
 def push(window: torch.Tensor, value: torch.Tensor) -> torch.Tensor:

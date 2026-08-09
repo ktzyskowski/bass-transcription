@@ -120,6 +120,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         carry: torch.Tensor | None,
         context: int,
         right: int = 0,
+        prevs: Sequence[int] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """One truncated-BPTT step: ``(A, gold_score, window)`` for a batch of chunks.
 
@@ -131,10 +132,17 @@ class SemiCRFDecoder(Decoder, nn.Module):
         derived from notes here: gold is built once over the whole track and split by
         chunk, which is what makes the pieces tile it exactly and the losses telescope.
         Deriving it per chunk would re-run the audible-gap rule on a truncated view and
-        silently disagree at the seams."""
+        silently disagree at the seams.
+
+        ``prevs`` is the label preceding each row's first gold segment -- what the
+        previous chunk ended on. ``None`` means ``START`` for every row, which is true
+        only of a track's first chunk: ``log Z`` applies the real carried transition, so
+        assuming ``START`` here makes the two halves of the NLL score different
+        quantities."""
         ev, grid = self._prepare(frames_list)
         A, window = chunk_log_partition(self.scorer, ev, grid, carry, context, right)
-        return A, segmentation_scores(self.scorer, ev, golds, grid), window
+        gold = segmentation_scores(self.scorer, ev, golds, grid, prevs)
+        return A, gold, window
 
     def decode(
         self, frames: Frames, note_bias: float = 0.0, with_confidence: bool = False

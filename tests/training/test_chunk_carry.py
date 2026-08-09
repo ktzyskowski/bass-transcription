@@ -32,6 +32,7 @@ from stemify.core.cache import Cache
 from stemify.core.contour import Contour
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
+from stemify.semicrf.labelset import BINARY
 from stemify.core.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.sources import Sources
@@ -127,6 +128,7 @@ def _whole_track_nll(model, cache, items, feats) -> float:
         y={},
         stream=0,
         reset=True,
+        prev=BINARY.START,
     )
     loss = SemiCRFLoss(decoder)
     batch = collate([chunk], context=0, right=0)

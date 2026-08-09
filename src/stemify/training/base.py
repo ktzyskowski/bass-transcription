@@ -167,6 +167,29 @@ class Loss(ABC, Generic[B]):
         log. ``metrics`` must include a ``"total"`` key -- the number the early-stopper
         monitors -- so the loop never reaches into a paradigm-specific breakdown."""
 
+    @property
+    def couples_micro_batches(self) -> bool:
+        """Do consecutive ``compute`` calls share one autograd graph?
+
+        ``False`` -- the default and the stateless case -- lets the loop backward each
+        micro-batch and free its graph immediately, which is what bounds activation
+        memory to one batch.
+
+        ``True`` says the objective carries a *differentiable* state forward, so
+        backwarding a micro-batch would free a graph the next one still needs (torch
+        raises "Trying to backward through the graph a second time"). The loop then
+        accumulates the loss tensors and backwards once per window instead. That costs
+        the window's activations in memory, and it is the only way the gradient reaches
+        back through the carried state -- without it a semi-CRF's step is not a
+        derivative of the loss it reports.
+
+        A property rather than a constructor flag because it is a fact about the
+        objective's graph, not a setting: an objective that answered wrongly would
+        either crash immediately (True needed, False given) or silently hold N graphs
+        for nothing.
+        """
+        return False
+
     def parameters(self) -> Iterable[nn.Parameter]:
         """Learnable parameters this objective adds beyond the model (none by
         default; a structured decoder overrides to return its own)."""

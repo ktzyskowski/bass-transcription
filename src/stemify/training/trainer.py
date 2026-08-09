@@ -181,6 +181,12 @@ class Trainer(Generic[B]):
         n = 0
         accumulate = max(1, self.config.accumulate_steps)
         pending = 0        # micro-batches accumulated into the current step
+        # A graph-coupled objective cannot have its micro-batches backwarded one at a
+        # time: the next one reads tensors this one's backward would free. Its losses
+        # are summed and backwarded once per window instead, which is also the only
+        # arrangement in which the gradient reaches back through the carried state.
+        deferred: torch.Tensor | None = None
+        coupled = self.loss.couples_micro_batches
         if train:
             self.optimizer.zero_grad()
         with torch.set_grad_enabled(train):
@@ -205,9 +211,16 @@ class Trainer(Generic[B]):
                     # loss, and rescaling them would make two runs incomparable.
                     # torch ships `Tensor.backward` unannotated, so --strict calls this
                     # an untyped call in typed context. Nothing to fix on our side.
-                    (loss_t / accumulate).backward()  # type: ignore[no-untyped-call]
+                    scaled = loss_t / accumulate
+                    if coupled:
+                        deferred = scaled if deferred is None else deferred + scaled
+                    else:
+                        scaled.backward()  # type: ignore[no-untyped-call]
                     pending += 1
                     if pending == accumulate:
+                        if deferred is not None:
+                            deferred.backward()  # type: ignore[no-untyped-call]
+                            deferred = None
                         metrics = {**metrics, GRAD_NORM: self._step()}
                         pending = 0
                 bs = len(batch)
@@ -224,6 +237,8 @@ class Trainer(Generic[B]):
                 # `accumulate_steps - 1` micro-batches of every epoch, and silently
                 # discarding work is the failure mode this file exists to refuse. It is
                 # under-scaled by `pending / accumulate`, which is one step per epoch.
+                if deferred is not None:
+                    deferred.backward()  # type: ignore[no-untyped-call]
                 self._step()
         if n == 0:
             # A loader that yields nothing returns no metrics, so the caller's

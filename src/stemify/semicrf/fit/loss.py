@@ -150,6 +150,17 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         # Resumption state; a gradient path only when detach_carry is False.
         self._carry: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
+    @property
+    def couples_micro_batches(self) -> bool:
+        """True while the carry is undetached: chunk *k+1*'s graph reaches into *k*'s.
+
+        Exactly the condition under which the loop must accumulate loss tensors and
+        backward once per window -- backwarding each chunk would free a graph the next
+        one still needs. Derived from ``detach_carry`` rather than set beside it,
+        because they are the same fact stated once.
+        """
+        return not self.detach_carry
+
     def parameters(self) -> Iterable[nn.Parameter]:
         return self.decoder.parameters()
 
@@ -195,18 +206,59 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         self.decoder.to(device)
         return self
 
+    def _fresh(
+        self, batch: ChunkBatch, device: torch.device, dmax: int
+    ) -> torch.Tensor:
+        """``(B, dmax, n_rows)`` -- a from-scratch alpha, seeded where gold begins.
+
+        **Not at the chunk's edge.** A reset row's scan has no carry, so the only
+        reachable tilings are the ones starting at the seeded position; meanwhile
+        ``score(gold)`` is computed straight off the gold list and does not consult
+        alpha at all. Seed at ``context`` and any gold segment reaching back past it --
+        the normal case, since a segment belongs to the chunk holding its *end* -- is
+        scored but not normalised. ``log Z < score(gold)`` follows, the NLL goes
+        negative and unbounded below, and the model farms that one span forever.
+
+        So the seed is the start of the row's earliest gold segment, and the label is
+        whatever the previous segment carried. Both come from the gold tiling, so
+        neither invents a boundary: we condition on something true rather than clipping
+        a note's onset to a frame with no onset under it. On a track's first chunk this
+        reduces to ``(context, START)`` exactly, which is what it always was.
+
+        The slot arithmetic is the scan's own: its first step is ``j = context + 1`` and
+        reads window index ``k`` as position ``j - dmax + k``. A gold segment ending
+        inside the chunk starts at most ``dmax`` back, so the slot always lands in
+        range; ``initial_window`` raises if it does not.
+        """
+        n_rows = self.decoder.scorer.labels.n_rows
+        slots, labels = [], []
+        for gold, prev in zip(batch.golds, batch.prevs, strict=True):
+            start = gold[0][1] if gold else batch.context
+            slots.append(start - batch.context - 1 + dmax)
+            labels.append(prev)
+        return initial_window(
+            torch.zeros(0, device=device), len(batch), dmax, n_rows,
+            torch.tensor(slots, dtype=torch.long),
+            torch.tensor(labels, dtype=torch.long),
+        )
+
     def _resume(
         self, batch: ChunkBatch, device: torch.device
-    ) -> tuple[torch.Tensor | None, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """The carry to resume from, and the previous cumulative ``A``, per row.
 
-        A row flagged ``reset`` starts a fresh track: no window (the scan builds its
-        own ``initial_window``) and ``A_{-1} = 0``. Rows are stacked into one batched
-        window, so a batch mixing fresh and continuing streams is the normal case --
-        which is why every chunk is the same width and shares one context.
+        A row flagged ``reset`` starts a fresh chain -- a track's first chunk, or a
+        segment boundary -- with ``A_{-1} = 0`` and a seeded window from ``_fresh``.
+        Rows are stacked into one batched window, so a batch mixing fresh and
+        continuing streams is the normal case, which is why every chunk is the same
+        width and shares one context.
+
+        ``dmax`` is re-derived from the batch's own frame times rather than read off an
+        existing carry. The old version borrowed a template from ``self._carry``, which
+        meant it could not build a window at all until some row had already produced
+        one -- fine while ``reset`` only fired on the first batch of an epoch, and
+        wrong now that a segment boundary resets every row at once.
         """
-        if all(batch.resets):
-            return None, torch.zeros(len(batch), device=device)
         missing = [
             s for s, r in zip(batch.streams, batch.resets, strict=True)
             if not r and s not in self._carry
@@ -216,17 +268,16 @@ class SemiCRFLoss(Loss[ChunkBatch]):
                 f"streams {missing} continue a track but have no carry; the loader "
                 "must emit a stream's chunks in order, with reset on the first"
             )
-        # A reset row needs a window shaped like the others but carrying no history.
-        # `initial_window` is that: NEG everywhere except START, which sits in the last
-        # slot -- exactly the position "no frames consumed yet" occupies once the scan
-        # starts at `context`. The chunk's leading zero-padding is then read against a
-        # NEG alpha and contributes exp(NEG - max) == 0.
-        template = next(iter(self._carry.values()))[0]   # (dmax, 3)
-        fresh = initial_window(template, 1, template.shape[0], template.shape[1])[0]
+        dmax = self.decoder.scorer.grid(
+            batch.frame_times[0][:: self.decoder.stride]
+        ).dmax
+        fresh = self._fresh(batch, device, dmax)
         windows, prev = [], []
-        for stream, reset in zip(batch.streams, batch.resets, strict=True):
+        for b, (stream, reset) in enumerate(
+            zip(batch.streams, batch.resets, strict=True)
+        ):
             if reset:
-                windows.append(fresh)
+                windows.append(fresh[b])
                 prev.append(torch.zeros((), device=device))
             else:
                 window, a = self._carry[stream]
@@ -263,7 +314,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         frames_list = frames_from_output(out, batch.frame_times, hidden=hidden)
         carry, prev_A = self._resume(batch, device)
         A, gold, window = self.decoder.nll_chunk(
-            frames_list, batch.golds, carry, batch.context, batch.right
+            frames_list, batch.golds, carry, batch.context, batch.right, batch.prevs
         )
         # The telescoping term. Mean over rows so the loss is per-track rather than
         # per-batch, then divided by the frames it scored so it is a *rate*.
