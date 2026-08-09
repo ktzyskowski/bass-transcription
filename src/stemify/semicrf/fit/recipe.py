@@ -307,6 +307,13 @@ class SemiCRFRecipe(Recipe):
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
             "onset_weight": self.onset_weight,
+            # Both, because they are different facts that happen to share a number.
+            # `segment_chunks` says the gradient reaches through the carry at all --
+            # the difference between descending this objective and ascending it -- while
+            # `scorer` says what the potentials are. A run recorded without them is one
+            # nobody can later tell apart from the arm it was meant to beat.
+            "segment_chunks": self.segment_chunks,
+            "scorer": self.decoder.scorer.config.get("kind", "linear"),
         }
 
     def build_model(self) -> CueNet:
