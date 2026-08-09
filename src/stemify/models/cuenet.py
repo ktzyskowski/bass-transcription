@@ -59,13 +59,31 @@ class CueNet(nn.Module):
         """
         return self.backbone.in_channels
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def heads_and_hidden(
+        self, x: torch.Tensor
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Every head's logits, *and* the ``(B, T, hidden)`` trunk they were read from.
+
+        The trunk is already computed -- every head is a function of it -- and until
+        this existed it was discarded at the end of the forward pass. A segmental
+        decoder that pools learned features over spans wants it and not the heads: the
+        heads are three scalars and a distribution, and the trunk is what they were
+        summarised from, so pooling the summaries throws away the difference.
+
+        Separate from ``forward`` rather than widening it. ``forward`` is what
+        ``nn.Module.__call__`` dispatches to and what every existing caller, checkpoint
+        loader and torchscript path expects to return a dict; returning a tuple there
+        would make each of them unpack a second value they have no use for.
+        """
         # Only pay for the frequency-resolved path when something consumes it: without
         # a frequency head the backbone's plain forward is the whole computation.
         if not self.frequency_heads:
             frame = self.backbone(x)
-            return {name: head(frame) for name, head in self.heads.items()}
+            return {name: head(frame) for name, head in self.heads.items()}, frame
         frequency, frame = self.backbone.frequency_and_frame(x)
         out = {name: head(frame) for name, head in self.heads.items()}
         out.update({n: h(frequency) for n, h in self.frequency_heads.items()})
-        return out
+        return out, frame
+
+    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self.heads_and_hidden(x)[0]

@@ -111,8 +111,8 @@ class LearnedEncoder(Encoder):
                 f"{x.shape[0]}. A mix-conditioned checkpoint must be encoded over "
                 "the same channels it was trained on."
             )
-        out = self.model(x[None].to(self.device))        # (1, C, F, T)
-        (frames,) = frames_from_output(out, [frame_times])
+        out, hidden = self.model.heads_and_hidden(x[None].to(self.device))
+        (frames,) = frames_from_output(out, [frame_times], hidden=hidden)
         return to_numpy(frames)
 
     def encode(self, sources: Sources) -> Frames:

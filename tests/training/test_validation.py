@@ -57,6 +57,21 @@ class _FakeCueNet(nn.Module):
     in_channels = 1
     frequency_heads: dict = {}
 
+    HIDDEN = 8
+    """Width of the stand-in trunk. Small and arbitrary: nothing here reads its values,
+    only that a bundle from a model *with* a backbone carries one."""
+
+    def heads_and_hidden(self, x):
+        """The heads, plus a stand-in ``(B, T, HIDDEN)`` trunk.
+
+        Zeros, because no double here has a backbone to produce a real representation --
+        but the shape is honest, and returning it is what keeps a double from standing
+        in for only half of ``CueNet``. A scorer that pools the trunk will read zeros and
+        learn nothing from them; that is a test writing its own inputs, not a silent
+        production fallback."""
+        out = self.forward(x)
+        return out, torch.zeros(x.shape[0], x.shape[-1], self.HIDDEN)
+
 
 class _FakeOnsetModel(_FakeCueNet):
     """Onset logits peaking at given frame indices."""

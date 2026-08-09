@@ -33,6 +33,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import torch
 from torch import nn
 
+from stemify.models.cuenet import CueNet
 from stemify.models.frames import frames_from_output
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.window import initial_window
@@ -237,13 +238,23 @@ class SemiCRFLoss(Loss[ChunkBatch]):
     def compute(
         self, model: nn.Module, batch: ChunkBatch, device: torch.device
     ) -> tuple[torch.Tensor, dict[str, float]]:
-        out = model(batch.features.to(device))       # {head: (B, window, 1)}
+        # The trunk comes along when the model has one to give. A scorer that pools
+        # learned per-frame features reads it; the log-linear scorer does not, and the
+        # test doubles here are bare head stacks with no backbone at all. `None` is
+        # therefore a real state rather than a fallback, and a scorer that needs the
+        # trunk raises when it is missing -- at the scorer, which knows it needs it.
+        features = batch.features.to(device)
+        out, hidden = (
+            model.heads_and_hidden(features)     # {head: (B, window, 1)}, (B, window, C)
+            if isinstance(model, CueNet)
+            else (model(features), None)
+        )
         # No contour: nothing the scan reads needs one, and every recipe builds a
         # voicing head, so the fallback that used to want it is unreachable here.
         # This is the *same* adapter ``LearnedEncoder`` runs at inference, which is what
         # stops the two paths from disagreeing about what an onset value is -- they used
         # to squash and squeeze in two places, agreeing only by inspection.
-        frames_list = frames_from_output(out, batch.frame_times)
+        frames_list = frames_from_output(out, batch.frame_times, hidden=hidden)
         carry, prev_A = self._resume(batch, device)
         A, gold, window = self.decoder.nll_chunk(
             frames_list, batch.golds, carry, batch.context, batch.right
