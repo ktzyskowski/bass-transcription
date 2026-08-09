@@ -24,10 +24,17 @@ import pytest
 import torch
 
 from stemify.core.conditions import CONDITIONS
+from stemify.core.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.constants import NEG
+from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.fit.tracks import train_items
+from stemify.semicrf.labelset import LabelSet
+from stemify.semicrf.neural import NeuralSpanScorer
+from stemify.semicrf.score import segmentation_scores
+from stemify.semicrf.window import initial_window
 from stemify.training.config import TrainConfig
 from stemify.training.trainer import Trainer
 
@@ -41,6 +48,38 @@ from test_chunked import _FakeDataset
 
 SEGMENT = 2          # chunks per chain; the fixture's track is six, so three chains
 CPU = torch.device("cpu")
+NEURAL_T, NEURAL_DMAX, NEURAL_DT, TRUNK, BINS = 8, 4, 0.032, 5, 12
+
+
+@pytest.fixture
+def neural():
+    """A two-row batch with *trained* transitions, for the per-row scoring checks.
+
+    Transitions perturbed off their zero init on purpose: at rest every transition is
+    0, so `START -> y` and `note -> y` are the same number and a predecessor argument
+    cannot be shown to do anything at all.
+    """
+    labels = LabelSet.from_bins(BINS)
+    torch.manual_seed(0)
+    scorer = NeuralSpanScorer(
+        labels, trunk_dim=TRUNK, frame_dim=4, span_dim=6, dur_dim=3,
+        dmax_s=NEURAL_DMAX * NEURAL_DT, dmax_frames=NEURAL_DMAX,
+    )
+    with torch.no_grad():
+        scorer.class_trans.add_(torch.randn_like(scorer.class_trans))
+        scorer.interval.add_(torch.randn_like(scorer.interval))
+    g = torch.Generator().manual_seed(1)
+    frames = [
+        Frames(
+            heads={"onset": torch.rand(NEURAL_T, generator=g),
+                   "voicing": torch.rand(NEURAL_T, generator=g),
+                   "pitch": torch.randn(NEURAL_T, BINS, generator=g)},
+            frame_times=np.arange(NEURAL_T) * NEURAL_DT,
+            hidden=torch.randn(NEURAL_T, TRUNK, generator=g),
+        )
+        for _ in range(2)
+    ]
+    return scorer, frames, [[(0, 0, 2), (1, 2, 5)], [(2, 0, 3), (0, 3, 6)]]
 
 
 def _dataset(items, cache, segment_chunks: int) -> ChunkDataset:
@@ -119,6 +158,78 @@ def test_streams_stay_in_lockstep_across_tracks_of_different_lengths(tmp_path):
     assert any(
         any(b.resets) for i, b in enumerate(batches) if i % SEGMENT != 0
     ), "no stream rolled onto a new track mid-window; the case is not being covered"
+
+
+def test_every_row_is_seeded_at_its_own_position_and_label():
+    """``initial_window``'s per-row seed, with the rows actually differing.
+
+    ``_fresh`` builds one ``(slot, label)`` per row and writes them by advanced
+    indexing. Every other test of it runs a single-row batch, where a per-row write and
+    a broadcast write are the same operation -- the same blind spot that let the reset
+    rule key on the wrong counter. Rows in production differ on both axes at once,
+    because they are different tracks at different offsets.
+    """
+    slot, label = torch.tensor([0, 2, 4]), torch.tensor([1, 0, 2])
+    window = initial_window(torch.zeros(0), 3, 5, 3, slot, label)
+    seeded = [(window[b] != NEG).nonzero() for b in range(3)]
+    assert [s.shape[0] for s in seeded] == [1, 1, 1], "exactly one reachable cell per row"
+    assert [tuple(int(x) for x in s[0]) for s in seeded] == [(0, 1), (2, 0), (4, 2)]
+
+
+def test_each_row_is_scored_against_its_own_predecessor(neural):
+    """``prev_labels`` is one label per row, and the rows disagree.
+
+    A batched call has to equal each row scored alone against its own evidence -- which
+    is the control, and it is easy to write wrongly: passing one row's segmentation
+    against the *batch's* evidence reads row 0's frames whatever row you meant, and
+    reports a mismatch that is the test's fault.
+    """
+    scorer, frames, segs = neural
+    prevs = [1, 3]
+    ev = build_evidence(frames, stride=1)
+    batched = segmentation_scores(scorer, ev, segs, scorer.grid(ev.frame_times[0]), prevs)
+    alone = []
+    for k in (0, 1):
+        one = build_evidence([frames[k]], stride=1)
+        alone.append(segmentation_scores(
+            scorer, one, [segs[k]], scorer.grid(one.frame_times[0]), [prevs[k]]
+        )[0])
+    assert torch.allclose(batched, torch.stack(alone), atol=1e-5)
+    swapped = segmentation_scores(
+        scorer, ev, segs, scorer.grid(ev.frame_times[0]), prevs[::-1]
+    )
+    assert not torch.allclose(batched, swapped, atol=1e-6), (
+        "swapping the rows' predecessors changed nothing, so the argument is being "
+        "ignored and every row is still being scored against the same transition"
+    )
+
+
+def test_omitting_the_predecessors_is_exactly_START(neural):
+    """The default has to reproduce a whole track's scoring bit for bit, or every
+    caller that scores a whole segmentation silently changed meaning."""
+    scorer, frames, segs = neural
+    ev = build_evidence(frames, stride=1)
+    grid = scorer.grid(ev.frame_times[0])
+    start = [scorer.labels.START] * len(segs)
+    assert torch.allclose(
+        segmentation_scores(scorer, ev, segs, grid),
+        segmentation_scores(scorer, ev, segs, grid, start), atol=1e-6,
+    )
+
+
+def test_chains_are_refused_across_dataloader_workers(tmp_path):
+    """Workers count their own batches; the loop interleaves them.
+
+    So the resets land where the trainer's window never steps, and a row that does not
+    reset at the backward carries a graph across it. Only `num_workers=0` is wired
+    today, which makes this unreachable rather than fixed -- and the crash would arrive
+    twenty minutes into whichever run first changed that.
+    """
+    from torch.utils.data import DataLoader
+
+    ds = _chunked(tmp_path, [900, 500], batch_size=1, segment_chunks=SEGMENT)
+    with pytest.raises(NotImplementedError, match="num_workers=0"):
+        next(iter(DataLoader(ds, batch_size=None, num_workers=2)))
 
 
 def test_a_chain_starts_where_its_gold_does_not_where_the_chunk_does(track):  # noqa: F811

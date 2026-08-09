@@ -307,6 +307,20 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         info = get_worker_info()
         if info is None:
             return self._items, 0
+        if self.segment_chunks:
+            # Each worker counts its *own* batches while the loop interleaves them, so
+            # the resets land at global positions the trainer's window never steps on --
+            # and a row that does not reset where the backward falls carries a graph
+            # across it and reads it freed. Same failure that keying on the stream's
+            # chunk index produced, one level up, so it is refused rather than trusted
+            # to stay unreachable: today only `num_workers=0` is wired, and the crash
+            # would arrive twenty minutes into whichever run first changed that.
+            raise NotImplementedError(
+                f"segment_chunks={self.segment_chunks} needs num_workers=0. Chain "
+                "resets are counted in batches so they align with the trainer's "
+                f"accumulation window, and {info.num_workers} workers each count their "
+                "own, so the two cannot agree."
+            )
         return self._items[info.id :: info.num_workers], info.id * self.batch_size
 
     def __iter__(self) -> Iterator[ChunkBatch]:
