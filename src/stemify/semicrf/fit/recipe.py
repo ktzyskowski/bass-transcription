@@ -27,7 +27,9 @@ from stemify.semicrf.spans import SpanScorer
 from stemify.core.features import HOP_LENGTH, SAMPLE_RATE
 from stemify.models.networks import TCN, tcn_receptive_field
 from stemify.models.cuenet import CueNet
-from stemify.training.base import Loss, Recipe, config_field, config_str_list
+from stemify.training.base import (
+    Loss, Recipe, config_field, config_int_list, config_str_list,
+)
 from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.training.config import TrainConfig
 from stemify.training.frame.recipe import FrameRecipe
@@ -108,6 +110,7 @@ class SemiCRFRecipe(Recipe):
         onset_weight: float = ONSET_WEIGHT,
         pos_weight: Mapping[str, float] | None = None,
         scorer: str = "linear",
+        harmonics: Sequence[int] | None = None,
     ) -> None:
         """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
         features read. This recipe used to *refuse* the argument, on the reasoning
@@ -116,10 +119,18 @@ class SemiCRFRecipe(Recipe):
         path and spread features -- both are functions of the head's distribution.
         """
         super().__init__(conditions)
+        # The *encoder's* configuration, and it belongs to the encoder rather than to
+        # either objective: harmonic stacking is what the front-end sees, and the
+        # structured NLL sits several stages downstream of it. This recipe used to
+        # drop the argument and build at `(1,)` whatever the caller asked for, which
+        # made "semi-CRF" and "HCQT" mutually exclusive for no reason either one
+        # could state.
+        self.harmonics = tuple(harmonics or (1,))
         # An explicit decoder wins: `from_config` rebuilds one whole, and a caller
         # passing both would otherwise get the string's scorer silently.
         self.decoder = decoder or SemiCRFDecoder(
-            scorer=None if scorer == "linear" else self._neural_scorer(scorer, pitch)
+            scorer=None if scorer == "linear"
+            else self._neural_scorer(scorer, pitch, self.harmonics, self.in_channels)
         )
         self.pitch = pitch
         self.pitch_weight = pitch_weight
@@ -128,7 +139,9 @@ class SemiCRFRecipe(Recipe):
         self.pos_weight = dict(pos_weight or {})
 
     @staticmethod
-    def _neural_scorer(kind: str, pitch: bool) -> SpanScorer:
+    def _neural_scorer(
+        kind: str, pitch: bool, harmonics: Sequence[int], in_channels: int
+    ) -> SpanScorer:
         """A ``NeuralSpanScorer`` sized to the backbone this recipe will build.
 
         Both widths come off a throwaway ``TCN`` rather than from constants: the
@@ -150,8 +163,10 @@ class SemiCRFRecipe(Recipe):
             )
         # A throwaway backbone, discarded after two reads. Cheaper than the drift:
         # both numbers are the model's, and a constant repeated here would be wrong
-        # the first time the frontend's crop or the trunk's width moved.
-        backbone = TCN(in_channels=1)
+        # the first time the frontend's crop or the trunk's width moved -- harmonic
+        # stacking crops the fundamental axis from 216 bins to 144, which is the
+        # difference between a 72-semitone alphabet and a 48-semitone one.
+        backbone = TCN(in_channels=in_channels, harmonics=harmonics)
         return NeuralSpanScorer(
             labels=LabelSet.from_bins(backbone.frontend.n_bins),
             trunk_dim=backbone.hidden,
@@ -180,6 +195,7 @@ class SemiCRFRecipe(Recipe):
         return {
             **super().config,
             "pitch": self.pitch,
+            "harmonics": list(self.harmonics),
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
             "onset_weight": self.onset_weight,
@@ -223,6 +239,7 @@ class SemiCRFRecipe(Recipe):
         return cls(
             conditions=config_str_list(config, "conditions"),
             decoder=decoder,
+            harmonics=[int(h) for h in config_int_list(config, "harmonics")] or None,
             pitch=config_field(config, "pitch", bool, False),
             pitch_weight=config_field(config, "pitch_weight", float, PITCH_WEIGHT),
             # Defaults to 0 rather than VOICING_WEIGHT when absent: a checkpoint written
@@ -267,6 +284,7 @@ class SemiCRFRecipe(Recipe):
     def params(self) -> dict[str, object]:
         return {
             "pitch": self.pitch,
+            "harmonics": ",".join(str(h) for h in self.harmonics),
             "chunk_frames": CHUNK_FRAMES,
             "pitch_weight": self.pitch_weight,
             "voicing_weight": self.voicing_weight,
@@ -276,7 +294,9 @@ class SemiCRFRecipe(Recipe):
     def build_model(self) -> CueNet:
         # Same encoder; only the objective differs.
         return FrameRecipe(
-            [c.name for c in self.conditions], pitch=self.pitch
+            [c.name for c in self.conditions],
+            pitch=self.pitch,
+            harmonics=self.harmonics,
         ).build_model()
 
     def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:

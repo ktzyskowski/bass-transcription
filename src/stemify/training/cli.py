@@ -132,7 +132,7 @@ def main() -> None:
                          "0.3-0.5 is the usual range for modality dropout. Silence "
                          "is the dB floor, not zero -- see core/features.SILENCE_DB.")
     ap.add_argument("--harmonics", default="1",
-                    help="objective frame only: stack each CQT channel against itself "
+                    help="stack each CQT channel against itself "
                          "at these harmonics, e.g. '1,2,3,4'. A note at bin b also "
                          "sounds at b+36, b+57, b+72, which a 3x3 front-end can never "
                          "reach; stacking puts them at one position. '1' (the default) "
@@ -228,10 +228,16 @@ def main() -> None:
     # declares pitch as an auxiliary head and `SemiCRFLoss` adds
     # `pitch_weight * pitch_ce` over each chunk's own frames, so the head trains on a
     # real signal and the flag means what it does on the frame path.
-    strategy_kwargs: dict[str, Any] = {"pitch": args.pitch}
+    # `pitch` and `harmonics` configure the *encoder*, which both objectives share.
+    # `--harmonics` used to be refused for semicrf, which made "structured objective"
+    # and "harmonic stacking" mutually exclusive for no reason either could state --
+    # the front-end is several stages upstream of the DP.
+    strategy_kwargs: dict[str, Any] = {
+        "pitch": args.pitch,
+        "harmonics": _parse_harmonics(args.harmonics),
+    }
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
-        strategy_kwargs["harmonics"] = _parse_harmonics(args.harmonics)
         strategy_kwargs["stem_dropout"] = args.stem_dropout
         if args.scorer != "linear":
             raise SystemExit(
