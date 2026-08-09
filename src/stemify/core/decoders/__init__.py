@@ -1,4 +1,4 @@
-"""Decoders: ``Cues`` -> notes (the decode stage).
+"""Decoders: ``Frames`` -> notes (the decode stage).
 
 Only the interface and the DSP-free ``GreedyDecoder`` are exported here.
 ``SemiCRFDecoder`` lives in ``stemify.semicrf`` -- outside ``core`` entirely, because a

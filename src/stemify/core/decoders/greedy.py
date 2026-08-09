@@ -1,6 +1,6 @@
 """``GreedyDecoder``: the greedy decode (no learning).
 
-Turns per-frame ``Cues`` into notes by splitting the pitch contour at a rest (an
+Turns per-frame ``Frames`` into notes by splitting the pitch contour at a rest (an
 unvoiced run) and at an onset (a re-articulation the contour alone cannot show),
 then rejoining fragments a spurious cue split. The rest/onset cues over-fire (flux
 triggers on mid-sustain noise; pyin drops out for a frame), so the optional
@@ -13,7 +13,7 @@ A *pitch change* used to be a third splitting cue, and is now off by default -- 
 The pure core is ``group_contour`` -- no audio, no thresholds, taking onset *times*
 and a voiced mask directly -- so a boundary case is testable with a synthetic
 contour and hand-picked cues. ``GreedyDecoder.decode`` is the ``Decoder`` wrapper:
-it peak-picks the onset curve and thresholds the voicing curve out of the ``Cues``,
+it peak-picks the onset curve and thresholds the voicing curve out of the ``Frames``,
 then groups. That thresholding is exactly what a ``SemiCRFDecoder`` does *not* do --
 it keeps the soft probabilities -- which is why the two are siblings.
 """
@@ -23,7 +23,7 @@ import numpy as np
 from scipy.signal import find_peaks
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.decoders.base import Decoder
 from stemify.core.grids import resample_mask
 from stemify.core.notes import NoteEvent
@@ -255,19 +255,34 @@ class GreedyDecoder(Decoder):
         self.min_onset_gap_s = min_onset_gap_s
         self.voicing_threshold = voicing_threshold
 
-    def decode(self, cues: Cues) -> list[NoteEvent]:
-        """Peak-pick the onset curve and threshold the voicing curve out of ``cues``,
-        align voicing to the contour grid, then group. When the cues carry no voicing
-        (``None``), grouping falls back to the contour's own ``freqs > 0``."""
+    def decode(self, frames: Frames) -> list[NoteEvent]:
+        """Peak-pick the onset curve and threshold the voicing curve out of ``frames``,
+        align voicing to the contour grid, then group. With no voicing head, grouping
+        falls back to the contour's own ``freqs > 0``."""
+        if frames.contour is None:
+            raise ValueError(
+                "GreedyDecoder names every note's pitch from the contour, and these "
+                "Frames carry none. Encode with a pitch source (pyin, or a model with "
+                "a FrequencyHead), or decode with SemiCRFDecoder, which reads the "
+                "pitch head's own per-bin logits instead of a point estimate."
+            )
+        # `Frames` holds numpy at decode and tensors under training, and this decoder is
+        # the numpy half: scipy peak-picking has no tensor path. `asarray` is a view on
+        # a CPU tensor and *raises* on a CUDA one, which is the right answer -- evidence
+        # still on the accelerator has taken a wrong turn, not a slow one.
+        onset = np.asarray(frames.onset)
+        voicing = None if frames.voicing is None else np.asarray(frames.voicing)
         onsets = onset_times_from_probs(
-            cues.onset, cues.frame_times, self.onset_threshold, self.min_onset_gap_s
+            onset, frames.frame_times, self.onset_threshold, self.min_onset_gap_s
         )
         voiced = None
-        if cues.voicing is not None:
-            mask = cues.voicing > self.voicing_threshold
-            voiced = resample_mask(cues.frame_times, mask, cues.contour.times).astype(bool)
+        if voicing is not None:
+            mask = voicing > self.voicing_threshold
+            voiced = resample_mask(
+                frames.frame_times, mask, frames.contour.times
+            ).astype(bool)
         return group_contour(
-            cues.contour,
+            frames.contour,
             onsets,
             voiced,
             min_note_s=self.min_note_s,

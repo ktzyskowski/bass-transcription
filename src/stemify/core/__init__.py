@@ -19,7 +19,7 @@ worth stating because it is not obvious from size:
                   *extension* implements (Recipe, Loss, Batch) are a different set and
                   live in ``training``: they are about how a model is fitted, which
                   nothing here needs to know.
-    data          Contour, Cues, NoteEvent, Sources -- the values that cross every
+    data          Contour, Frames, NoteEvent, Sources -- the values that cross every
                   seam, plus the serde and cache that persist them.
     dsp           features (CQT), transforms (separation), grids. The frame grid is
                   defined here because targets, cues and metrics must all agree on it.

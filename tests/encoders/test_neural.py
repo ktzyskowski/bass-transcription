@@ -1,6 +1,6 @@
 """LearnedEncoder: the cached-features path the validator uses, and encode-from-audio.
 
-Fake models drive known onset/voicing curves so the forward, Cues assembly, and the
+Fake models drive known onset/voicing curves so the forward, Frames assembly, and the
 decode that follows are exercised without a trained model.
 """
 

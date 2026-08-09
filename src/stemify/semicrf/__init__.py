@@ -1,6 +1,6 @@
 """The semi-CRF: the algorithm, and in ``fit/`` the way it is trained.
 
-A learned, global note decoder over per-frame ``Cues`` (contrast the greedy
+A learned, global note decoder over per-frame ``Frames`` (contrast the greedy
 ``GreedyDecoder``). One package rather than a decode half under ``core`` and a training
 half under ``training``: the two were split by *layer* and reached across the seam into
 each other's internals -- ``gold``, ``window``, ``constants`` and ``spans`` were all
@@ -14,8 +14,9 @@ inference imports this package without pulling in a dataset, a loss or a loader.
 package composes:
 
   - ``constants`` -- grid stride, segment labels, duration edges.
-  - ``tensor_cues`` -- ``TensorCues``, the training-side twin of ``Cues``, and the
-    one-device rule its fields obey.
+  - ``placement`` -- the one-device rule the recurrence's arithmetic depends on, and
+    the ``as_tensor`` placement that lets one DP read a numpy ``Frames`` as constants
+    and a grad-bearing one as graph nodes.
   - ``cumsums`` -- the prefix sums that make a span score O(1) in its length. They
     change when a span *feature* is added or retired.
   - ``evidence`` -- ``Evidence`` and ``build_evidence``: the per-frame tensors the scan
@@ -42,16 +43,15 @@ when the labelling rule changes, the second when the scorer does. ``semiring`` a
 *worth*, the other how competing segmentations are *combined*, and a new potential
 touches neither the loop nor the algebra.
 
-Public surface: ``SemiCRFDecoder``, ``TensorCues``, ``SpanScorer`` for anyone
+Public surface: ``SemiCRFDecoder``, ``SpanScorer`` for anyone
 implementing a new potential, and ``Semiring`` for anyone implementing a new reduction.
 """
 
 from stemify.semicrf.decoder import SemiCRFDecoder
 from stemify.semicrf.semiring import LOG, MAX_PLUS, Semiring
-from stemify.semicrf.tensor_cues import TensorCues
 from stemify.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
 
 __all__ = [
     "LOG", "MAX_PLUS", "Grid", "LinearSpanScorer", "SemiCRFDecoder", "Semiring",
-    "SpanScorer", "TensorCues",
+    "SpanScorer",
 ]

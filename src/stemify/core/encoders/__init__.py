@@ -1,4 +1,4 @@
-"""Encoders: audio -> ``Cues`` (the cue-production stage).
+"""Encoders: audio -> ``Frames`` (the evidence-production stage).
 
 ``Encoder`` is the contract and ``ClassicalEncoder`` (pyin + spectral flux) is the DSP
 implementation. The learned one, ``LearnedEncoder``, is not here at all: it wraps a

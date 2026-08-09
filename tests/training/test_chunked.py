@@ -17,7 +17,7 @@ from stemify.core.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.conditions import CONDITIONS
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
@@ -240,7 +240,11 @@ def _cues(frame_times, contour):
     k = np.round(frame_times / HOP_S)
     g = (np.abs(np.sin(k * 0.7)) * 0.98 + 0.01).astype(np.float32)
     v = (np.abs(np.cos(k * 0.3)) * 0.98 + 0.01).astype(np.float32)
-    return Cues(contour=contour, onset=g, frame_times=frame_times, voicing=v)
+    return Frames(
+        heads={"onset": g, "voicing": v},
+        frame_times=frame_times,
+        contour=contour,
+    )
 
 
 def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, cache):

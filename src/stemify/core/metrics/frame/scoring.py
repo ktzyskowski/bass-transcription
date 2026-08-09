@@ -1,6 +1,6 @@
-"""The frame-family scorer: pool an encoder's ``Cues`` channels across tracks.
+"""The frame-family scorer: pool an encoder's ``Frames`` channels across tracks.
 
-The peer of ``metrics.note.scoring`` (note pooling), for the frame family. ``Cues``
+The peer of ``metrics.note.scoring`` (note pooling), for the frame family. ``Frames``
 is the encoder's per-frame output: an onset curve, a voicing curve, and a pitch
 contour. Scoring it -- decoder-independent -- is the encoder altitude of the pipeline.
 This module is the *pure* core: it takes, per track, the already-aligned

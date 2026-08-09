@@ -1,13 +1,13 @@
-"""aligned_pairs: turn an item's reference + the encoder's Cues into aligned pairs.
+"""aligned_pairs: turn an item's reference + the encoder's Frames into aligned pairs.
 
 This is where the grid alignment lives (onset impulses, voiced mask, contour onto
-the reference grid), so it is exercised with a hand-built item and Cues -- no audio.
+the reference grid), so it is exercised with a hand-built item and Frames -- no audio.
 """
 
 import numpy as np
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.evaluation.cues import aligned_pairs
 from stemify.core.notes import NoteEvent
 
@@ -29,12 +29,14 @@ class _FakeItem:
         return [NoteEvent(onset=self._onset, offset=self._onset + 0.05, midi_pitch=45.0)]
 
 
-def _cues(with_voicing: bool) -> Cues:
-    return Cues(
-        contour=Contour(times=FRAME_TIMES, freqs=np.full(12, 110.0)),
-        onset=np.zeros(12, dtype=np.float32),
+def _cues(with_voicing: bool) -> Frames:
+    heads = {"onset": np.zeros(12, dtype=np.float32)}
+    if with_voicing:
+        heads["voicing"] = np.ones(12, dtype=np.float32)
+    return Frames(
+        heads=heads,
         frame_times=FRAME_TIMES,
-        voicing=np.ones(12, dtype=np.float32) if with_voicing else None,
+        contour=Contour(times=FRAME_TIMES, freqs=np.full(12, 110.0)),
     )
 
 

@@ -1,6 +1,6 @@
 """``Sources``: the audio a track offers an encoder, keyed by role.
 
-The input peer of ``Cues``. Different encoders consume different audio -- the DSP
+The input peer of ``Frames``. Different encoders consume different audio -- the DSP
 floor needs only the bass stem, a mix-conditioned neural encoder needs the bass
 stem *and* the original mixture (to learn that a low transient in the bass which
 lines up with a kick in the mix is bleed, not a re-pluck). A single ``audio_path``
@@ -9,7 +9,7 @@ needs.
 
 This carries *only audio*. Pitch is not here: producing the pitch contour is the
 encoder's own job (pyin today, a learned pitch head later), so it comes out in the
-``Cues``, never in as a parameter -- that is what lets a learned-pitch encoder drop
+``Frames``, never in as a parameter -- that is what lets a learned-pitch encoder drop
 in without changing the interface.
 
 ``bass`` is always present -- it is what gets transcribed, whether an isolated bass

@@ -41,7 +41,7 @@ from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.data.base import Dataset
 from stemify.core.features import FrameFeatures, extract_features, stack_channels
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
@@ -113,10 +113,10 @@ class ValItem:
 # validator cannot. That is what keeps a pitch-head run from touching pyin: nothing
 # reads ``ex.contour``, so nothing computes it.
 SegmentFn = Callable[[ValItem], list[NoteEvent]]
-# The encode step: one val example -> the encoder's Cues. Used for cues-level scoring
+# The encode step: one val example -> the encoder's Frames. Used for cues-level scoring
 # (onset + voicing head quality) -- a checkpoint's LearnedEncoder.encode_features,
 # so the validator stays model-agnostic.
-EncodeFn = Callable[[ValItem], Cues]
+EncodeFn = Callable[[ValItem], Frames]
 
 
 def score_examples(
@@ -171,7 +171,7 @@ def score_cues_examples(
     """Cues-level (encoder) quality over precomputed val examples: onset-curve and
     voicing-head, both threshold-free, in one model pass per track.
 
-    For each example, encode its cached features + contour into ``Cues`` and turn
+    For each example, encode its cached features + contour into ``Frames`` and turn
     that into the aligned per-channel pairs ``score_cues`` pools: onset (curve vs an
     impulse target built from the reference note onsets on the CQT grid) and voicing
     (P(voiced) vs the cached voiced label). Pitch is *not* scored here -- pyin pitch
@@ -182,14 +182,20 @@ def score_cues_examples(
     the offline harness."""
     tracks: list[AlignedPairs] = []
     for ex in examples:
-        cues = encode(ex)
+        frames = encode(ex)
         onset_true = onset_targets(
-            np.array([n.onset for n in ex.notes], dtype=float), cues.frame_times
+            np.array([n.onset for n in ex.notes], dtype=float), frames.frame_times
         )
         voicing = None
-        if cues.voicing is not None and ex.voicing_target is not None:
-            voicing = (cues.voicing, ex.voicing_target)
-        tracks.append(AlignedPairs(onset=(cues.onset, onset_true), voicing=voicing))
+        # `asarray`, because `Frames` holds tensors under training and numpy at decode
+        # and the metrics are numpy. It is a view on a CPU tensor and raises on a CUDA
+        # one -- correct either way: a validator scoring accelerator-resident evidence
+        # would silently pin the graph it came from.
+        if frames.voicing is not None and ex.voicing_target is not None:
+            voicing = (np.asarray(frames.voicing), ex.voicing_target)
+        tracks.append(
+            AlignedPairs(onset=(np.asarray(frames.onset), onset_true), voicing=voicing)
+        )
     return score_cues(tracks)
 
 
@@ -385,7 +391,7 @@ def build_eval_fn(
         # reads ``ex.contour``, so the deferred source is never called.
         needs_contour = encoder.pitch_source == "pyin"
 
-        def encode(ex: ValItem) -> Cues:
+        def encode(ex: ValItem) -> Frames:
             contour = ex.contour if needs_contour else None
             return encoder.encode_features(contour, ex.load_features())
 

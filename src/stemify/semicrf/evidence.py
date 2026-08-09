@@ -1,4 +1,4 @@
-"""``Cues | TensorCues`` -> the per-frame tensors the DP scans, and how spans read them.
+"""``Frames`` -> the per-frame tensors the DP scans, and how spans read them.
 
 ``Evidence`` is **always batched**: one track is a batch of one. There is no separate
 single-track type, because the two differed only in a leading axis while duplicating
@@ -19,8 +19,8 @@ head, at the CQT grid rather than pyin's coarser one, and with a gradient. Keepi
 meant the contour was a hard dependency of the *model*, not just of the data pipeline.
 A contour is still read to name a decoded note's pitch, and is optional there.
 
-``torch.as_tensor`` is the load-bearing trick throughout: it treats a numpy ``Cues``
-field as a constant (inference/decode) and a ``TensorCues`` tensor as a graph node
+``torch.as_tensor`` is the load-bearing trick throughout: it treats numpy ``Frames``
+field as a constant (inference/decode) and a a tensor field as a graph node
 (training), so one builder serves both and the DP is backend-agnostic.
 """
 
@@ -34,13 +34,13 @@ import numpy as np
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.features import BINS_PER_SEMITONE
 from stemify.semicrf.cumsums import (
     pitch_cumsums, pitch_logprob_cumsum, voiced_logcumsum,
 )
-from stemify.semicrf.tensor_cues import (
-    TensorCues, check_one_device, cues_device, on_device,
+from stemify.semicrf.placement import (
+    check_one_device, frames_device, on_device,
 )
 
 # A span index: an int for a single span, or a tensor when the scan broadcasts a
@@ -57,8 +57,8 @@ class Evidence:
 
     **Device invariant: every tensor field lives on one device.** The DP adds them
     term by term, so a split is a hard error the moment the encoder is not on CPU.
-    The fields descend from ``TensorCues``' grad-bearing tensors and follow the encoder
-    onto its accelerator; a numpy ``Cues`` is placed explicitly by ``build_evidence``.
+    The fields descend from ``Frames``' grad-bearing tensors and follow the encoder
+    onto its accelerator; numpy ``Frames`` is placed explicitly by ``build_evidence``.
 
     Ragged tracks are padded to a common length: ``onset_logit`` pads with 0 and the
     cumsums pad **flat** (last value repeated), so no voiced or onset mass accrues past
@@ -234,7 +234,7 @@ class Evidence:
 
 
 def _track_tensors(
-    cues: Cues | TensorCues, stride: int, device: torch.device
+    cues: Frames, stride: int, device: torch.device
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -266,7 +266,7 @@ def _track_tensors(
 
 
 def build_evidence(
-    cues: Cues | TensorCues | Sequence[Cues | TensorCues],
+    cues: Frames | Sequence[Frames],
     stride: int,
     device: torch.device | str | None = None,
 ) -> Evidence:
@@ -275,18 +275,18 @@ def build_evidence(
     ``device`` is the single placement every field is built onto, establishing the
     one-device invariant. Callers that own the scorer pass *its* module's device, so a
     numpy-born field follows the parameters it will be added to -- which is what makes
-    a numpy ``Cues`` decodable by a module on an accelerator.
+    numpy ``Frames`` decodable by a module on an accelerator.
 
     Padding is grad-preserving: the per-track tensors are scattered into buffers
     allocated off the first track."""
-    # `Sequence`, not `list`: the parameter is widened so a `list[TensorCues]` from the
+    # `Sequence`, not `list`: the parameter is widened so a `list[Frames]` from the
     # training loop is accepted (a `list` is invariant in its element type, so it is not
-    # a `list[Cues | TensorCues]`). Dispatching on `list` while accepting `Sequence`
+    # a `list[Frames]`). Dispatching on `list` while accepting `Sequence`
     # would send a tuple of tracks down the single-track branch.
     batch = list(cues) if isinstance(cues, Sequence) else [cues]
     if not batch:
         raise ValueError("build_evidence needs at least one track")
-    device = cues_device(batch[0]) if device is None else torch.device(device)
+    device = frames_device(batch[0]) if device is None else torch.device(device)
 
     built = [_track_tensors(c, stride, device) for c in batch]
     lengths = [int(t[0].shape[0]) for t in built]

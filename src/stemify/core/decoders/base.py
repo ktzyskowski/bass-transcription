@@ -1,4 +1,4 @@
-"""The ``Decoder`` interface: ``Cues`` -> note events.
+"""The ``Decoder`` interface: ``Frames`` -> note events.
 
 A decoder is the *decode* half of the note pipeline: it turns per-frame cues into
 discrete ``NoteEvent``s, deciding where notes begin and end and assembling frames
@@ -14,28 +14,29 @@ standard dichotomy, and it is exactly the two implementations here:
     whole track under learned potentials. It has no merge pass: a duration potential
     makes fragmentation globally costly, so merging is *subsumed*, not bolted on.
 
-Decoders never invent pitch -- it comes from ``cues.contour``. They are siblings
-under one interface so the same ``Cues`` can be decoded either way, and so the
-trainable ``SemiCRFDecoder`` can slot in where the greedy one sits.
+Decoders never invent pitch: it comes from ``frames.contour``, or from the pitch head's
+own per-bin logits where a decoder scores those. They are siblings under one interface
+so the same ``Frames`` can be decoded either way, and so the trainable
+``SemiCRFDecoder`` can slot in where the greedy one sits.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.notes import NoteEvent
 
 
 class Decoder(ABC):
-    """Turns per-frame ``Cues`` into note events."""
+    """Turns per-frame ``Frames`` into note events."""
 
     name: str
 
     @abstractmethod
-    def decode(self, cues: Cues) -> list[NoteEvent]:
-        """The notes implied by ``cues``."""
+    def decode(self, frames: Frames) -> list[NoteEvent]:
+        """The notes implied by ``frames``."""
 
-    def decode_batch(self, cues: Sequence[Cues]) -> list[list[NoteEvent]]:
+    def decode_batch(self, frames: Sequence[Frames]) -> list[list[NoteEvent]]:
         """Notes for several tracks at once, one list per input.
 
         Defaults to decoding them one at a time, which is what every decoder does
@@ -51,4 +52,4 @@ class Decoder(ABC):
         a few hundred elements per step -- so batching it is worth roughly the batch
         factor, and the default keeps everything else working meanwhile.
         """
-        return [self.decode(c) for c in cues]
+        return [self.decode(f) for f in frames]

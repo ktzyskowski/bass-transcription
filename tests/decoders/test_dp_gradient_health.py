@@ -21,7 +21,8 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.semicrf import SemiCRFDecoder, TensorCues
+from stemify.models.frames import frames_from_logits
+from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.window import initial_window
 from stemify.core.features import N_BINS
@@ -46,7 +47,7 @@ def _backward(
         (torch.randn(T, N_BINS) * pitch_scale).requires_grad_(True)
         if pitch_scale is not None else None
     )
-    cues = TensorCues.from_logits(None, onset, TIMES, voicing, pitch)
+    cues = frames_from_logits(TIMES, onset=onset, voicing=voicing, pitch=pitch)
 
     decoder = SemiCRFDecoder(stride=3)
     with torch.no_grad():

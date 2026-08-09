@@ -13,8 +13,9 @@ import pytest
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
-from stemify.semicrf import SemiCRFDecoder, TensorCues
+from stemify.core.frames import Frames
+from stemify.models.frames import frames_from_logits
+from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import NOTE, REST, START
 from stemify.semicrf.forward import (
     chunk_log_partition,
@@ -50,8 +51,8 @@ def _curve(spans: list[tuple[float, float]], hi: float, lo: float) -> np.ndarray
 
 def _two_note_cues(
     note_spans: list[tuple[float, float]], pitches_hz: list[float]
-) -> Cues:
-    """Cues for held notes: an onset spike at each start, voicing high inside the
+) -> Frames:
+    """Frames for held notes: an onset spike at each start, voicing high inside the
     notes, and a contour holding each note's pitch (unvoiced between)."""
     onset = np.full(T, 0.01, dtype=np.float32)
     for a, _ in note_spans:
@@ -60,9 +61,10 @@ def _two_note_cues(
     freqs = np.zeros(T, dtype=np.float32)
     for (a, b), hz in zip(note_spans, pitches_hz, strict=True):
         freqs[(TIMES >= a) & (TIMES < b)] = hz
-    return Cues(
+    return Frames(
+        heads={"onset": onset, "voicing": voicing},
+        frame_times=TIMES,
         contour=Contour(times=TIMES, freqs=freqs),
-        onset=onset, frame_times=TIMES, voicing=voicing,
     )
 
 
@@ -174,9 +176,10 @@ def test_gold_scores_batched_equals_per_track():
     dec = _fitted_scorer(SemiCRFDecoder())
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
-    short = Cues(
+    short = Frames(
+        heads={"onset": a.onset[:120], "voicing": a.voicing[:120]},
+        frame_times=TIMES[:120],
         contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
-        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
     )
     ns = _notes([(0.2, 0.9)], [45])
 
@@ -230,9 +233,10 @@ def _long_emissions(dec, seconds=25.0, seed=0):
     onset = rng.uniform(0.01, 0.99, n).astype(np.float32)
     voicing = rng.uniform(0.01, 0.99, n).astype(np.float32)
     freqs = np.where(voicing > 0.5, 110.0, 0.0).astype(np.float32)
-    cues = Cues(
+    cues = Frames(
+        heads={"onset": onset, "voicing": voicing},
+        frame_times=times,
         contour=Contour(times=times, freqs=freqs),
-        onset=onset, frame_times=times, voicing=voicing,
     )
     return build_evidence(cues, dec.stride)
 
@@ -726,9 +730,10 @@ def test_chunk_log_partition_rejects_ragged_lengths():
     dec = SemiCRFDecoder()
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     ea = build_evidence(a, dec.stride)
-    short = Cues(
+    short = Frames(
+        heads={"onset": a.onset[:120], "voicing": a.voicing[:120]},
+        frame_times=TIMES[:120],
         contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
-        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
     )
     grid = dec.scorer.grid(ea.frame_times[0])
     ragged = build_evidence([a, short], dec.stride)
@@ -754,9 +759,9 @@ def test_nll_is_differentiable_and_trains_down():
     assert dec.nll(cues, notes).item() < first.item()
 
 
-def test_nll_grad_reaches_the_encoder_through_tensor_cues():
+def test_nll_grad_reaches_the_encoder_through_grad_bearing_frames():
     # A stand-in "encoder": a learnable bias added to the onset logits. If the CRF
-    # loss puts gradient on it through TensorCues, the same path reaches a real
+    # loss puts gradient on it through grad-bearing Frames, the same path reaches a real
     # backbone's heads -- this is what makes end-to-end training possible.
     dec = SemiCRFDecoder()
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
@@ -765,15 +770,16 @@ def test_nll_grad_reaches_the_encoder_through_tensor_cues():
     voicing_logit = torch.logit(torch.from_numpy(cues.voicing).clamp(1e-6, 1 - 1e-6))
     bias = torch.zeros(1, requires_grad=True)  # the "encoder parameter"
 
-    tcues = TensorCues.from_logits(
-        cues.contour, onset_logit + bias, cues.frame_times, voicing_logit
+    tcues = frames_from_logits(
+        cues.frame_times, onset=onset_logit + bias, voicing=voicing_logit,
+        contour=cues.contour,
     )
     dec.nll(tcues, notes).backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
 
 
 def test_numpy_cues_nll_does_not_reach_the_inputs():
-    # The inference path: a numpy Cues is a constant, so the loss is differentiable
+    # The inference path: a numpy Frames is a constant, so the loss is differentiable
     # only in the CRF's own potentials -- never the (already-computed) cues.
     dec = SemiCRFDecoder()
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
@@ -807,9 +813,10 @@ def test_batched_nll_equals_single_track_padded():
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     # a shorter track, so the batch pads
-    short = Cues(
+    short = Frames(
+        heads={"onset": a.onset[:120], "voicing": a.voicing[:120]},
+        frame_times=TIMES[:120],
         contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
-        onset=a.onset[:120], frame_times=TIMES[:120], voicing=a.voicing[:120],
     )
     ns = _notes([(0.2, 0.9)], [45])
 
@@ -826,7 +833,9 @@ def test_batched_nll_grad_survives_padding():
     bias = torch.zeros(1, requires_grad=True)
     onset_logit = torch.logit(torch.from_numpy(a.onset).clamp(1e-6, 1 - 1e-6)) + bias
     voicing_logit = torch.logit(torch.from_numpy(a.voicing).clamp(1e-6, 1 - 1e-6))
-    tcues = TensorCues.from_logits(a.contour, onset_logit, a.frame_times, voicing_logit)
+    tcues = frames_from_logits(
+        a.frame_times, onset=onset_logit, voicing=voicing_logit, contour=a.contour
+    )
 
     short = _two_note_cues([(0.3, 0.8)], [98.0])
     dec.nll_batch(
@@ -843,19 +852,20 @@ def test_batched_nll_grad_survives_padding():
 # (built from the numpy contour). These tests are what keep that from returning.
 
 
-def _tensor_cues(cues: Cues, device, bias: torch.Tensor | None = None) -> TensorCues:
-    """``cues`` as the grad-bearing TensorCues an encoder on ``device`` would emit.
+def _tensor_cues(cues: Frames, device, bias: torch.Tensor | None = None) -> Frames:
+    """``cues`` as the grad-bearing ``Frames`` an encoder on ``device`` would emit.
     ``bias`` stands in for an encoder parameter, so grad has somewhere to land."""
     onset_logit = torch.logit(torch.from_numpy(cues.onset).clamp(1e-6, 1 - 1e-6)).to(device)
     voicing_logit = torch.logit(torch.from_numpy(cues.voicing).clamp(1e-6, 1 - 1e-6)).to(device)
     if bias is not None:
         onset_logit = onset_logit + bias
-    return TensorCues.from_logits(
-        cues.contour, onset_logit, cues.frame_times, voicing_logit
+    return frames_from_logits(
+        cues.frame_times, onset=onset_logit, voicing=voicing_logit,
+        contour=cues.contour,
     )
 
 
-def _fitted(cues: Cues, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDecoder:
+def _fitted(cues: Frames, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDecoder:
     dec = SemiCRFDecoder()
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(steps):
@@ -866,7 +876,7 @@ def _fitted(cues: Cues, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDeco
 
 
 def test_numpy_cues_decode_on_device(device):
-    # The offline-eval path: numpy Cues have no device of their own, so the module's
+    # The offline-eval path: numpy Frames have no device of their own, so the module's
     # placement is the authority and the emissions must follow the parameters.
     dec = SemiCRFDecoder().to(device)
     cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
@@ -940,11 +950,10 @@ def test_evidence_rejects_fields_on_different_devices():
 
 
 def test_decode_empty_contour_is_no_notes():
-    empty = Cues(
-        contour=Contour.empty(),
-        onset=np.zeros(0, dtype=np.float32),
+    empty = Frames(
+        heads={"onset": np.zeros(0, dtype=np.float32)},
         frame_times=np.zeros(0),
-        voicing=None,
+        contour=Contour.empty(),
     )
     assert SemiCRFDecoder().decode(empty) == []
 
@@ -952,7 +961,11 @@ def test_decode_empty_contour_is_no_notes():
 def test_decode_without_voicing_head_falls_back_to_contour():
     # No voicing curve: voicing derives from the contour's own voiced mask.
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    cues = Cues(contour=cues.contour, onset=cues.onset, frame_times=cues.frame_times)
+    cues = Frames(
+        heads={"onset": cues.onset},
+        frame_times=cues.frame_times,
+        contour=cues.contour,
+    )
     dec = SemiCRFDecoder()
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
@@ -970,11 +983,13 @@ def test_the_dp_runs_with_no_contour_at_all():
     T = 60
     ft = np.arange(T) * DT
     rng = np.random.default_rng(0)
-    cues = TensorCues(
-        contour=None,
-        onset=torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+    cues = Frames(
+        heads={
+            "onset": torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+            "voicing": torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+        },
         frame_times=ft,
-        voicing=torch.sigmoid(torch.from_numpy(rng.standard_normal(T)).float()),
+        contour=None,
     )
     dec = SemiCRFDecoder()
     notes = _notes([(0.1, 0.4), (0.5, 0.6)], [45, 50])
@@ -987,11 +1002,10 @@ def test_decoding_without_a_contour_says_why():
     # The DP scores spans with no contour, but a NoteEvent needs a pitch. That has to
     # fail with the reason, not an IndexError three frames deep.
     T = 30
-    cues = TensorCues(
-        contour=None,
-        onset=torch.zeros(T),
+    cues = Frames(
+        heads={"onset": torch.zeros(T), "voicing": torch.full((T,), 0.9)},
         frame_times=np.arange(T) * DT,
-        voicing=torch.full((T,), 0.9),
+        contour=None,
     )
     with pytest.raises(ValueError, match="no contour"):
         SemiCRFDecoder().decode(cues)
@@ -1002,8 +1016,10 @@ def test_no_voicing_head_and_no_contour_is_refused():
     # source, "everything is voiced" would be a plausible number for a question the
     # model was never asked.
     T = 30
-    cues = TensorCues(
-        contour=None, onset=torch.zeros(T), frame_times=np.arange(T) * DT, voicing=None,
+    cues = Frames(
+        heads={"onset": torch.zeros(T)},
+        frame_times=np.arange(T) * DT,
+        contour=None,
     )
     with pytest.raises(ValueError, match="no voicing signal"):
         SemiCRFDecoder().nll(cues, _notes([(0.1, 0.2)], [45]))
@@ -1011,8 +1027,8 @@ def test_no_voicing_head_and_no_contour_is_refused():
 
 def test_the_learned_pitch_features_survive_into_inference():
     # The DP's `path_length` and `pitch_spread` are functions of the pitch head's
-    # per-bin logits. Training passes them through TensorCues; inference builds a numpy
-    # Cues. If only one of those carries the logits, a checkpoint decodes as though
+    # per-bin logits. Training and inference now build the same `Frames`; when they
+    # were two types and only one carried the logits, a checkpoint decoded as though
     # w_path and w_spread were zero however they were fitted -- and nothing fails,
     # because the discrepancy only exists after training.
     T, K = 40, 216
@@ -1026,16 +1042,19 @@ def test_the_learned_pitch_features_survive_into_inference():
     logits[: T // 2, 40] = 12.0
     logits[T // 2 :, 55] = 12.0
 
-    at_inference = Cues(
-        contour=contour, onset=onset, frame_times=ft, voicing=voicing,
-        pitch_logits=logits,
-    )
-    in_training = TensorCues(
-        contour=contour,
-        onset=torch.from_numpy(onset),
+    at_inference = Frames(
+        heads={"onset": onset, "voicing": voicing, "pitch": logits},
         frame_times=ft,
-        voicing=torch.from_numpy(voicing),
-        pitch_logits=torch.from_numpy(logits),
+        contour=contour,
+    )
+    in_training = Frames(
+        heads={
+            "onset": torch.from_numpy(onset),
+            "voicing": torch.from_numpy(voicing),
+            "pitch": torch.from_numpy(logits),
+        },
+        frame_times=ft,
+        contour=contour,
     )
 
     dec = SemiCRFDecoder(stride=1)

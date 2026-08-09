@@ -18,7 +18,7 @@ thing satisfying it. ``Encoder`` and ``PitchEstimator`` are core ABCs precisely 
 ``ClassicalEncoder``/``PyinPitch`` (DSP, no torch) and ``LearnedEncoder``/``NeuralPitch``
 (a ``CueNet``) can both wear them without either knowing about the other.
 
-    core/       Encoder, PitchEstimator, Decoder, Cues, Contour -- the contracts
+    core/       Encoder, PitchEstimator, Decoder, Frames, Contour -- the contracts
     models/     TCN -> CueNet -> heads, plus LearnedEncoder and NeuralPitch
     training/   fits a CueNet; imports this directly, never through an encoder
 

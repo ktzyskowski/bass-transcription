@@ -11,7 +11,7 @@ truncated file that the next run trusts as a cache hit.
 
 ``CachedItem`` lives here rather than beside the cache because it *is* a persistence
 container -- its whole reason to exist is the on-disk split-layout below -- so it
-belongs with its format, unlike ``Contour``/``NoteEvent``/``Cues`` which are values
+belongs with its format, unlike ``Contour``/``NoteEvent``/``Frames`` which are values
 that happen to be persisted.
 """
 

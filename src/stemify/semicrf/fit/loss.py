@@ -33,7 +33,8 @@ from collections.abc import Iterable, Mapping, Sequence
 import torch
 from torch import nn
 
-from stemify.semicrf import SemiCRFDecoder, TensorCues
+from stemify.models.frames import frames_from_output
+from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.window import initial_window
 from stemify.training.base import Loss
 from stemify.semicrf.fit.dataset import ChunkBatch
@@ -97,7 +98,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         tuned last.
 
         Declared rather than inferred from what the batch happens to carry. "Score it
-        if a pitch target turns up" is the same shape as the bug where ``Cues`` lacked
+        if a pitch target turns up" is the same shape as the bug where the cue bundle lacked
         ``pitch_logits`` and the span features silently read zero: the failure is a
         term quietly not applied, which no loss curve shows.
         """
@@ -237,24 +238,15 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         self, model: nn.Module, batch: ChunkBatch, device: torch.device
     ) -> tuple[torch.Tensor, dict[str, float]]:
         out = model(batch.features.to(device))       # {head: (B, window, 1)}
-        onset = out["onset"].squeeze(-1)
-        voicing = out["voicing"].squeeze(-1) if "voicing" in out else None
-        # (B, T, K) -- the CRF's path/spread features read these.
-        pitch = out["pitch"] if "pitch" in out else None
-
         # No contour: nothing the scan reads needs one, and every recipe builds a
         # voicing head, so the fallback that used to want it is unreachable here.
-        cues_list = [
-            TensorCues.from_logits(
-                None, onset[b], batch.frame_times[b],
-                voicing[b] if voicing is not None else None,
-                pitch[b] if pitch is not None else None,
-            )
-            for b in range(len(batch))
-        ]
+        # This is the *same* adapter ``LearnedEncoder`` runs at inference, which is what
+        # stops the two paths from disagreeing about what an onset value is -- they used
+        # to squash and squeeze in two places, agreeing only by inspection.
+        frames_list = frames_from_output(out, batch.frame_times)
         carry, prev_A = self._resume(batch, device)
         A, gold, window = self.decoder.nll_chunk(
-            cues_list, batch.golds, carry, batch.context, batch.right
+            frames_list, batch.golds, carry, batch.context, batch.right
         )
         # The telescoping term. Mean over rows so the loss is per-track rather than
         # per-batch, then divided by the frames it scored so it is a *rate*.

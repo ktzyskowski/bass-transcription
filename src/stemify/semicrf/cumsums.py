@@ -15,7 +15,7 @@ import torch
 
 from stemify.core.contour import Contour
 from stemify.core.features import BINS_PER_SEMITONE
-from stemify.semicrf.tensor_cues import on_device
+from stemify.semicrf.placement import on_device
 from stemify.core.grids import resample_mask
 
 

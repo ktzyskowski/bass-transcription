@@ -4,7 +4,7 @@ The trainable core a ``LearnedEncoder`` wraps. ``heads`` may hold one entry (tra
 onset alone) or several (joint); the backbone is shared across whatever heads are
 present. The backbone is named ``backbone``, not ``encoder`` -- it is the temporal
 network (``TCN``), distinct from the pipeline ``Encoder`` that turns audio into
-``Cues``.
+``Frames``.
 """
 
 import torch

@@ -9,11 +9,11 @@ into the objective and never produced.
 
 Two faces over the same recurrence:
 
-  - ``decode(cues) -> notes`` runs segmental **Viterbi** for the single best
+  - ``decode(frames) -> notes`` runs segmental **Viterbi** for the single best
     segmentation, then reads a pitch per ``note`` span. The ``Decoder`` interface.
   - ``nll(...)`` / ``nll_batch(...)`` / ``nll_chunk(...)`` run the segmental **forward**
-    algorithm for ``log Z`` and subtract the gold score. With a ``TensorCues`` the
-    gradient reaches the encoder; with a numpy ``Cues`` it is an inference-only score.
+    algorithm for ``log Z`` and subtract the gold score. Over grad-bearing ``Frames``
+    the gradient reaches the encoder; over numpy ones it is an inference-only score.
 
 Pitch is never invented: it is read from the contour after decoding, exactly as the
 greedy decoder does. See ``docs/semi-crf.md``, which carries the theory and a ledger of
@@ -27,11 +27,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.decoders.base import Decoder
 from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, NOTE, STRIDE
 from stemify.semicrf.evidence import Evidence, build_evidence
-from stemify.semicrf.tensor_cues import TensorCues
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.score import segmentation_scores
@@ -75,28 +74,29 @@ class SemiCRFDecoder(Decoder, nn.Module):
     def device(self) -> torch.device:
         """Where the scorer lives -- and so where the evidence is built.
 
-        The module is the authority on placement, not the cues: a numpy ``Cues`` has no
-        device of its own, and the DP adds its evidence straight to the parameters.
-        Sourcing it here is what lets a CUDA-resident decoder score CPU-born cues."""
+        The module is the authority on placement, not the evidence: numpy ``Frames`` have
+        no device of their own, and the DP adds its evidence straight to the
+        parameters. Sourcing it here lets a CUDA-resident decoder score CPU-born
+        evidence."""
         return next(self.scorer.parameters()).device
 
     def _prepare(
-        self, cues_list: Sequence[Cues | TensorCues]
+        self, frames_list: Sequence[Frames]
     ) -> tuple[Evidence, Grid]:
         """Evidence for a batch, and the ``Grid`` its tracks share.
 
         All tracks come off one feature hop, so the grid is derived once from the first
         rather than per track."""
-        ev = build_evidence(cues_list, self.stride, self.device)
+        ev = build_evidence(frames_list, self.stride, self.device)
         return ev, self.scorer.grid(ev.frame_times[0])
 
-    def nll(self, cues: Cues | TensorCues, notes: list[NoteEvent]) -> torch.Tensor:
+    def nll(self, frames: Frames, notes: list[NoteEvent]) -> torch.Tensor:
         """``log Z - score(gold)`` for one track -- the batch of one."""
-        return self.nll_batch([cues], [notes])[0]
+        return self.nll_batch([frames], [notes])[0]
 
     def nll_batch(
         self,
-        cues_list: Sequence[Cues | TensorCues],
+        frames_list: Sequence[Frames],
         notes_list: Sequence[list[NoteEvent]],
     ) -> torch.Tensor:
         """Per-track NLL ``(B,)``: one batched ``log Z`` scan over the padded evidence,
@@ -104,7 +104,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
         Both halves read the *same* padded batch: gold indices never reach past a
         track's true length, so the flat padding beyond it is never gathered."""
-        ev, grid = self._prepare(cues_list)
+        ev, grid = self._prepare(frames_list)
         golds = [
             gold_segments(ft, n, grid.dmax)
             for ft, n in zip(ev.frame_times, notes_list, strict=True)
@@ -115,7 +115,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
     def nll_chunk(
         self,
-        cues_list: Sequence[Cues | TensorCues],
+        frames_list: Sequence[Frames],
         golds: list[list[tuple[int, int, int]]],
         carry: torch.Tensor | None,
         context: int,
@@ -132,14 +132,14 @@ class SemiCRFDecoder(Decoder, nn.Module):
         chunk, which is what makes the pieces tile it exactly and the losses telescope.
         Deriving it per chunk would re-run the audible-gap rule on a truncated view and
         silently disagree at the seams."""
-        ev, grid = self._prepare(cues_list)
+        ev, grid = self._prepare(frames_list)
         A, window = chunk_log_partition(self.scorer, ev, grid, carry, context, right)
         return A, segmentation_scores(self.scorer, ev, golds, grid), window
 
     def decode(
-        self, cues: Cues, note_bias: float = 0.0, with_confidence: bool = False
+        self, frames: Frames, note_bias: float = 0.0, with_confidence: bool = False
     ) -> list[NoteEvent]:
-        """The notes implied by ``cues`` under the learned scorer (Viterbi).
+        """The notes implied by ``frames`` under the learned scorer (Viterbi).
 
         ``with_confidence`` attaches each note's posterior, ``P(span | x)``, which
         Viterbi itself cannot report -- it returns the best path and says nothing about
@@ -153,7 +153,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
         is what said the collapse was a readout and not a worse model. Deliberately a
         call-site argument that nothing persists -- the pipeline decodes uncorrected,
         so no result can silently acquire a constant fitted to somebody's val set."""
-        ev, grid = self._prepare([cues])
+        ev, grid = self._prepare([frames])
         if ev.lengths[0] == 0:
             return []
         segs = viterbi(self.scorer, ev, grid, note_bias)
@@ -181,7 +181,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
             raise ValueError(
                 "cannot name note pitches: this Evidence carries no contour. The DP "
                 "scores spans without one, but a NoteEvent needs a pitch -- decode "
-                "through cues from an encoder (pyin or a pitch head), not a "
+                "through Frames from an encoder (pyin or a pitch head), not a "
                 "contour-less training batch."
             )
         ft, contour = ev.frame_times[0], ev.contours[0]

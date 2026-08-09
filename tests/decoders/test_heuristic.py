@@ -1,14 +1,14 @@
 """GreedyDecoder / group_contour -- the greedy decode core, no audio.
 
 group_contour is exercised with synthetic contours and hand-picked cues; the decoder
-is exercised through Cues (a per-frame onset curve + optional voicing curve), so the
+is exercised through Frames (a per-frame onset curve + optional voicing curve), so the
 peak-pick + threshold + group path is covered without a model.
 """
 
 import numpy as np
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.decoders.greedy import GreedyDecoder, group_contour
 
 T = 100
@@ -32,7 +32,7 @@ def test_group_contour_empty_contour_is_no_notes():
 def test_decoder_peak_picks_the_onset_curve():
     onset = np.zeros(T, dtype=np.float32)
     onset[50] = 1.0  # a single onset spike -> one same-pitch split
-    cues = Cues(contour=_held(), onset=onset, frame_times=TIMES, voicing=None)
+    cues = Frames(heads={"onset": onset}, frame_times=TIMES, contour=_held())
     notes = GreedyDecoder(merge_gap_s=None).decode(cues)
     assert len(notes) == 2
     assert abs(notes[1].onset - 0.5) < 0.02  # the split lands at the spike
@@ -43,9 +43,10 @@ def test_decoder_thresholds_the_voicing_curve_into_rests():
     # the decoder places a rest there and emits two notes.
     voicing = np.ones(T, dtype=np.float32)
     voicing[40:60] = 0.0
-    cues = Cues(
-        contour=_held(), onset=np.zeros(T, dtype=np.float32),
-        frame_times=TIMES, voicing=voicing,
+    cues = Frames(
+        heads={"onset": np.zeros(T, dtype=np.float32), "voicing": voicing},
+        frame_times=TIMES,
+        contour=_held(),
     )
     assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 2
 
@@ -54,8 +55,9 @@ def test_decoder_without_voicing_falls_back_to_contour():
     # No voicing curve: a contour with an unvoiced gap (freqs == 0) still splits.
     freqs = np.full(T, 100.0)
     freqs[40:60] = 0.0
-    cues = Cues(
+    cues = Frames(
+        heads={"onset": np.zeros(T, dtype=np.float32)},
+        frame_times=TIMES,
         contour=Contour(times=TIMES, freqs=freqs),
-        onset=np.zeros(T, dtype=np.float32), frame_times=TIMES, voicing=None,
     )
     assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 2

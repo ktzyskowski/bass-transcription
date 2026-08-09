@@ -3,9 +3,9 @@
     CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ClassicalEncoder()).run()
 
 ``NoteEvaluation`` scores a whole ``Transcriber`` -- "did you find the right notes".
-This scores the *encoder* alone: given the per-frame ``Cues`` it produces, how good
+This scores the *encoder* alone: given the per-frame ``Frames`` it produces, how good
 is the evidence a decoder has to work with? It is the altitude below the notes, and
-it maps onto the three channels of a ``Cues``:
+it maps onto three of a ``Frames``' channels:
 
     onset    OnsetPR         is the onset curve sharp and un-ringing (over-seg, early)
     voicing  VoicingAUROC    does the voicing head rank voiced above rest
@@ -20,7 +20,7 @@ pitch-tracker harness is gone -- measured on the real encoder output, not a base
 
 The pooling/scoring is ``metrics.frame.scoring.score_cues`` (a leaf the async validator shares,
 so the in-training numbers cannot drift from this harness). This module only turns a
-dataset item + the encoder's ``Cues`` into the aligned per-channel pairs it wants:
+dataset item + the encoder's ``Frames`` into the aligned per-channel pairs it wants:
 onset target from the reference notes, voicing target from the reference contour, and
 the contour resampled onto the reference grid for pitch.
 """
@@ -31,7 +31,7 @@ from typing import Any
 
 import numpy as np
 
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.data.base import Dataset, EvalItem
 from stemify.core.encoders.base import Encoder
 from stemify.evaluation.alignment import align
@@ -42,27 +42,35 @@ from stemify.core.labels import onset_targets, voicing_targets
 from stemify.core.transforms import AudioTransform, Identity
 
 
-def aligned_pairs(cues: Cues, item: EvalItem) -> AlignedPairs:
+def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
     """The aligned per-channel pairs for one track: what ``score_cues`` scores.
 
     Onset target is impulses on the frame grid at the reference onsets; voicing target
     is the reference contour's voiced mask resampled onto the frame grid; pitch pairs
     the encoder's own contour (resampled onto the reference grid, voicing-aware) with
-    the reference. Voicing is dropped when the encoder has no voicing head."""
+    the reference. A channel is dropped when the encoder does not produce it -- voicing
+    with no voicing head, pitch with no contour -- rather than scored against a
+    stand-in, so a missing channel is absent from the report instead of contributing a
+    number nothing produced."""
     reference = item.reference()
     onset_true = onset_targets(
         np.array([n.onset for n in item.reference_notes()], dtype=float),
-        cues.frame_times,
+        frames.frame_times,
     )
     voicing = None
-    if cues.voicing is not None:
-        voi_true = voicing_targets(reference.times, reference.voiced, cues.frame_times)
-        voicing = (cues.voicing, voi_true)
-    ref_hz, est_hz = align(reference, cues.contour)
+    if frames.voicing is not None:
+        voi_true = voicing_targets(
+            reference.times, reference.voiced, frames.frame_times
+        )
+        voicing = (np.asarray(frames.voicing), voi_true)
+    pitch = None
+    if frames.contour is not None:
+        ref_hz, est_hz = align(reference, frames.contour)
+        pitch = (est_hz, ref_hz)
     return AlignedPairs(
-        onset=(cues.onset, onset_true),
+        onset=(np.asarray(frames.onset), onset_true),
         voicing=voicing,
-        pitch=(est_hz, ref_hz),
+        pitch=pitch,
     )
 
 

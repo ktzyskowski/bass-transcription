@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.core.notes import NoteEvent
 from stemify.training.checkpoint import VERSION, Checkpoint
@@ -110,14 +110,16 @@ def test_saved_file_records_its_version(tmp_path):
     assert torch.load(path, map_location="cpu", weights_only=False)["version"] == VERSION
 
 
-def _cues(n: int = 120) -> Cues:
+def _cues(n: int = 120) -> Frames:
     ft = np.arange(n) * DT
     rng = np.random.default_rng(0)
-    return Cues(
-        contour=Contour(times=ft, freqs=np.full(n, 110.0, dtype=np.float32)),
-        onset=rng.random(n).astype(np.float32),
+    return Frames(
+        heads={
+            "onset": rng.random(n).astype(np.float32),
+            "voicing": np.full(n, 0.9, dtype=np.float32),
+        },
         frame_times=ft,
-        voicing=np.full(n, 0.9, dtype=np.float32),
+        contour=Contour(times=ft, freqs=np.full(n, 110.0, dtype=np.float32)),
     )
 
 

@@ -1,4 +1,4 @@
-"""score_cues: pool an encoder's Cues channels and score whichever are supplied.
+"""score_cues: pool an encoder's Frames channels and score whichever are supplied.
 
 Pure over aligned (pred, truth) pairs -- no encoder, no audio -- the same core the
 offline harness and the async validator both call, so this pins it once.

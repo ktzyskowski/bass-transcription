@@ -1,7 +1,7 @@
 """``ClassicalEncoder``: the DSP-floor cue producer (no learning).
 
 Pitch from pyin, onsets from spectral flux, no voicing head -- the baseline a
-learned encoder must beat. The onset channel of the ``Cues`` it returns is a
+learned encoder must beat. The onset channel of the ``Frames`` it returns is a
 per-frame indicator (a spike at each flux-detected onset, on the contour grid),
 which the ``GreedyDecoder`` peak-picks back to onset times; voicing is left
 ``None`` so the decoder falls back to the contour's own ``freqs > 0``. Expressed in
@@ -13,7 +13,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.encoders.base import Encoder
 from stemify.core.pitch import PitchEstimator, PyinPitch
 from stemify.core.sources import Sources
@@ -73,7 +73,7 @@ class ClassicalEncoder(Encoder):
         # merge -- useful when measuring how much onset detection contributes.
         self.use_onsets = use_onsets
 
-    def encode(self, sources: Sources) -> Cues:
+    def encode(self, sources: Sources) -> Frames:
         contour = self.pitch.estimate(sources.bass)
         onset = np.zeros(contour.times.shape, dtype=np.float32)
         if self.use_onsets and contour.times.size:
@@ -81,6 +81,8 @@ class ClassicalEncoder(Encoder):
             j = np.searchsorted(contour.times, times)
             j = j[(j >= 0) & (j < contour.times.size)]
             onset[j] = 1.0  # a spike per onset; the decoder peak-picks it back
-        return Cues(
-            contour=contour, onset=onset, frame_times=contour.times, voicing=None
+        # No voicing head, so the key is absent rather than present-and-None: "which
+        # heads exist" is a fact about the producer, and a decoder asks by membership.
+        return Frames(
+            heads={"onset": onset}, frame_times=contour.times, contour=contour
         )

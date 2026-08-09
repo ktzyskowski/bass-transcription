@@ -2,7 +2,7 @@
 
 Runs a ``CueNet`` over a track's CQT to produce per-frame onset (and voicing,
 when the model has that head) probabilities, pairs them with a pitch contour, and
-returns a ``Cues``. The model is fully convolutional over time, so the whole track
+returns a ``Frames``. The model is fully convolutional over time, so the whole track
 goes through in one pass -- no windowing at inference.
 
 Pitch comes from one of two places. A model carrying a ``FrequencyHead`` produces it
@@ -27,16 +27,19 @@ a ``CueNet``: ``Encoder`` is the contract, this is its neural implementation, an
 split is what keeps the DSP path free of torch.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.cues import Cues
+from stemify.core.frames import Frames
 from stemify.core.device import best_device
 from stemify.core.encoders.base import Encoder
 from stemify.core.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.cuenet import CueNet
+from stemify.models.frames import frames_from_output, to_numpy
 from stemify.core.pitch import PitchEstimator, PyinPitch
 from stemify.core.sources import Sources
 
@@ -87,17 +90,14 @@ class LearnedEncoder(Encoder):
         return self.model.in_channels
 
     @torch.no_grad()
-    def _forward(
-        self, features: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
-        """(onset probs, voicing probs, pitch logits) over a whole track's CQT.
+    def _forward(self, features: np.ndarray, frame_times: np.ndarray) -> Frames:
+        """A whole track's CQT -> numpy ``Frames``, contour not yet attached.
 
-        Voicing is ``None`` when the model has no voicing head, so an onset-only
-        checkpoint still encodes (the decoder then falls back to the contour's
-        voicing); pitch logits are ``None`` when it has no pitch head. Pitch is
-        returned as raw logits, not probabilities: ``decode_bins`` normalises across
-        the bin axis, so squashing each bin independently first would be the wrong
-        distribution.
+        Whichever heads the checkpoint carries, and no others: an onset-only model still
+        encodes, and ``"pitch" in frames.heads`` is how a caller asks whether this one
+        produces its own contour. The squashing and the trailing-axis handling are
+        ``models.frames``' job, so this path and the training path cannot disagree about
+        what an onset value *is*.
 
         ``features`` is ``(n_bins, T)`` or, for a mix-conditioned model,
         ``(C, n_bins, T)``; the bare CQT gains the channel axis here so that both
@@ -112,17 +112,11 @@ class LearnedEncoder(Encoder):
                 "the same channels it was trained on."
             )
         out = self.model(x[None].to(self.device))        # (1, C, F, T)
-        onset = torch.sigmoid(out["onset"]).squeeze(-1).squeeze(0).cpu().numpy()
-        voicing = None
-        if "voicing" in out:
-            voicing = torch.sigmoid(out["voicing"]).squeeze(-1).squeeze(0).cpu().numpy()
-        pitch = None
-        if "pitch" in out:
-            pitch = out["pitch"].squeeze(0).cpu().numpy()   # (T, n_bins) logits
-        return onset, voicing, pitch
+        (frames,) = frames_from_output(out, [frame_times])
+        return to_numpy(frames)
 
-    def encode(self, sources: Sources) -> Cues:
-        """``Cues`` for a track, computing whatever the model's input needs.
+    def encode(self, sources: Sources) -> Frames:
+        """``Frames`` for a track, computing whatever the model's input needs.
 
         A mix-conditioned checkpoint reads a second channel from ``sources.mix``.
         No transform is applied to either: at deployment ``bass`` is already
@@ -144,8 +138,8 @@ class LearnedEncoder(Encoder):
 
     def encode_features(
         self, contour: Contour | None, features: FrameFeatures
-    ) -> Cues:
-        """``Cues`` from a precomputed CQT, and a contour only if this encoder needs
+    ) -> Frames:
+        """``Frames`` from a precomputed CQT, and a contour only if this encoder needs
         one -- the cache-friendly path the async validator uses (no CQT recompute).
         ``encode`` is this over a freshly computed CQT.
 
@@ -159,26 +153,26 @@ class LearnedEncoder(Encoder):
         fallback here is how a run reports numbers under a pitch source nobody chose,
         and the difference is worth ~5 F1.
         """
-        onset, voicing, pitch_logits = self._forward(features.values)
+        frames = self._forward(features.values, features.frame_times)
+        pitch_logits, voicing = frames.pitch_logits, frames.voicing
         if pitch_logits is not None and not self.use_pyin:
-            contour = self.contour_from(pitch_logits, features.frame_times, voicing)
+            contour = self.contour_from(
+                np.asarray(pitch_logits),
+                features.frame_times,
+                None if voicing is None else np.asarray(voicing),
+            )
         elif contour is None:
             raise ValueError(
                 f"this encoder's pitch source is {self.pitch_source!r}, so "
                 "encode_features needs a contour: the model has no pitch head "
                 "(or use_pyin was set), and features alone cannot give pitch."
             )
-        return Cues(
-            contour=contour,
-            onset=onset,
-            frame_times=features.frame_times,
-            voicing=voicing,
-            # Carried, not just consumed. The contour above is one *reading* of these
-            # logits; a segmental decoder scores the distribution itself (path length,
-            # spread), so collapsing to the contour here would silently zero those
-            # potentials at decode while training saw them.
-            pitch_logits=pitch_logits,
-        )
+        # Every head rides along untouched, pitch logits included. The contour above is
+        # one *reading* of those logits; a segmental decoder scores the distribution
+        # itself (path length, spread, per-semitone log-probability), so collapsing to
+        # the contour here would silently zero those potentials at decode while
+        # training saw them.
+        return replace(frames, contour=contour)
 
     def contour_from(
         self,

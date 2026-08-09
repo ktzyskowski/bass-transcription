@@ -1,8 +1,8 @@
 """``Transcriber``: compose an ``Encoder`` and a ``Decoder`` into audio -> notes.
 
-The whole pipeline in one object: ``Sources -> Encoder -> Cues -> Decoder -> notes``.
-The encoder produces the per-frame cues (onset/voicing evidence + the pitch contour);
-the decoder turns those cues into discrete ``NoteEvent``s. Deployment holds one of
+The whole pipeline in one object: ``Sources -> Encoder -> Frames -> Decoder -> notes``.
+The encoder produces the per-frame evidence (the heads' curves, the backbone's own
+representation, and a pitch contour); the decoder turns that into ``NoteEvent``s. Deployment holds one of
 these; the note-level evaluation harness scores one of these -- so eval and deploy
 transcribe through the exact same object and cannot drift.
 

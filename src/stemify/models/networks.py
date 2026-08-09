@@ -14,7 +14,7 @@ this backbone defines -- so a tagger built on the GRU with a pitch head raised
 two as interchangeable. The path forward is a neural CRF, not a second backbone.
 
 This is a *backbone*, not the pipeline ``Encoder``: a ``LearnedEncoder`` composes one
-with heads to produce ``Cues``.
+with heads to produce ``Frames``.
 """
 
 from collections.abc import Sequence
