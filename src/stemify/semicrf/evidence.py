@@ -19,9 +19,9 @@ head, at the CQT grid rather than pyin's coarser one, and with a gradient. Keepi
 meant the contour was a hard dependency of the *model*, not just of the data pipeline.
 A contour is still read to name a decoded note's pitch, and is optional there.
 
-``torch.as_tensor`` is the load-bearing trick throughout: it treats numpy ``Frames``
-field as a constant (inference/decode) and a a tensor field as a graph node
-(training), so one builder serves both and the DP is backend-agnostic.
+``torch.as_tensor`` is the load-bearing trick throughout: it treats a numpy field as
+a constant (inference/decode) and a grad-bearing one as a graph node (training), so
+one builder serves both and the DP is backend-agnostic.
 """
 
 from __future__ import annotations
@@ -87,6 +87,23 @@ class Evidence:
     # `LabelSet.from_bins` uses -- so a scorer's alphabet and this agree by
     # construction rather than by a constant someone keeps in step.
     pitch_logprob_c: torch.Tensor | None = None
+    # (B, Tmax, C) the backbone's per-frame activations, strided. Raw rather than a
+    # cumsum, and alone among these fields in that: every other entry here is a fixed
+    # function of the encoder's output, so it can be summed once at build time, while
+    # what a scorer *wants* pooled out of the trunk is itself learned. A neural scorer
+    # therefore builds its own prefix sums over its own per-frame projection of this.
+    # None from a producer with no backbone (the DSP encoder, the loss's test doubles).
+    hidden: torch.Tensor | None = None
+    # (B, Tmax+1, dmax, n_labels) unary scores for every span, or None.
+    #
+    # **A scorer-owned cache, and it lives here because an ``Evidence`` is exactly one
+    # batch.** A scorer whose potential is a network cannot afford to be called once per
+    # scan step -- the DP is launch-bound, and a per-step MLP is `T` launches of a few
+    # hundred rows. It computes every span at once in ``precompute`` and this holds the
+    # result. Keying it on the ``Evidence`` object is what makes the lifetime right
+    # without a cache-invalidation rule: a new batch is a new ``Evidence``, and ``one()``
+    # drops it rather than carrying a table built for a different set of rows.
+    span_scores: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
         check_one_device(
@@ -128,6 +145,12 @@ class Evidence:
             entropy_c=cut(self.entropy_c),
             pitch_c=cut(self.pitch_c),
             pitch_logprob_c=cut(self.pitch_logprob_c),
+            # `[:, :t]`, not `cut`: `hidden` is per-frame, not a cumsum, so it has
+            # T entries rather than T+1.
+            hidden=None if self.hidden is None else self.hidden[b : b + 1, :t],
+            # `span_scores` is deliberately *not* carried. It is indexed by row, and
+            # a table built for the whole batch would silently answer row 0 for
+            # every question asked of this single-row view.
         )
 
     # --- span accessors: the index conventions, in one place --------------------
@@ -241,6 +264,7 @@ def _track_tensors(
     torch.Tensor,
     np.ndarray,
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None,
+    torch.Tensor | None,
 ]:
     """One track's per-frame tensors, pitch cumsums included when it has a pitch head."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
@@ -262,7 +286,8 @@ def _track_tensors(
             *pitch_cumsums(strided),
             pitch_logprob_cumsum(strided, n_semitones),
         )
-    return onset_logit, Vc, Uc, frame_times, pitch
+    hidden = None if cues.hidden is None else on_device(cues.hidden, device)[::stride]
+    return onset_logit, Vc, Uc, frame_times, pitch, hidden
 
 
 def build_evidence(
@@ -306,6 +331,20 @@ def build_evidence(
             "must come from the same model, or the span features silently read zeros "
             "for some rows and real evidence for others"
         )
+    # The trunk pads *flat* like the cumsums rather than with zeros: a scorer builds
+    # its own prefix sums over a learned projection of this, and a projection has a
+    # bias, so zero frames past a track's end would still accrue mass into every
+    # prefix. Repeating the last real frame keeps the padded tail bounded by
+    # something the encoder actually produced.
+    Hd = None
+    if built[0][5] is not None:
+        if any(t[5] is None for t in built):
+            raise ValueError(
+                "batch mixes tracks with and without backbone activations; a scorer "
+                "that pools the trunk would read a learned projection of real "
+                "features for some rows and of padding for others"
+            )
+        Hd = onset.new_zeros(B, Tmax, built[0][5].shape[-1])
     Pc = Hc = Dc = Lc = None
     if first_pitch is not None:
         K = first_pitch[2].shape[-1]
@@ -314,11 +353,13 @@ def build_evidence(
         Dc = onset.new_zeros(B, Tmax + 1, K)
         Lc = onset.new_zeros(B, Tmax + 1, first_pitch[3].shape[-1])
 
-    for b, (o, v, u, _, pitch) in enumerate(built):
+    for b, (o, v, u, _, pitch, hd) in enumerate(built):
         t = lengths[b]
         onset[b, :t] = o
         Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
         Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
+        if Hd is not None and hd is not None:
+            Hd[b, :t], Hd[b, t:] = hd, hd[-1]
         if pitch is None or Pc is None or Hc is None or Dc is None or Lc is None:
             continue
         pc, hc, dc, lc = pitch
@@ -334,5 +375,5 @@ def build_evidence(
     return Evidence(
         onset_logit=onset, voiced_c=Vc, rest_c=Uc, lengths=lengths,
         frame_times=[t[3] for t in built], contours=contours,
-        path_c=Pc, entropy_c=Hc, pitch_c=Dc, pitch_logprob_c=Lc,
+        path_c=Pc, entropy_c=Hc, pitch_c=Dc, pitch_logprob_c=Lc, hidden=Hd,
     )
