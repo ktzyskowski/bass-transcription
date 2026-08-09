@@ -37,6 +37,7 @@ from stemify.training.trainer import Trainer
 from test_chunk_carry import (  # noqa: F401  (fixtures)
     CHUNK, DMAX, STRIDE, _NoOpCache, _Pointwise, track,
 )
+from test_chunked import _FakeDataset
 
 SEGMENT = 2          # chunks per chain; the fixture's track is six, so three chains
 CPU = torch.device("cpu")
@@ -50,12 +51,33 @@ def _dataset(items, cache, segment_chunks: int) -> ChunkDataset:
     )
 
 
-def test_a_segment_boundary_resets_every_stream_on_the_same_chunk(track):  # noqa: F811
-    """Synchronised, because one backward has to cover every row of the batch.
+def _chunked(tmp_path, lengths, *, batch_size, segment_chunks):
+    """A multi-track dataset, so streams roll over onto tracks of other lengths.
 
-    A per-track rule -- resetting at rests, say -- would put each row's boundary
-    somewhere different, and whichever row straddled the backward would be truncated
-    again. Resetting on the chunk *index* is what keeps the batch in lockstep.
+    Its own cache rather than the shared ``cache`` fixture: importing that one by
+    name shadows the local ``cache`` this module unpacks from ``track`` everywhere
+    else, and renaming those to dodge a lint is a worse trade than four lines.
+    """
+    store = _NoOpCache(tmp_path / "multi")
+    ds = _FakeDataset(tmp_path, store, lengths)
+    return ChunkDataset(
+        train_items(ds, CONDITIONS["clean"], store),
+        chunk_frames=CHUNK, dmax=DMAX, stride=STRIDE, batch_size=batch_size,
+        right_context=0, segment_chunks=segment_chunks,
+    )
+
+
+def test_a_segment_boundary_resets_every_stream_on_the_same_batch(track):  # noqa: F811
+    """Synchronised on the *batch* index, which is the number the trainer counts.
+
+    One backward covers a whole accumulation window, so a chain that straddles the
+    boundary has its second half reach into a graph the first half's backward already
+    freed. That makes agreement between the two counters a correctness condition, not a
+    tidiness one -- and the counter has to be the batch, because a stream's own chunk
+    index restarts at every track boundary and tracks are not all the same length.
+
+    Caught in production, not here: keying on ``chunk_no`` passed the single-track
+    fixture (where the two counters coincide) and crashed 20 minutes into a real run.
     """
     items, cache, _ = track
     resets = [b.resets[0] for b in _dataset(items, cache, SEGMENT)]
@@ -63,6 +85,40 @@ def test_a_segment_boundary_resets_every_stream_on_the_same_chunk(track):  # noq
     assert [b.resets[0] for b in _dataset(items, cache, 0)] == [
         True, *[False] * (len(resets) - 1)
     ], "segment_chunks=0 must still be one chain per track"
+
+
+def test_streams_stay_in_lockstep_across_tracks_of_different_lengths(tmp_path):
+    """The case the single-track fixture cannot express, and the one that crashed.
+
+    Several tracks per stream, of *different* chunk counts, over several streams. A
+    stream that rolls onto a new track restarts its own chunk index, so any rule keyed
+    on that index drifts -- rows stop resetting together within an epoch, and the batch
+    stops agreeing with the trainer's window. Both are silent right up to the backward.
+
+    Lengths chosen so no track is a whole number of segments: that is what makes the
+    two counters disagree, and equal-length tracks would hide it exactly as one track
+    did.
+    """
+    ds = _chunked(tmp_path, [900, 500, 1300, 700], batch_size=2,
+                  segment_chunks=SEGMENT)
+    batches = list(ds)
+    assert len(batches) > SEGMENT * 2, "need several windows to see any drift"
+    for i, b in enumerate(batches):
+        if i % SEGMENT == 0:
+            # The only condition that has to hold. Every row starts a fresh chain where
+            # the trainer will backward, so no carry ever crosses one.
+            assert all(b.resets), (
+                f"batch {i} reset rows {b.resets}, but the trainer steps every "
+                f"{SEGMENT} batches -- a row that does not reset here carries a graph "
+                "across the backward and reads it after it has been freed"
+            )
+    # Mid-window resets are *expected* and harmless: a stream rolling onto a new track
+    # takes a fresh window, so it reaches back to nothing. It only makes that row's
+    # chain shorter than the others', which costs a little exactness and no
+    # correctness. Asserted present so this fixture is known to exercise the case.
+    assert any(
+        any(b.resets) for i, b in enumerate(batches) if i % SEGMENT != 0
+    ), "no stream rolled onto a new track mid-window; the case is not being covered"
 
 
 def test_a_chain_starts_where_its_gold_does_not_where_the_chunk_does(track):  # noqa: F811
@@ -144,6 +200,27 @@ def test_the_loop_trains_a_whole_epoch_of_undetached_segments(track):  # noqa: F
     assert any(
         not torch.allclose(a, b) for a, b in zip(before, loss.parameters(), strict=True)
     ), "an epoch ran without moving a single potential"
+
+
+def test_the_loop_survives_streams_rolling_onto_new_tracks(tmp_path):
+    """The run that crashed, at test scale: many tracks, many streams, one epoch.
+
+    ``test_the_loop_trains_a_whole_epoch_of_undetached_segments`` is one track on one
+    stream, where a chunk index and a batch index are the same number -- so it passed
+    while the reset rule was keyed on the wrong one, and the real run died twenty
+    minutes in with "Trying to backward through the graph a second time". Tracks of
+    unequal length over two streams is the smallest fixture that can tell them apart.
+    """
+    model = _Pointwise()
+    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE), detach_carry=False)
+    trainer = Trainer(model, loss, TrainConfig(
+        learning_rate=1e-3, max_grad_norm=None, device="cpu",
+        accumulate_steps=SEGMENT,
+    ))
+    dataset = _chunked(tmp_path, [900, 500, 1300, 700], batch_size=2,
+                       segment_chunks=SEGMENT)
+    metrics = trainer._run_epoch(dataset, train=True)
+    assert np.isfinite(metrics["total"])
 
 
 def _segment_gradient(items, cache, *, detach_carry: bool) -> list[torch.Tensor]:

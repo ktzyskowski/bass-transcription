@@ -23,6 +23,7 @@ keys its carries by ``stream``; see ``loss.py`` beside this.
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from itertools import count
 
 import numpy as np
 import torch
@@ -331,10 +332,19 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         # from `base` (worker id * batch_size) so it is still reproducible.
         rng = random.Random(self.seed + 1_000_003 * (base + 1))
 
-        while True:
+        for batch_no in count():
+            # **Counted in batches, not in each stream's chunk index.** The trainer's
+            # accumulation window is a batch count, and the two have to agree exactly:
+            # one backward covers the whole window, so a chain that straddles the
+            # boundary has its second half reach into a graph the first half's backward
+            # already freed. Streams sit at different positions in tracks of different
+            # lengths, so `chunk_no[b] % segment_chunks` desynchronises the rows from
+            # each other *and* from the trainer within one epoch -- which is a crash
+            # partway through training, not a wrong number.
+            boundary = bool(self.segment_chunks) and batch_no % self.segment_chunks == 0
             row: list[Chunk] = []
             for b in range(self.batch_size):
-                reset = False
+                reset = boundary
                 # One name for the stream's current track instead of re-reading
                 # `opened[b]` four times: the loop's whole job is to leave it open, so
                 # the value that falls out of it is the one the chunk is cut from.
@@ -352,13 +362,6 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
                     )
                     chunk_no[b], reset = 0, True
                 feats, ft, gold, y, prev = track[chunk_no[b]]
-                # A segment boundary resets the carry exactly as a track boundary does.
-                # Taken on the chunk *index*, identical across streams, so every row of
-                # a batch resets together and the segment's single backward covers all
-                # of them -- a per-track boundary rule (at rests, say) would desync the
-                # rows and leave whichever row straddled the backward truncated again.
-                if self.segment_chunks and chunk_no[b] % self.segment_chunks == 0:
-                    reset = True
                 chunk_no[b] += 1
                 row.append(
                     Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset,
