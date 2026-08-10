@@ -26,7 +26,7 @@ comparison, now a change of one composed object rather than a subclass.
 
 from abc import ABC, abstractmethod
 
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.audio.sources import Sources
 
 

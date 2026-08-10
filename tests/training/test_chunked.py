@@ -19,7 +19,7 @@ from stemify.audio.features import SILENCE_DB
 from stemify.persistence.store import Store
 from stemify.core.conditions import CONDITIONS
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions

@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.semicrf import neural
 from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import log_partitions

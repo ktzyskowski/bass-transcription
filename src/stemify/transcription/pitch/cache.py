@@ -15,7 +15,7 @@ a gap in it.
 
 from pathlib import Path
 
-from stemify.core.pitch.base import PitchEstimator
+from stemify.transcription.pitch.base import PitchEstimator
 from stemify.music.contour import Contour
 from stemify.persistence.serde import load_contour, save_contour
 from stemify.persistence.store import Store

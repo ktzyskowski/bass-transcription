@@ -31,7 +31,7 @@ import torch
 
 from stemify.persistence.store import Store
 from stemify.core.cues import Cues
-from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD
 from stemify.training.checkpoint import load_cuenet

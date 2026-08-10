@@ -22,7 +22,7 @@ it was reached -- which is what makes the two substitutable rather than merely s
 ``use_pyin=True`` forces the DSP contour even on a model that has a head, which is how
 an A/B between the two is run.
 
-Lives here rather than beside ``ClassicalEncoder`` in ``core.encoders`` because it holds
+Lives here rather than beside ``ClassicalEncoder`` in ``transcription.encoders`` because it holds
 a ``CueNet``: ``Encoder`` is the contract, this is its neural implementation, and the
 split is what keeps the DSP path free of torch.
 """
@@ -33,14 +33,14 @@ import numpy as np
 import torch
 
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.platform.device import best_device
-from stemify.core.encoders.base import Encoder
+from stemify.transcription.encoders.base import Encoder
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.cuenet import CueNet
 from stemify.models.frames import frames_from_output, to_numpy
-from stemify.core.pitch import PitchEstimator, PyinPitch
+from stemify.transcription.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources
 
 

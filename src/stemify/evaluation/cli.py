@@ -30,14 +30,14 @@ from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
 from stemify.corpus.mdb_bass_synth import MdbDataset
 from stemify.corpus.slakh import SlakhDataset
-from stemify.core.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
-from stemify.core.decoders.base import Decoder
+from stemify.transcription.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
+from stemify.transcription.decoders.base import Decoder
 from stemify.semicrf import SemiCRFDecoder
-from stemify.core.encoders.base import Encoder
-from stemify.core.encoders.classical import ClassicalEncoder
+from stemify.transcription.encoders.base import Encoder
+from stemify.transcription.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
-from stemify.core.transcriber import Transcriber
+from stemify.transcription.transcriber import Transcriber
 from stemify.training.checkpoint import Checkpoint, load_cuenet
 from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 

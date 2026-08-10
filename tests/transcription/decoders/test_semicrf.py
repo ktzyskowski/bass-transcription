@@ -13,7 +13,7 @@ import pytest
 import torch
 
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.models.frames import frames_from_logits
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import NOTE, REST, START

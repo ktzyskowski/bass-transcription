@@ -18,7 +18,7 @@ import numpy as np
 import torch
 
 from stemify.music.contour import Contour
-from stemify.core.frames import PROBABILITY_HEADS, Frames
+from stemify.transcription.frames import PROBABILITY_HEADS, Frames
 
 
 def _per_frame(value: torch.Tensor) -> torch.Tensor:

@@ -20,7 +20,7 @@ import numpy as np
 
 from stemify.audio import features
 from stemify.music.contour import Contour
-from stemify.core.pitch.base import PitchEstimator
+from stemify.transcription.pitch.base import PitchEstimator
 
 # Search range. The lower bound is the open low E (E1, ~41 Hz). The upper bound sits
 # an octave above the dataset's highest label on purpose: it lets octave-up errors --

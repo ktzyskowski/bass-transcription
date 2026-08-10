@@ -14,7 +14,7 @@ change: nine public members, imported by 24 files, called in three places; seven
 nine had no production caller at all.
 
 So the store answers *where*, callers decide *whether to compute*. The memoisers live
-with the thing they memoise -- ``audio.cache`` owns the CQT, ``core.pitch.cache`` owns
+with the thing they memoise -- ``audio.cache`` owns the CQT, ``transcription.pitch.cache`` owns
 the contour -- because that is the layer that knows what "already computed" means and
 what it costs. A new cached artifact is a new memoiser next to its producer, not a
 change here.

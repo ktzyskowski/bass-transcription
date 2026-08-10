@@ -34,7 +34,7 @@ import numpy as np
 import torch
 
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.audio.features import BINS_PER_SEMITONE
 from stemify.semicrf.cumsums import (
     pitch_cumsums, pitch_logprob_cumsum, voiced_logcumsum,

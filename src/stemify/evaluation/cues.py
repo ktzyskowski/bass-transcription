@@ -31,9 +31,9 @@ from typing import Any
 
 import numpy as np
 
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
-from stemify.core.encoders.base import Encoder
+from stemify.transcription.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues

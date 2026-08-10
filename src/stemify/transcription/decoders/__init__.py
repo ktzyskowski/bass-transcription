@@ -7,6 +7,6 @@ path never transitively imports torch through this package, and ``core`` never i
 the semi-CRF at all. A caller that wants it names it.
 """
 
-from stemify.core.decoders.base import Decoder
+from stemify.transcription.decoders.base import Decoder
 
 __all__ = ["Decoder"]

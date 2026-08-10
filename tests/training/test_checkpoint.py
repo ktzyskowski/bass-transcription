@@ -19,7 +19,7 @@ import pytest
 import torch
 
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.music.notes import NoteEvent
 from stemify.training.checkpoint import VERSION, Checkpoint

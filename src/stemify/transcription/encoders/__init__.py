@@ -11,6 +11,6 @@ has no torch in it anywhere, and the neural implementation is one layer up. The 
 that used to be a convention here is a test.
 """
 
-from stemify.core.encoders.base import Encoder
+from stemify.transcription.encoders.base import Encoder
 
 __all__ = ["Encoder"]

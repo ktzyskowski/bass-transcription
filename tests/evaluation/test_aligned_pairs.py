@@ -8,7 +8,7 @@ import numpy as np
 
 from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.evaluation.cues import aligned_pairs
 from stemify.music.notes import NoteEvent
 

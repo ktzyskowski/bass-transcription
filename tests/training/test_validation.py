@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from stemify.music.contour import Contour
-from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.music.notes import NoteEvent
 from stemify.training.validation import (

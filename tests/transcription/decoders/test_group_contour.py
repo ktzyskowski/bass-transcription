@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from stemify.music.contour import Contour
-from stemify.core.decoders.greedy import (
+from stemify.transcription.decoders.greedy import (
     DSP_PITCH_SPLIT_SEMITONES,
     MERGE_GAP_S,
     PITCH_SPLIT_SEMITONES,

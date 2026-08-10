@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 
 
 def check_one_device(what: str, **fields: torch.Tensor) -> None:

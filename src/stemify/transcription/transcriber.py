@@ -13,8 +13,8 @@ is the DSP floor, ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder())`` the le
 end-to-end model -- not different ``Transcriber`` subclasses.
 """
 
-from stemify.core.decoders import Decoder
-from stemify.core.encoders import Encoder
+from stemify.transcription.decoders import Decoder
+from stemify.transcription.encoders import Encoder
 from stemify.music.notes import NoteEvent
 from stemify.audio.sources import Sources
 

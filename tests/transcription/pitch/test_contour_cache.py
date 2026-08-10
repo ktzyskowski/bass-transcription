@@ -12,7 +12,7 @@ used to subclass a persistence god-object to stop pyin running.
 
 import numpy as np
 
-from stemify.core.pitch.cache import ensure_contour
+from stemify.transcription.pitch.cache import ensure_contour
 from stemify.music.contour import Contour
 from stemify.persistence.store import Store
 

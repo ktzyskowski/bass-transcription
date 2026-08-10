@@ -28,10 +28,10 @@ from typing import Any
 import torch
 
 from stemify.platform.atomic import atomic_write
-from stemify.core.decoders.base import Decoder
+from stemify.transcription.decoders.base import Decoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
-from stemify.core.transcriber import Transcriber
+from stemify.transcription.transcriber import Transcriber
 from stemify.training.base import Recipe
 from stemify.training.recipes import RECIPES
 

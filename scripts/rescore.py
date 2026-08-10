@@ -14,7 +14,7 @@ import argparse
 from pathlib import Path
 
 from stemify.persistence.store import Store
-from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.core.metrics.note.base import matched_pairs

@@ -7,7 +7,7 @@ design:
 
     features (CQT)            stemify.audio.features.cqt, on the 11.6 ms frame grid
     targets                   labels.py -- one builder per head, same grid
-    model                     stemify.core.encoders -- backbone (TCN) + swappable heads
+    model                     stemify.transcription.encoders -- backbone (TCN) + swappable heads
     data                      dataset.py -- SlakhItem -> (features, targets)
     fit                       trainer.py -- head-agnostic loop
 

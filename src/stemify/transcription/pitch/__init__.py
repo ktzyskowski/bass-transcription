@@ -11,7 +11,7 @@ convention, exporting only the light pair; it is now a property of the layering,
 ``tests/test_layers.py`` is what holds it.
 """
 
-from stemify.core.pitch.base import PitchEstimator
-from stemify.core.pitch.pyin import FMAX, FMIN, HOP_LENGTH, PyinPitch
+from stemify.transcription.pitch.base import PitchEstimator
+from stemify.transcription.pitch.pyin import FMAX, FMIN, HOP_LENGTH, PyinPitch
 
 __all__ = ["FMAX", "FMIN", "HOP_LENGTH", "PitchEstimator", "PyinPitch"]

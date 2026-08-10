@@ -27,8 +27,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from stemify.core.frames import Frames
-from stemify.core.decoders.base import Decoder
+from stemify.transcription.frames import Frames
+from stemify.transcription.decoders.base import Decoder
 from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, STRIDE
 from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions

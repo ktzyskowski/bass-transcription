@@ -12,8 +12,8 @@ from pathlib import Path
 from torch.utils.data import DataLoader
 
 from stemify.persistence.store import Store
-from stemify.core.decoders.base import Decoder
-from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet

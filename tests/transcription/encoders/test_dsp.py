@@ -8,8 +8,8 @@ onsets off, so no audio is read.
 import numpy as np
 
 from stemify.music.contour import Contour
-from stemify.core.encoders.classical import ClassicalEncoder
-from stemify.core.pitch import PitchEstimator, PyinPitch
+from stemify.transcription.encoders.classical import ClassicalEncoder
+from stemify.transcription.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources
 
 

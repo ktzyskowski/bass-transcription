@@ -23,7 +23,7 @@ so the same ``Frames`` can be decoded either way, and so the trainable
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.music.notes import NoteEvent
 
 

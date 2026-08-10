@@ -36,19 +36,19 @@ from typing import Any
 import torch
 import numpy as np
 
-from stemify.core.pitch.cache import ensure_contour
+from stemify.transcription.pitch.cache import ensure_contour
 from stemify.persistence.store import Store
-from stemify.core.decoders.base import Decoder
-from stemify.core.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
 from stemify.music.contour import Contour
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, NoteAnnotated
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.music.notes import NoteEvent
-from stemify.core.pitch import PyinPitch
+from stemify.transcription.pitch import PyinPitch
 from stemify.persistence.serde import features_npy
 from stemify.core.conditions import CONDITIONS, Condition
 from stemify.core.examples import prepare_examples

@@ -30,6 +30,7 @@ PILLAR_ALLOWANCE = {
     "persistence": {"platform", "music"},
     "audio": {"platform", "persistence"},
     "corpus": {"music", "audio"},
+    "transcription": {"music", "audio", "persistence"},
 }
 _BELOW = set(PILLAR_ALLOWANCE)
 ALLOWED = {

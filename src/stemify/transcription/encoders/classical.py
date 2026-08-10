@@ -13,9 +13,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core.frames import Frames
-from stemify.core.encoders.base import Encoder
-from stemify.core.pitch import PitchEstimator, PyinPitch
+from stemify.transcription.frames import Frames
+from stemify.transcription.encoders.base import Encoder
+from stemify.transcription.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources
 
 # Peak-picking threshold for onset detection: an onset must rise this far above

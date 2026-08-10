@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 
 from stemify.persistence.store import Store
-from stemify.core.decoders.greedy import (
+from stemify.transcription.decoders.greedy import (
     MIN_NOTE_S,
     MIN_ONSET_GAP_S,
     ONSET_THRESHOLD,

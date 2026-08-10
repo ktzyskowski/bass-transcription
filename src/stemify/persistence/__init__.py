@@ -15,7 +15,7 @@ subclass it into a ``_NoOpCache`` to get it out of the way. A pillar its own con
 must stub is a pillar whose seam is in the wrong place.
 
 Inverted, the memoisers live beside the things they memoise: ``audio.cache`` owns the
-CQT, ``core.pitch.cache`` owns the contour. Each is a handful of lines that asks the
+CQT, ``transcription.pitch.cache`` owns the contour. Each is a handful of lines that asks the
 store for a path, returns it on a hit, and computes on a miss. Adding a cached artifact
 is a new memoiser next to its producer rather than a new method here.
 

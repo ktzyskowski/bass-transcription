@@ -26,7 +26,7 @@ from stemify.persistence.store import Store
 import torch
 
 from stemify.core.conditions import CONDITIONS
-from stemify.core.frames import Frames
+from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import NEG
 from stemify.semicrf.evidence import build_evidence
