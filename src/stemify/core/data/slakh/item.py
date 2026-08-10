@@ -19,7 +19,7 @@ from stemify.core.data.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
 from stemify.music.notes import NoteEvent
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 
 # ``REFERENCE_HOP_S`` and ``NOTE_DECAY_DB`` are imported rather than defined here: the
 # grid and the decay gate are facts about *bass*, not about Slakh, and FiloBass needs

@@ -24,8 +24,8 @@ import numpy as np
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.device import best_device
-from stemify.core.features import extract_features
+from stemify.platform.device import best_device
+from stemify.audio.features import extract_features
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.cuenet import CueNet
 from stemify.core.pitch.base import PitchEstimator

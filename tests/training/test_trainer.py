@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from stemify.models.heads import onset_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
-from stemify.core.features import N_BINS
+from stemify.audio.features import N_BINS
 from stemify.training.config import TrainConfig
 from stemify.training.frame.dataset import collate
 from stemify.training.frame.loss import FrameBCELoss
@@ -67,7 +67,7 @@ def test_pitch_head_is_scored_on_voiced_frames_only():
     """Pitch was refused until its target encoding was settled; it is now the two-hot
     CQT-bin code. Unvoiced frames (NaN targets) must not contribute -- where the bass
     sounds is the voicing head's question."""
-    from stemify.core.features import N_BINS
+    from stemify.audio.features import N_BINS
     from stemify.models.heads import pitch_ce
 
     logits = torch.zeros(2, 4, N_BINS)
@@ -97,7 +97,7 @@ def test_pitch_loss_starts_on_the_same_scale_as_the_binary_heads():
     """
     import math
 
-    from stemify.core.features import N_BINS
+    from stemify.audio.features import N_BINS
     from stemify.models.heads import pitch_ce
 
     midi = torch.full((2, 4), float("nan"))

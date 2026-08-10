@@ -21,7 +21,7 @@ import librosa
 import numpy as np
 import soundfile as sf
 
-from stemify.core.features import SAMPLE_RATE, load_audio
+from stemify.audio.features import SAMPLE_RATE, load_audio
 from stemify.music.notes import NoteEvent
 
 HARMONICS = (1.0, 0.5, 0.25)

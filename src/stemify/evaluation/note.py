@@ -38,7 +38,7 @@ from stemify.core.metrics import (
 )
 from stemify.music.notes import NoteEvent
 from stemify.core.transcriber import Transcriber
-from stemify.core.transforms import AudioTransform, Identity
+from stemify.audio.transforms import AudioTransform, Identity
 
 
 def _per_item_prf(

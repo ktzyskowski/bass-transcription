@@ -18,7 +18,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core import features
+from stemify.audio import features
 from stemify.core.contour import Contour
 from stemify.core.pitch.base import PitchEstimator
 

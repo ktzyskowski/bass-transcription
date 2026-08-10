@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
-from stemify.core.atomic import atomic_write
+from stemify.platform.atomic import atomic_write
 from stemify.core.contour import Contour
 
 

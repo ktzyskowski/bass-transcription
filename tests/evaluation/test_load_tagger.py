@@ -12,7 +12,7 @@ import torch
 from stemify.core.contour import Contour
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
-from stemify.core.features import FrameFeatures
+from stemify.audio.features import FrameFeatures
 from stemify.training.recipes import HEADS, FrameRecipe
 
 

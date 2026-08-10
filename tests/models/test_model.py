@@ -6,7 +6,7 @@ training loop can rely on (batch, time, out_dim).
 import pytest
 import torch
 
-from stemify.core.features import N_BINS
+from stemify.audio.features import N_BINS
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet

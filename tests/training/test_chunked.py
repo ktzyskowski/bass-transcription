@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.core.features import SILENCE_DB
+from stemify.audio.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.conditions import CONDITIONS
 from stemify.core.contour import Contour
@@ -24,7 +24,7 @@ from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.spans import Grid
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 from stemify.semicrf.fit.dataset import ChunkDataset, collate
 from stemify.semicrf.fit.tracks import channel_window, train_items
 

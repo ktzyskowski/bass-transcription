@@ -51,7 +51,7 @@ resolution nothing scores. 48 labels rather than 144 is also the difference betw
 import math
 from dataclasses import dataclass
 
-from stemify.core.features import BINS_PER_SEMITONE, FMIN, midi_to_bin
+from stemify.audio.features import BINS_PER_SEMITONE, FMIN, midi_to_bin
 
 
 @dataclass(frozen=True)

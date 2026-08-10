@@ -35,7 +35,7 @@ from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 from stemify.core.conditions import CONDITIONS
 from stemify.semicrf.fit.tracks import train_items
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate

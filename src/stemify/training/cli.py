@@ -140,7 +140,7 @@ def main() -> None:
                          "to transcribe an isolated bass. Applied to the training "
                          "split only. 0 (default) reproduces every existing arm; "
                          "0.3-0.5 is the usual range for modality dropout. Silence "
-                         "is the dB floor, not zero -- see core/features.SILENCE_DB.")
+                         "is the dB floor, not zero -- see audio/features.SILENCE_DB.")
     ap.add_argument("--harmonics", default="1",
                     help="stack each CQT channel against itself "
                          "at these harmonics, e.g. '1,2,3,4'. A note at bin b also "

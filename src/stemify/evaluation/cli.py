@@ -38,7 +38,7 @@ from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
 from stemify.core.transcriber import Transcriber
 from stemify.training.checkpoint import Checkpoint, load_cuenet
-from stemify.core.transforms import AudioTransform, DemucsSeparator, Identity
+from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
 ENCODERS = ("pyin", "learned")
 

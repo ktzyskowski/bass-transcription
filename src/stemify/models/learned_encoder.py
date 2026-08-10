@@ -34,14 +34,14 @@ import torch
 
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
-from stemify.core.device import best_device
+from stemify.platform.device import best_device
 from stemify.core.encoders.base import Encoder
-from stemify.core.features import FrameFeatures, extract_features, stack_channels
+from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.cuenet import CueNet
 from stemify.models.frames import frames_from_output, to_numpy
 from stemify.core.pitch import PitchEstimator, PyinPitch
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 
 
 class LearnedEncoder(Encoder):

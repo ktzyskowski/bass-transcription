@@ -15,8 +15,8 @@ from stemify.core.cache import Cache, content_key
 from stemify.core.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
-from stemify.core.sources import Sources
-from stemify.core.transforms import AudioTransform, Identity
+from stemify.audio.sources import Sources
+from stemify.audio.transforms import AudioTransform, Identity
 
 
 class _FakeSeparator(AudioTransform):
@@ -89,7 +89,7 @@ class _CountingItem:
 
 
 def _fake_extract_features(monkeypatch, calls):
-    from stemify.core import features as features_mod
+    from stemify.audio import features as features_mod
 
     def fake(path):
         calls["n"] += 1

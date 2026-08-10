@@ -25,7 +25,7 @@ from stemify.models.frames import frames_from_logits
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.window import initial_window
-from stemify.core.features import N_BINS
+from stemify.audio.features import N_BINS
 from stemify.music.notes import NoteEvent
 
 DT, T = 0.0116, 240

@@ -16,7 +16,7 @@ import numpy as np
 from stemify.core.frames import Frames
 from stemify.core.encoders.base import Encoder
 from stemify.core.pitch import PitchEstimator, PyinPitch
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 
 # Peak-picking threshold for onset detection: an onset must rise this far above
 # the local mean flux to fire. librosa's default is 0.07. Raising it drops the

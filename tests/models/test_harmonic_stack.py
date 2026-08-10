@@ -16,7 +16,7 @@ lands within one frame of a true onset 9.6% of the time against 48% at ``h=4``.
 import numpy as np
 import torch
 
-from stemify.core.features import BINS_PER_OCTAVE, FMIN, N_BINS, harmonic_shifts
+from stemify.audio.features import BINS_PER_OCTAVE, FMIN, N_BINS, harmonic_shifts
 from stemify.models.heads.pitch import bin_of, pitch_ce
 from stemify.models.networks import TCN, _ConvFrontend
 

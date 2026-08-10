@@ -29,7 +29,7 @@ import numpy as np
 import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
-from stemify.core.features import SILENCE_DB
+from stemify.audio.features import SILENCE_DB
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.tracks import (

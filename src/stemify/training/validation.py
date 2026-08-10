@@ -44,7 +44,7 @@ from stemify.models.cuenet import CueNet
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
 from stemify.core.data.base import Dataset
-from stemify.core.features import FrameFeatures, extract_features, stack_channels
+from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.music.notes import NoteEvent
 from stemify.core.pitch import PyinPitch

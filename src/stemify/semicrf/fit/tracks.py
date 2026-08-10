@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from stemify.core.cache import Cache
-from stemify.core.features import SILENCE_DB
+from stemify.audio.features import SILENCE_DB
 from stemify.core.data.base import Dataset as SlakhLikeDataset
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem

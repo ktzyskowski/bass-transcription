@@ -32,7 +32,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from stemify.core.device import best_device
+from stemify.platform.device import best_device
 from stemify.training.base import GRAD_NORM, B, Loss
 from stemify.training.callbacks import Callback, EpochLogs
 from stemify.training.config import TrainConfig

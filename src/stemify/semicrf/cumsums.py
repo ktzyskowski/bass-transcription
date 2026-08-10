@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from stemify.core.contour import Contour
-from stemify.core.features import BINS_PER_SEMITONE
+from stemify.audio.features import BINS_PER_SEMITONE
 from stemify.semicrf.placement import on_device
 from stemify.music.grids import resample_mask
 

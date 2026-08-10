@@ -33,7 +33,7 @@ import logging
 import re
 
 from stemify.core.condition_types import Channel, Condition
-from stemify.core.transforms import AudioTransform, DemucsSeparator, Identity
+from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
 

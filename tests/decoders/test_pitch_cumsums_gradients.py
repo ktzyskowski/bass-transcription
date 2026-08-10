@@ -25,7 +25,7 @@ import pytest
 import torch
 
 from stemify.semicrf.cumsums import pitch_cumsums
-from stemify.core.features import N_BINS
+from stemify.audio.features import N_BINS
 
 
 def _grad(logits: torch.Tensor) -> torch.Tensor:

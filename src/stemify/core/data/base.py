@@ -29,7 +29,7 @@ from pathlib import Path
 
 from stemify.core.contour import Contour
 from stemify.music.notes import NoteEvent
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 
 
 class EvalItem(ABC):

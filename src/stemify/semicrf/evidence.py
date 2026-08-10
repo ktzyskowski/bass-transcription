@@ -35,7 +35,7 @@ import torch
 
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
-from stemify.core.features import BINS_PER_SEMITONE
+from stemify.audio.features import BINS_PER_SEMITONE
 from stemify.semicrf.cumsums import (
     pitch_cumsums, pitch_logprob_cumsum, voiced_logcumsum,
 )

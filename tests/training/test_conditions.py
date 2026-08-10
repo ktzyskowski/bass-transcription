@@ -14,9 +14,9 @@ import pytest
 
 from stemify.core.cache import Cache
 from stemify.music.notes import NoteEvent
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 from stemify.core.conditions import CONDITIONS, Channel, Condition, resolve
-from stemify.core.transforms import AudioTransform, Identity
+from stemify.audio.transforms import AudioTransform, Identity
 
 
 class _FakeSeparator(AudioTransform):
@@ -129,7 +129,7 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
     # The failure this guards is silent: mispaired channels leave the labels fitting
     # channel 0, so the loss still falls and the mixture channel is simply noise
     # from another song. Distinct per-file features let us assert the pairing.
-    from stemify.core import features as features_mod
+    from stemify.audio import features as features_mod
 
     def fake_extract(path):
         # Encode the filename in the features so a swap would be detectable.

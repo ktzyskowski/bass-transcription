@@ -31,8 +31,8 @@ from typing import Any
 
 import numpy as np
 
-from stemify.core.atomic import atomic_write
-from stemify.core.device import best_device
+from stemify.platform.atomic import atomic_write
+from stemify.platform.device import best_device
 
 DEFAULT_CACHE = Path("data/cache/transforms")
 

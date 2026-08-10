@@ -44,11 +44,11 @@ from pathlib import Path
 
 from stemify.core.contour import Contour
 from stemify.core.data.base import Dataset as SlakhLikeDataset
-from stemify.core.features import SIGNATURE as CQT_SIGNATURE
-from stemify.core.features import extract_features
+from stemify.audio.features import SIGNATURE as CQT_SIGNATURE
+from stemify.audio.features import extract_features
 from stemify.core.pitch import PitchEstimator
 from stemify.core.serde import CachedItem, load_contour, save_contour
-from stemify.core.transforms import AudioTransform, DemucsSeparator, Identity
+from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
 

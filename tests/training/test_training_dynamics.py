@@ -62,7 +62,7 @@ from stemify.core.conditions import CONDITIONS
 from stemify.core.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss

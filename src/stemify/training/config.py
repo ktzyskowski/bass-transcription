@@ -1,6 +1,6 @@
 """The training *loop's* knobs -- what every strategy needs, and nothing else.
 
-Feature settings are not here: they live in ``stemify.core.features`` because they are
+Feature settings are not here: they live in ``stemify.audio.features`` because they are
 shared with the pyin baseline and the eval harness, and a model that trained on a
 different CQT than it is evaluated on would be silently broken.
 

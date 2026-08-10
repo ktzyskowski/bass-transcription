@@ -16,7 +16,7 @@ end-to-end model -- not different ``Transcriber`` subclasses.
 from stemify.core.decoders import Decoder
 from stemify.core.encoders import Encoder
 from stemify.music.notes import NoteEvent
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 
 
 class Transcriber:

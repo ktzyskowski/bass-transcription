@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from stemify.core.features import SILENCE_DB
+from stemify.audio.features import SILENCE_DB
 from stemify.core.serde import CachedItem
 
 # How many tracks' resident state one dataset keeps open. Sized to be negligible per

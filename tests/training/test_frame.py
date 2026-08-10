@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.core.features import SILENCE_DB
+from stemify.audio.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
-from stemify.core.sources import Sources
+from stemify.audio.sources import Sources
 from stemify.core.examples import build_example
 from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.frame.recipe import FrameRecipe
@@ -159,7 +159,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     from stemify.core.contour import Contour
     from stemify.core.serde import features_npy
     from stemify.core.examples import prepare_examples
-    from stemify.core.transforms import Identity
+    from stemify.audio.transforms import Identity
 
     # Pre-save an onset-only example, as a prior (onset-only) run would have. The
     # cache decides the filename, so the backfill has to find it by the same key the
@@ -216,14 +216,14 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     from stemify.core.cache import Cache
     from stemify.core.contour import Contour
     from stemify.core.examples import prepare_examples
-    from stemify.core.transforms import Identity
+    from stemify.audio.transforms import Identity
 
     audio = tmp_path / "mix.wav"
     audio.write_text("x")
     ft = np.arange(8) * 0.0116
 
     def fake_extract(path):
-        from stemify.core.features import FrameFeatures
+        from stemify.audio.features import FrameFeatures
         return FrameFeatures(np.random.rand(5, 8).astype(np.float32), ft)
 
     monkeypatch.setattr("stemify.core.cache.extract_features", fake_extract)

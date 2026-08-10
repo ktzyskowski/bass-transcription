@@ -22,13 +22,15 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 # row here *before* the move, so the new pillar's edges are policed from the moment it
 # exists rather than after it has grown some.
 ALLOWED = {
+    "platform": set(),
     "music": set(),
-    "core": {"music"},
-    "models": {"music", "core"},
-    "training": {"music", "core", "models"},
-    "semicrf": {"music", "core", "models", "training"},
-    "evaluation": {"music", "core", "models"},
-    "serving": {"music", "core", "models"},
+    "audio": {"platform", "music"},
+    "core": {"platform", "music", "audio"},
+    "models": {"platform", "music", "audio", "core"},
+    "training": {"platform", "music", "audio", "core", "models"},
+    "semicrf": {"platform", "music", "audio", "core", "models", "training"},
+    "evaluation": {"platform", "music", "audio", "core", "models"},
+    "serving": {"platform", "music", "audio", "core", "models"},
 }
 
 # The pillars extracted from ``core`` so far, in dependency order. A pillar is held to a
@@ -40,7 +42,11 @@ ALLOWED = {
 # one call, which is why every training test has to subclass it into a ``_NoOpCache``
 # just to get it out of the way. A pillar that its own consumers must stub is a pillar
 # whose seam is in the wrong place.
-PILLARS = ["music"]
+#
+# ``platform`` and ``music`` are siblings, not a chain: neither imports the other, and
+# the order between them here is arbitrary. What the list fixes is that ``audio`` may
+# reach both and neither may reach back.
+PILLARS = ["platform", "music", "audio"]
 
 # Edges that exist today and are known to be wrong -- the work still outstanding from
 # the layering plan (docs/refactor-plan.md, steps A and C). Listed rather than allowed,
@@ -105,11 +111,16 @@ def test_layer_dependencies_follow_the_dag():
 def test_a_pillar_depends_only_on_the_pillars_beneath_it(pillar):
     """Detachability, as the property rather than the intention.
 
-    Stricter than the DAG above, which only forbids importing *upward*: a pillar may not
-    reach sideways either. ``music`` is at the bottom, so its allowance is empty and this
-    asserts it imports nothing from ``stemify`` whatsoever.
+    Stronger than the DAG check above in the one way that matters: **no PENDING**. That
+    list is how an inherited violation gets tolerated while it is being unwound, and a
+    pillar is precisely a package that has none -- it is extracted *because* its edges
+    are already clean, so an exemption here would mean the extraction was premature.
+
+    ``platform`` and ``music`` sit at the bottom, so their allowance is empty and this
+    asserts they import nothing from ``stemify`` whatsoever.
     """
-    beneath = set(PILLARS[: PILLARS.index(pillar)])
+    beneath = set(ALLOWED[pillar])
+    assert beneath <= set(PILLARS), f"`{pillar}` may only be allowed other pillars"
     strays = [
         f"{where}: {source} -> {target}"
         for source, target, where in _edges()

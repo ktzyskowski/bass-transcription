@@ -6,7 +6,7 @@ raised NameError on ``os.getpid()`` while cache hits sailed through untouched.
 
 from pathlib import Path
 
-from stemify.core.transforms import AudioTransform, Identity
+from stemify.audio.transforms import AudioTransform, Identity
 
 
 class _FakeTransform(AudioTransform):

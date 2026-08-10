@@ -9,7 +9,7 @@ pinning rather than inferring from a DP test that would still pass.
 
 import pytest
 
-from stemify.core.features import BINS_PER_SEMITONE, N_BINS, harmonic_shifts
+from stemify.audio.features import BINS_PER_SEMITONE, N_BINS, harmonic_shifts
 from stemify.semicrf.constants import NOTE, REST, START
 from stemify.semicrf.labelset import BINARY, LabelSet
 

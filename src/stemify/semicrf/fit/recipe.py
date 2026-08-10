@@ -24,7 +24,7 @@ from stemify.semicrf.build import build_scorer
 from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.neural import NeuralSpanScorer
 from stemify.semicrf.spans import SpanScorer
-from stemify.core.features import HOP_LENGTH, SAMPLE_RATE
+from stemify.audio.features import HOP_LENGTH, SAMPLE_RATE
 from stemify.models.networks import TCN, tcn_receptive_field
 from stemify.models.cuenet import CueNet
 from stemify.training.base import (

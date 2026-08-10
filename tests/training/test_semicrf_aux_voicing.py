@@ -28,7 +28,7 @@ from stemify.training.recipes import RECIPES
 from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.fit.tracks import TrainItem
-from stemify.core.features import N_BINS
+from stemify.audio.features import N_BINS
 
 HOP_S, N_CQT = 0.0116, 4000
 TIMES = np.arange(N_CQT) * HOP_S
