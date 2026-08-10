@@ -15,7 +15,7 @@ Everything one strategy needs, in one package:
 These three were previously in ``recipes/``, ``losses/`` and ``datasets/``, one file
 each. They are what changes together when the paradigm changes -- the batch shape, the
 objective over it, and the recipe binding them -- so they now live together, and the
-*contracts* they implement stay one level up in ``training.base``.
+*contracts* they implement stay one level up in ``fitting.base``.
 """
 
 from stemify.training.frame.dataset import FrameBatch, FrameWindowDataset, collate

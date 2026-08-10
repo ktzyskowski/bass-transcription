@@ -22,7 +22,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from stemify.models.heads import pitch_ce
-from stemify.training.base import Loss
+from stemify.fitting.base import Loss
 from stemify.training.frame.dataset import FrameBatch
 
 BINARY_HEADS = ("onset", "voicing")

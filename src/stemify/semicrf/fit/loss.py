@@ -36,7 +36,7 @@ from torch import nn
 from stemify.models.frames import frames_from_output
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.window import initial_window
-from stemify.training.base import Loss
+from stemify.fitting.base import Loss
 from stemify.semicrf.fit.dataset import ChunkBatch
 from stemify.semicrf.fit.terms import AUX_TERMS
 

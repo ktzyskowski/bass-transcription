@@ -16,13 +16,13 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.training.base import Loss
+from stemify.fitting.base import Loss
 from stemify.training.callbacks import (
     BestCheckpointCallback,
     EveryEpochCheckpointCallback,
 )
 from stemify.training.checkpoint import Checkpoint
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.recipes import RECIPES
 from stemify.training.trainer import Trainer
 

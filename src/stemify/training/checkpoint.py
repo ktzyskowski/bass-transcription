@@ -32,7 +32,7 @@ from stemify.transcription.decoders.base import Decoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
 from stemify.transcription.transcriber import Transcriber
-from stemify.training.base import Recipe
+from stemify.fitting.base import Recipe
 from stemify.training.recipes import RECIPES
 
 logger = logging.getLogger(__name__)

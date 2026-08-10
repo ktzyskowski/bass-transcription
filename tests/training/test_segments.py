@@ -37,7 +37,7 @@ from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.neural import NeuralSpanScorer
 from stemify.semicrf.score import segmentation_scores
 from stemify.semicrf.window import initial_window
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.trainer import Trainer
 
 # `track` is imported to be *injected*, so every test taking it as a parameter reads to

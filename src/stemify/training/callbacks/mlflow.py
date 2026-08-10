@@ -12,7 +12,7 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from stemify.training.base import GRAD_NORM
+from stemify.fitting.base import GRAD_NORM
 from stemify.training.callbacks.base import Callback, EpochLogs, Metrics
 from stemify.training.ema import EMA
 

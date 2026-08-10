@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from stemify.core.conditions import CONDITIONS
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES
 from stemify.semicrf.fit.recipe import (
     ONSET_WEIGHT,

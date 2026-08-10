@@ -42,8 +42,8 @@ from stemify.training.callbacks import (
     MLflowCallback,
 )
 from stemify.core.conditions import CONDITIONS, canonical
-from stemify.training.config import TrainConfig
-from stemify.training.base import epoch_batches
+from stemify.fitting.config import TrainConfig
+from stemify.fitting.base import epoch_batches
 from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.trainer import Trainer
 from stemify.training.validation import build_eval_fn, build_validators

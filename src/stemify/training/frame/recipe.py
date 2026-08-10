@@ -14,10 +14,9 @@ from torch.utils.data import DataLoader
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.transcription.decoders.greedy import GreedyDecoder
-from stemify.models.heads import onset_head, pitch_head, voicing_head
-from stemify.models.networks import TCN
+from stemify.models.assembly import build_cuenet
 from stemify.models.cuenet import CueNet
-from stemify.training.base import (
+from stemify.fitting.base import (
     Loss,
     Recipe,
     config_field,
@@ -25,7 +24,7 @@ from stemify.training.base import (
     config_str_list,
 )
 from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.core.examples import prepare_examples
 from stemify.training.frame import dataset as frame_ds
 from stemify.training.frame.dataset import FrameBatch
@@ -138,22 +137,7 @@ class FrameRecipe(Recipe):
         }
 
     def build_model(self) -> CueNet:
-        backbone = TCN(in_channels=self.in_channels, harmonics=self.harmonics)
-        return CueNet(
-            backbone,
-            {
-                "onset": onset_head(backbone.hidden),
-                "voicing": voicing_head(backbone.hidden),
-            },
-            # A FrequencyHead takes no `hidden`: it taps the front-end before the
-            # flatten, reading (B, C, F, T) with the frequency axis still intact.
-            # The head's width is the front-end's cropped axis, not `N_BINS`: harmonic
-            # stacking spends the top of the fundamental axis on the channels below it.
-            frequency_heads=(
-                {"pitch": pitch_head(n_bins=backbone.frontend.n_bins)}
-                if self.pitch else None
-            ),
-        )
+        return build_cuenet(self.in_channels, self.harmonics, self.pitch)
 
     def build_loss(self) -> Loss[FrameBatch]:
         return FrameBCELoss(self.heads, self.pos_weight)
@@ -191,7 +175,7 @@ class FrameRecipe(Recipe):
     ) -> DataLoader[FrameBatch]:
         """This strategy's loader, with the settings spelled out as arguments.
 
-        These used to come from a shared ``_loader_kwargs(config)`` in ``training.base``
+        These used to come from a shared ``_loader_kwargs(config)`` in ``fitting.base``
         splatted in as ``**dict[str, object]``, on the reasoning that both paradigms
         needed the same DataLoader settings. They do not: the semi-CRF's loader is
         ``batch_size=None, num_workers=0`` because its dataset emits whole batches in

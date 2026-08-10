@@ -28,7 +28,7 @@ from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.models.cuenet import CueNet
 from stemify.core.conditions import resolve
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 
 HEADS = ["onset", "voicing"]
 

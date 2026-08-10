@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.frame.recipe import FrameRecipe
 from stemify.training.train import train
 

@@ -19,7 +19,7 @@ from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.music.notes import NoteEvent
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.semicrf.fit.dataset import Chunk, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer

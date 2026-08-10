@@ -14,7 +14,7 @@ from stemify.models.heads import onset_head
 from stemify.models.networks import TCN
 from stemify.models.cuenet import CueNet
 from stemify.audio.features import N_BINS
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.frame.dataset import collate
 from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.trainer import Trainer

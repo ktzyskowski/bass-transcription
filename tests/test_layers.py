@@ -37,10 +37,18 @@ ALLOWED = {
     **PILLAR_ALLOWANCE,
     "core": _BELOW,
     "models": _BELOW | {"core"},
-    "training": _BELOW | {"core", "models"},
-    "semicrf": _BELOW | {"core", "models", "training"},
-    "evaluation": _BELOW | {"core", "models"},
-    "serving": _BELOW | {"core", "models"},
+    # `fitting` holds what a training *strategy* implements -- Recipe, Loss, Batch,
+    # TrainConfig. It sits above `models` because `Recipe.build_model()` returns a
+    # CueNet, which is precisely why it could not be merged with the inference
+    # contracts in `transcription`: those sit *below* models, which implements them.
+    "fitting": _BELOW | {"core", "models"},
+    # An extension: it implements `fitting` and knows nothing of the framework that
+    # drives it. This used to import `training` and be imported by it.
+    "semicrf": _BELOW | {"core", "models", "fitting"},
+    # The framework, and the composition root that names the strategies.
+    "training": _BELOW | {"core", "models", "fitting", "semicrf"},
+    "evaluation": _BELOW | {"core", "models", "fitting"},
+    "serving": _BELOW | {"core", "models", "fitting"},
 }
 
 # The pillars extracted from ``core`` so far, in dependency order. A pillar is held to a
@@ -70,18 +78,18 @@ PILLARS = list(PILLAR_ALLOWANCE)
 #      away with `Transcriber.from_checkpoint` and the decoder registry.
 #   C  training.cli imports the semi-CRF's weight constants and AUX_TERMS by name;
 #      goes away when a recipe contributes its own argument group.
+#
+# `("training", "semicrf")` used to be here as half of a genuine cycle. It is now a
+# legal downward edge: `training` drives the strategies, `semicrf` is one of them.
 PENDING = {
     ("evaluation", "training"),
     ("evaluation", "semicrf"),
     ("serving", "training"),
     ("serving", "semicrf"),
-    ("training", "semicrf"),
 }
 
-# The semi-CRF is an *extension*: it implements training's contracts, so it may name
-# them -- and nothing else in that package. This is what stops a plugin reaching into a
-# sibling plugin (it built a `FrameRecipe` to reuse encoder assembly, which is step D).
-SEMICRF_MAY_IMPORT_FROM_TRAINING = {"training.base", "training.config"}
+# The semi-CRF is an *extension*. It now implements `fitting` and imports nothing at all
+# from `training`, which is what makes the two packages separately detachable.
 
 
 def _layer(module: str) -> str:
@@ -180,19 +188,22 @@ def test_pending_edges_are_all_still_real():
     )
 
 
-def test_semicrf_touches_only_the_training_contracts():
-    """An extension depends on the framework, never on a sibling extension."""
+def test_semicrf_does_not_import_training_at_all():
+    """An extension depends on the contracts it implements, never on the framework that
+    drives it, and never on a sibling extension.
+
+    This asserted a *permitted set* while `semicrf` still named `training.base` and
+    `training.config` for its contracts, plus one known exception: `SemiCRFRecipe`
+    constructed a whole `FrameRecipe` just to call its `build_model`, because assembling
+    the encoder had no other home. The contracts moved to `fitting` and the assembly
+    moved to `models.assembly`, so the set is now empty and the rule is the simple one.
+    """
     bad = [
         f"{where}: {source} -> {target}"
         for source, target, where in _edges()
-        if _layer(source) == "semicrf"
-        and _layer(target) == "training"
-        and target not in SEMICRF_MAY_IMPORT_FROM_TRAINING
+        if _layer(source) == "semicrf" and _layer(target) == "training"
     ]
-    # `semicrf.fit.recipe` builds a `FrameRecipe` purely to reuse encoder assembly.
-    # Step D moves that into `models`; until then this is the one known exception.
-    expected = ["semicrf/fit/recipe.py: semicrf.fit.recipe -> training.frame.recipe"]
-    assert bad == expected, f"unexpected semicrf -> training edges: {bad}"
+    assert not bad, "semicrf reached into training:\n  " + "\n  ".join(bad)
 
 
 @pytest.mark.parametrize("package", [*PILLARS, "core"])

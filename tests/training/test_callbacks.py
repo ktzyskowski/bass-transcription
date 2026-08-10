@@ -20,7 +20,7 @@ from stemify.training.callbacks import (
     EpochLogs,
     MLflowCallback,
 )
-from stemify.training.config import TrainConfig
+from stemify.fitting.config import TrainConfig
 from stemify.training.frame.dataset import collate
 from stemify.training.frame.loss import FrameBCELoss
 from stemify.training.trainer import Trainer
@@ -168,7 +168,7 @@ def test_the_gradient_norm_is_not_filed_under_loss(tmp_path):
     pytest.importorskip("mlflow")
     from mlflow.tracking import MlflowClient
 
-    from stemify.training.base import GRAD_NORM
+    from stemify.fitting.base import GRAD_NORM
 
     uri = f"file://{tmp_path}/mlruns"
     cb = MLflowCallback(run_name="t", tracking_uri=uri, batch_log_every=1)

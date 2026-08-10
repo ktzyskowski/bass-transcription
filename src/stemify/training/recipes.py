@@ -2,7 +2,7 @@
 
 A ``Recipe`` binds the four choices that have to agree -- batch shape, loss, the
 decoder a checkpoint is scored through, and what that checkpoint must contain. The
-contracts live in ``training.base``; each paradigm lives in its own *package*
+contracts live in ``fitting.base``; each paradigm lives in its own *package*
 (``training.frame``, ``semicrf.fit``); this assembles them so ``--objective`` is
 the only thing a caller spells.
 
@@ -10,7 +10,7 @@ Kept apart from ``base`` on purpose: this module imports the strategy packages a
 import ``base``, so folding the table in beside the ABCs would close the cycle.
 """
 
-from stemify.training.base import HEADS, Recipe
+from stemify.fitting.base import HEADS, Recipe
 from stemify.training.frame import FrameRecipe
 from stemify.semicrf.fit import SemiCRFRecipe
 

@@ -215,7 +215,7 @@ def test_epoch_batches_survives_a_streaming_loader(track):
     # smoke test passed (they ran without a tracking URI, so never logged params).
     from torch.utils.data import DataLoader
 
-    from stemify.training.base import epoch_batches
+    from stemify.fitting.base import epoch_batches
 
     items, cache, _ = track
     streaming = DataLoader(
