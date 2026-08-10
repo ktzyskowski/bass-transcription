@@ -17,14 +17,30 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 
 # What each layer may import. The DAG, stated once.
+#
+# ``core`` is being dissolved into vertical pillars, bottom-up. Each extraction adds a
+# row here *before* the move, so the new pillar's edges are policed from the moment it
+# exists rather than after it has grown some.
 ALLOWED = {
-    "core": set(),
-    "models": {"core"},
-    "training": {"core", "models"},
-    "semicrf": {"core", "models", "training"},
-    "evaluation": {"core", "models"},
-    "serving": {"core", "models"},
+    "music": set(),
+    "core": {"music"},
+    "models": {"music", "core"},
+    "training": {"music", "core", "models"},
+    "semicrf": {"music", "core", "models", "training"},
+    "evaluation": {"music", "core", "models"},
+    "serving": {"music", "core", "models"},
 }
+
+# The pillars extracted from ``core`` so far, in dependency order. A pillar is held to a
+# stronger rule than a layer: it may import only the pillars *below* it, which for the
+# bottom one means nothing from ``stemify`` at all.
+#
+# This is the property that makes a pillar testable without doubles. ``core`` failed it
+# in both directions -- ``Cache`` welds corpus, transform, features and persistence into
+# one call, which is why every training test has to subclass it into a ``_NoOpCache``
+# just to get it out of the way. A pillar that its own consumers must stub is a pillar
+# whose seam is in the wrong place.
+PILLARS = ["music"]
 
 # Edges that exist today and are known to be wrong -- the work still outstanding from
 # the layering plan (docs/refactor-plan.md, steps A and C). Listed rather than allowed,
@@ -85,6 +101,26 @@ def test_layer_dependencies_follow_the_dag():
     assert not violations, "layer violations:\n  " + "\n  ".join(violations)
 
 
+@pytest.mark.parametrize("pillar", PILLARS)
+def test_a_pillar_depends_only_on_the_pillars_beneath_it(pillar):
+    """Detachability, as the property rather than the intention.
+
+    Stricter than the DAG above, which only forbids importing *upward*: a pillar may not
+    reach sideways either. ``music`` is at the bottom, so its allowance is empty and this
+    asserts it imports nothing from ``stemify`` whatsoever.
+    """
+    beneath = set(PILLARS[: PILLARS.index(pillar)])
+    strays = [
+        f"{where}: {source} -> {target}"
+        for source, target, where in _edges()
+        if _layer(source) == pillar and _layer(target) not in beneath | {pillar}
+    ]
+    assert not strays, (
+        f"`{pillar}` may import only {sorted(beneath) or 'nothing'}, but:\n  "
+        + "\n  ".join(strays)
+    )
+
+
 def test_pending_edges_are_all_still_real():
     """PENDING may only shrink. An entry that no longer occurs must be deleted, or the
     list stops describing the work and starts hiding it."""
@@ -110,21 +146,22 @@ def test_semicrf_touches_only_the_training_contracts():
     assert bad == expected, f"unexpected semicrf -> training edges: {bad}"
 
 
-def test_core_imports_no_torch():
-    """Importing every module in ``core`` must not pull torch in.
+@pytest.mark.parametrize("package", [*PILLARS, "core"])
+def test_the_lower_layers_import_no_torch(package):
+    """Importing every module in ``package`` must not pull torch in.
 
     In a subprocess because the test session has torch loaded already, and by walking
-    the package rather than importing ``stemify.core`` alone -- its ``__init__`` is a
-    docstring, so importing it proves nothing about the modules underneath.
+    the package rather than importing it alone -- every ``__init__`` here is a docstring,
+    so importing one proves nothing about the modules underneath.
     """
-    probe = """
+    probe = f"""
 import importlib, pkgutil, sys
-import stemify.core
-for m in pkgutil.walk_packages(stemify.core.__path__, "stemify.core."):
+import stemify.{package} as pkg
+for m in pkgutil.walk_packages(pkg.__path__, "stemify.{package}."):
     importlib.import_module(m.name)
 torch = sorted(n for n in sys.modules if n == "torch" or n.startswith("torch."))
 if torch:
-    raise SystemExit("core pulled in torch: " + ", ".join(torch[:5]))
+    raise SystemExit("{package} pulled in torch: " + ", ".join(torch[:5]))
 """
     result = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True
@@ -132,6 +169,6 @@ if torch:
     if result.returncode:
         pytest.fail(
             f"{result.stdout.strip()}{result.stderr.strip()}\n\n"
-            "Deep learning belongs in `stemify.models`. A torch import inside `core` "
+            "Deep learning belongs in `stemify.models`. A torch import down here "
             "means a contract has been given a neural implementation in place."
         )

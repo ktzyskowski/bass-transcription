@@ -26,7 +26,7 @@ from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.window import initial_window
 from stemify.core.features import N_BINS
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 DT, T = 0.0116, 240
 TIMES = np.arange(T) * DT

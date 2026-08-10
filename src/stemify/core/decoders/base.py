@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
 from stemify.core.frames import Frames
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 
 class Decoder(ABC):

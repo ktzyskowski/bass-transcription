@@ -19,7 +19,7 @@ estimates are false positives -- means exactly what it does for ``PRF``.
 
 from stemify.core.metrics.base import MetricResult
 from stemify.core.metrics.note.base import NoteMetric, matched_pairs
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 
 class FragmentationResult(MetricResult):

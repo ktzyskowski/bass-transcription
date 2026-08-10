@@ -24,7 +24,7 @@ import torch
 from torch import nn
 
 from stemify.semicrf import SemiCRFDecoder
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.training.config import TrainConfig
 from stemify.training.frame.dataset import FrameBatch

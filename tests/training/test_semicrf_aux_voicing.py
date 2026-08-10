@@ -22,7 +22,7 @@ import torch
 
 from stemify.semicrf import SemiCRFDecoder
 from stemify.models.heads import frame_bce
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.training.recipes import RECIPES
 from stemify.semicrf.fit.dataset import ChunkDataset

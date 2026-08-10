@@ -30,7 +30,7 @@ import numpy as np
 from stemify.core.cache import Cache
 from stemify.core.features import SILENCE_DB
 from stemify.core.data.base import Dataset as SlakhLikeDataset
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.conditions import Condition
 from stemify.core.examples import ensure_targets

@@ -76,7 +76,7 @@ from stemify.core.data.base import Dataset, EvalItem
 from stemify.core.data.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 AUDIO_DIR = "audio_bass_stems"
 MIDI_DIR = "midi_fully_aligned"

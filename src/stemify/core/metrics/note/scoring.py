@@ -23,10 +23,10 @@ from stemify.core.metrics.base import MetricResult
 from stemify.core.metrics.note.base import NoteMetric
 from stemify.core.metrics.note.fragmentation import Fragmentation
 from stemify.core.metrics.note.prf import PRF
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 # One track's notes. This was a bare ``Notes = list`` "kept loose to avoid importing
-# the type" -- but ``stemify.core.notes`` is a leaf value module with no dependencies, so the
+# the type" -- but ``stemify.music.notes`` is a leaf value module with no dependencies, so the
 # import costs nothing, and the loose alias meant every signature here said ``list[Any]``
 # while reading as though it said something.
 Notes = list[NoteEvent]

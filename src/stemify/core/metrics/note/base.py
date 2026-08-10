@@ -38,7 +38,7 @@ import mir_eval
 import numpy as np
 
 from stemify.core.metrics.base import MetricResult
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 ONSET_TOLERANCE_S = 0.05
 PITCH_TOLERANCE_CENTS = 50.0

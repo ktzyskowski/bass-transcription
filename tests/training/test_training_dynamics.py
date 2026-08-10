@@ -60,7 +60,7 @@ from torch.utils.data import DataLoader
 from stemify.core.cache import Cache
 from stemify.core.conditions import CONDITIONS
 from stemify.core.contour import Contour
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.sources import Sources
 from stemify.semicrf import SemiCRFDecoder

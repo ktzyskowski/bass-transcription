@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 
 from stemify.semicrf import SemiCRFDecoder
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.serving.audio import sources_from
 from stemify.serving.export import notes_csv, preview_wav
 from stemify.training.checkpoint import Checkpoint

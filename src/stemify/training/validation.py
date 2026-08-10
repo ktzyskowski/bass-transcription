@@ -46,12 +46,12 @@ from stemify.core.frames import Frames
 from stemify.core.data.base import Dataset
 from stemify.core.features import FrameFeatures, extract_features, stack_channels
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.pitch import PyinPitch
 from stemify.core.serde import features_npy
 from stemify.core.conditions import CONDITIONS, Condition
 from stemify.core.examples import prepare_examples
-from stemify.core.labels import onset_targets
+from stemify.music.labels import onset_targets
 
 @dataclass
 class ValItem:

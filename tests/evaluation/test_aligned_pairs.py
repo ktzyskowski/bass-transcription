@@ -9,7 +9,7 @@ import numpy as np
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
 from stemify.evaluation.cues import aligned_pairs
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 FRAME_TIMES = np.arange(12) * 0.0116
 

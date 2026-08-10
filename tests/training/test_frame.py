@@ -13,7 +13,7 @@ import torch
 from stemify.core.features import SILENCE_DB
 from stemify.core.cache import Cache
 from stemify.core.contour import Contour
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.sources import Sources
 from stemify.core.examples import build_example

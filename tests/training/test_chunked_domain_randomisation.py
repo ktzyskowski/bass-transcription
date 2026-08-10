@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.tracks import TrainItem

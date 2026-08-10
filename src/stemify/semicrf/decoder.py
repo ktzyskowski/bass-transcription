@@ -37,7 +37,7 @@ from stemify.semicrf.score import segmentation_scores
 from stemify.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
 from stemify.semicrf.marginals import segment_confidence, span_marginals
 from stemify.semicrf.viterbi import viterbi
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 
 class SemiCRFDecoder(Decoder, nn.Module):

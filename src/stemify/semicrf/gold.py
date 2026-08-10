@@ -9,7 +9,7 @@ import numpy as np
 
 from stemify.semicrf.constants import GAP_REST_S
 from stemify.semicrf.labelset import BINARY, LabelSet
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 
 def gold_segments(

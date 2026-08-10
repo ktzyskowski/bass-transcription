@@ -6,7 +6,7 @@ nine shapes and ``3`` in ``initial_window``. Widening the alphabet to name a pit
 therefore not a change to the recurrence -- it is a change to this object, and the
 recurrence has to stop hardcoding the width first.
 
-Named ``labelset`` rather than ``labels`` because ``core.labels`` already exists and
+Named ``labelset`` rather than ``labels`` because ``music.labels`` already exists and
 answers a different question: that one builds *per-frame training targets* for the
 heads, this one names *segment* labels for the DP.
 

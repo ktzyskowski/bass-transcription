@@ -36,7 +36,7 @@ from stemify.core.metrics import (
     prf_rates,
     score_notes,
 )
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.transcriber import Transcriber
 from stemify.core.transforms import AudioTransform, Identity
 

@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from stemify.core.contour import Contour
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.sources import Sources
 
 

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from stemify.core.cache import Cache
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.sources import Sources
 from stemify.core.conditions import CONDITIONS, Channel, Condition, resolve
 from stemify.core.transforms import AudioTransform, Identity

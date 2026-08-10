@@ -30,7 +30,7 @@ from stemify.semicrf.viterbi import viterbi
 from stemify.semicrf.score import segmentation_score, segmentation_scores
 from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.gold import gold_segments
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 SPANS = [(0.2, 0.9), (1.2, 1.9)]
 HZ = [110.0, 146.0]

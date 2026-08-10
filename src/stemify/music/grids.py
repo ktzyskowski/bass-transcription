@@ -1,11 +1,10 @@
 """Frame-grid utilities: nearest-neighbour resampling between grids.
 
-Pure numpy, no model or training deps -- a leaf of ``core`` so the label builder,
-the decoders, the segmenters and the trainer can all use these without an import
-cycle (it used to live under ``decoders/``, but ``core/labels.py`` needs it
-too and shouldn't depend on ``decoders``). Nearest-neighbour is the honest choice
-for a mask or an onset: interpolation would invent half-voiced frames or smear an
-onset across two.
+Pure numpy. A leaf of ``music``, so the label builder, the decoders, the segmenters
+and the trainer can all reach it without an import cycle -- it used to live under
+``decoders/``, and moved out when ``labels`` needed it too and could not depend on a
+decoder. Nearest-neighbour is the honest choice for a mask or an onset: interpolation
+would invent half-voiced frames or smear an onset across two.
 """
 
 import numpy as np

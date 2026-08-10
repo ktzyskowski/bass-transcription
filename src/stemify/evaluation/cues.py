@@ -38,7 +38,7 @@ from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues
 from stemify.core.sources import Sources
-from stemify.core.labels import onset_targets, voicing_targets
+from stemify.music.labels import onset_targets, voicing_targets
 from stemify.core.transforms import AudioTransform, Identity
 
 

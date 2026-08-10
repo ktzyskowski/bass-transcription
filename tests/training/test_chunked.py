@@ -22,7 +22,7 @@ from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.spans import Grid
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.sources import Sources
 from stemify.semicrf.fit.dataset import ChunkDataset, collate

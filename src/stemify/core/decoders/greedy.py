@@ -25,8 +25,8 @@ from scipy.signal import find_peaks
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
 from stemify.core.decoders.base import Decoder
-from stemify.core.grids import resample_mask
-from stemify.core.notes import NoteEvent
+from stemify.music.grids import resample_mask
+from stemify.music.notes import NoteEvent
 
 # Below this, a "note" is a tracker blip (onset transient, a frame of octave wobble)
 # rather than a played note. Enforced against the *contour* grid, which is what makes

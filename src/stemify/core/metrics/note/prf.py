@@ -15,7 +15,7 @@ import numpy as np
 
 from stemify.core.metrics.base import MetricResult
 from stemify.core.metrics.note.base import NoteMetric, count_matches
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 
 
 def prf_rates(tp: int, fp: int, fn: int) -> dict[str, float]:

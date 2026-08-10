@@ -7,7 +7,7 @@ whole scaffolding depends on being correct.
 
 import numpy as np
 
-from stemify.core.labels import onset_targets, pitch_targets, voicing_targets
+from stemify.music.labels import onset_targets, pitch_targets, voicing_targets
 
 FRAMES = np.arange(10) * 0.0116  # 11.6 ms CQT grid
 REF = np.arange(12) * 0.01       # 10 ms reference grid

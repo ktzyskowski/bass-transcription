@@ -14,7 +14,7 @@ one is meant labels the entire corpus E1, and nothing raises.
 import numpy as np
 import pytest
 
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 

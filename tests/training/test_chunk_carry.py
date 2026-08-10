@@ -33,7 +33,7 @@ from stemify.core.contour import Contour
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.sources import Sources
 from stemify.core.conditions import CONDITIONS

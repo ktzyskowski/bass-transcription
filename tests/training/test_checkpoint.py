@@ -21,7 +21,7 @@ import torch
 from stemify.core.contour import Contour
 from stemify.core.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.training.checkpoint import VERSION, Checkpoint
 from stemify.training.frame.recipe import FrameRecipe
 from stemify.semicrf.fit.recipe import SemiCRFRecipe

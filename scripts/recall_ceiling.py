@@ -53,7 +53,7 @@ from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.core.features import BINS_PER_SEMITONE, midi_to_bin
 from stemify.core.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
-from stemify.core.notes import NoteEvent
+from stemify.music.notes import NoteEvent
 from stemify.core.serde import features_npy
 from stemify.core.conditions import CONDITIONS, canonical
 from stemify.training.validation import CheckpointValidator, ValItem
