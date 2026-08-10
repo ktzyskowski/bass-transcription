@@ -46,12 +46,12 @@ from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, NoteAnnotated
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
-from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
+from stemify.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.music.notes import NoteEvent
 from stemify.transcription.pitch import PyinPitch
 from stemify.persistence.serde import features_npy
-from stemify.core.conditions import CONDITIONS, Condition
-from stemify.core.examples import prepare_examples
+from stemify.conditions import CONDITIONS, Condition
+from stemify.examples import prepare_examples
 from stemify.music.labels import onset_targets
 
 @dataclass

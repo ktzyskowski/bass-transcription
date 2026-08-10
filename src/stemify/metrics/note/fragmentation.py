@@ -17,8 +17,8 @@ into pieces. Reuses ``matched_pairs`` from ``note`` so "matched" -- hence which
 estimates are false positives -- means exactly what it does for ``PRF``.
 """
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.note.base import NoteMetric, matched_pairs
+from stemify.metrics.base import MetricResult
+from stemify.metrics.note.base import NoteMetric, matched_pairs
 from stemify.music.notes import NoteEvent
 
 

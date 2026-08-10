@@ -23,9 +23,9 @@ from stemify.fitting.base import (
     config_int_list,
     config_str_list,
 )
-from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
+from stemify.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.fitting.config import TrainConfig
-from stemify.core.examples import prepare_examples
+from stemify.examples import prepare_examples
 from stemify.training.frame import dataset as frame_ds
 from stemify.training.frame.dataset import FrameBatch
 from stemify.training.frame.loss import FrameBCELoss

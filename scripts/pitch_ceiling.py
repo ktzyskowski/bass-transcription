@@ -18,10 +18,10 @@ from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_framenet
-from stemify.core.metrics.note.fragmentation import Fragmentation
-from stemify.core.metrics.note.prf import PRF
-from stemify.core.metrics.note.scoring import score_notes
-from stemify.core.conditions import CONDITIONS
+from stemify.metrics.note.fragmentation import Fragmentation
+from stemify.metrics.note.prf import PRF
+from stemify.metrics.note.scoring import score_notes
+from stemify.conditions import CONDITIONS
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "/home/ktzys/dev/tabgen/stemify-ml/data/raw/slakh2100"

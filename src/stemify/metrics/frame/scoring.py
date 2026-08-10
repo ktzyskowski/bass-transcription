@@ -24,10 +24,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.frame.onset import OnsetPR
-from stemify.core.metrics.frame.pitch import PitchAccuracy
-from stemify.core.metrics.frame.voicing import VoicingAUROC
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.onset import OnsetPR
+from stemify.metrics.frame.pitch import PitchAccuracy
+from stemify.metrics.frame.voicing import VoicingAUROC
 
 # A per-channel aligned pair: (prediction, truth), both 1-D and the same length. For
 # onset/voicing that is (probability, label); for pitch (estimate Hz, reference Hz).

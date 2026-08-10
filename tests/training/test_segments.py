@@ -25,7 +25,7 @@ import pytest
 from stemify.persistence.store import Store
 import torch
 
-from stemify.core.conditions import CONDITIONS
+from stemify.conditions import CONDITIONS
 from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import NEG

@@ -42,7 +42,7 @@ import torch
 
 from stemify.persistence.store import Store
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.core.metrics import score_notes
+from stemify.metrics import score_notes
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators
 

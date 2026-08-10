@@ -1,8 +1,7 @@
-"""Dataset assembly: target building, windowing, padding, collation.
+"""Dataset assembly: windowing, padding, collation, and the cache round-trip.
 
-build_example is exercised on a synthetic contour so target alignment is checked
-without audio; the windowing tests round-trip through a saved .npz so the cache
-path is covered too.
+The windowing tests round-trip through a saved .npz so the cache path is covered too.
+Target *construction* is pure array math and lives in tests/music/test_labels.py.
 """
 
 
@@ -17,27 +16,8 @@ from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
-from stemify.core.examples import build_example
 from stemify.training.frame.dataset import FrameWindowDataset, collate
 from stemify.training.frame.recipe import FrameRecipe
-
-
-def test_build_example_aligns_onset_and_voicing():
-    frame_times = np.arange(20) * 0.0116
-    ref_times = np.arange(24) * 0.01
-    freqs = np.where(np.arange(24) < 12, 110.0, 0.0)  # voiced first ~0.12 s
-    reference = Contour(ref_times, freqs)
-    notes = [NoteEvent(onset=0.0, offset=0.12, midi_pitch=45.0)]
-
-    ex = build_example(
-        "t", np.zeros((5, 20), dtype=np.float32), frame_times,
-        reference, notes, heads=["onset", "voicing"],
-    )
-    assert set(ex.targets) == {"onset", "voicing"}
-    assert ex.targets["onset"].shape == (20,)
-    assert ex.targets["onset"][:3].any()      # onset marked near t=0
-    assert ex.targets["voicing"][:5].all()    # voiced early
-    assert not ex.targets["voicing"][-3:].any()  # rest late
 
 
 def _save_example(tmp_path, name, features, target):
@@ -157,9 +137,8 @@ def test_channels_of_different_lengths_are_rejected(tmp_path):
 def test_prepare_backfills_missing_target_without_recomputing_features(
     tmp_path, monkeypatch
 ):
-    from stemify.music.contour import Contour
     from stemify.persistence.serde import features_npy
-    from stemify.core.examples import prepare_examples
+    from stemify.examples import prepare_examples
     from stemify.audio.transforms import Identity
 
     # Pre-save an onset-only example, as a prior (onset-only) run would have. The
@@ -215,8 +194,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     import pytest
 
     from stemify.persistence.store import Store
-    from stemify.music.contour import Contour
-    from stemify.core.examples import prepare_examples
+    from stemify.examples import prepare_examples
     from stemify.audio.transforms import Identity
 
     audio = tmp_path / "mix.wav"
@@ -301,7 +279,7 @@ def test_val_conditions_accept_retired_names():
         "val conditions must go through the legacy mapping, like --sources does"
     )
     # And the defaults must name conditions that actually exist.
-    from stemify.core.conditions import CONDITIONS
+    from stemify.conditions import CONDITIONS
 
     for default in ("bichannel-clean", "bichannel-separated", "clean", "mixture",
                     "separated"):

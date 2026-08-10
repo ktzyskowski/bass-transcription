@@ -1,10 +1,15 @@
 """The neural layer: backbones, heads, and the two pipeline stages that wrap one.
 
-Sits between ``core`` and ``training``, and the boundary below it is the sharp one:
-**``core`` contains no torch at all, and everything here needs it.** That is not a
-convention -- ``tests/test_layers.py`` asserts that importing ``stemify.core`` leaves
-``torch`` out of ``sys.modules``, so the day something reaches downward it fails loudly
-rather than quietly re-coupling the two.
+Sits above the pillars and below ``fitting``, and the boundary beneath it is the sharp
+one: **no pillar contains torch at all, and everything here needs it.** That is not a
+convention -- ``tests/test_layers.py`` walks each pillar in a subprocess and asserts that
+importing it leaves ``torch`` out of ``sys.modules``, so the day something reaches
+downward it fails loudly rather than quietly re-coupling the two.
+
+In particular this implements ``transcription``'s contracts (``LearnedEncoder`` is an
+``Encoder``, ``NeuralPitch`` a ``PitchEstimator``) and is depended *on* by ``fitting``,
+whose ``Recipe.build_model()`` returns a ``FrameNet``. That is the whole reason those
+two contract sets are different layers.
 
 Why this is its own layer rather than part of ``training``: a trained network at
 inference is a *pure function*. Both wrappers here run under ``@torch.no_grad()`` on a

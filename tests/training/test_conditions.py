@@ -15,7 +15,7 @@ import pytest
 from stemify.persistence.store import Store
 from stemify.music.notes import NoteEvent
 from stemify.audio.sources import Sources
-from stemify.core.conditions import CONDITIONS, Channel, Condition, resolve
+from stemify.conditions import CONDITIONS, Channel, Condition, resolve
 from stemify.audio.transforms import AudioTransform, Identity
 
 
@@ -204,7 +204,7 @@ def test_every_recipe_width_has_a_clean_condition_of_that_width():
     # by an inline tag, a rename left it pointing at a "stem+mix" that no longer
     # existed, and nothing caught it -- building a val loader needs the corpus, so
     # no test reached that line. Checking the *table* needs no corpus at all.
-    from stemify.core.conditions import CLEAN_BY_WIDTH
+    from stemify.conditions import CLEAN_BY_WIDTH
 
     for width, tag in CLEAN_BY_WIDTH.items():
         assert tag in CONDITIONS, f"clean condition {tag!r} for width {width} is gone"
@@ -214,7 +214,7 @@ def test_every_recipe_width_has_a_clean_condition_of_that_width():
 def test_a_clean_condition_exists_for_every_width_a_condition_can_have():
     # A condition whose width has no clean twin cannot be validated, and that only
     # surfaces after the training loader is already built.
-    from stemify.core.conditions import CLEAN_BY_WIDTH
+    from stemify.conditions import CLEAN_BY_WIDTH
 
     widths = {c.in_channels for c in CONDITIONS.values()}
     assert widths <= set(CLEAN_BY_WIDTH), (
@@ -228,7 +228,7 @@ def test_clean_val_conditions_all_filter_to_single_bass():
     # track set. "stem" is the one condition that keeps multi-bass tracks, and using it
     # as the 1-channel clean condition would silently reintroduce the mismatch that
     # made tcn-v2's stem 0.878 incomparable to stem-solo's 0.9375.
-    from stemify.core.conditions import CLEAN_BY_WIDTH
+    from stemify.conditions import CLEAN_BY_WIDTH
 
     for width, tag in CLEAN_BY_WIDTH.items():
         assert CONDITIONS[tag].unambiguous_only, (
@@ -240,7 +240,7 @@ def test_legacy_names_still_resolve():
     # A rename that silently invalidates every experiment recorded in
     # docs/experiments.md is worse than the confusing names it fixes, so the old tags
     # keep working (with a warning) and map to exactly what they used to mean.
-    from stemify.core.conditions import LEGACY_NAMES, resolve
+    from stemify.conditions import LEGACY_NAMES, resolve
 
     for old, new in LEGACY_NAMES.items():
         assert new in CONDITIONS, f"{old!r} maps to missing condition {new!r}"
@@ -251,7 +251,7 @@ def test_legacy_names_do_not_collide_with_current_ones():
     # "mix" and "stem" are legacy tags whose meaning MOVED: "mix" used to be the raw
     # mixture (now "mixture") while the "-mix" suffix meant a context channel. If a
     # legacy key were also a live name, resolve() would silently rewrite a valid tag.
-    from stemify.core.conditions import LEGACY_NAMES
+    from stemify.conditions import LEGACY_NAMES
 
     assert not set(LEGACY_NAMES) & set(CONDITIONS)
 
@@ -262,7 +262,7 @@ def test_canonical_maps_retired_names_and_passes_others_through():
     # with old tags resolved its training conditions and then died on a KeyError for
     # the val ones -- three seconds in, after the previous arm had succeeded with the
     # same arguments under the pre-rename code.
-    from stemify.core.conditions import LEGACY_NAMES, canonical
+    from stemify.conditions import LEGACY_NAMES, canonical
 
     for old, new in LEGACY_NAMES.items():
         assert canonical(old) == new

@@ -10,7 +10,7 @@ reference-voiced frames with unanswered frames counted (not dropped).
 import numpy as np
 import pytest
 
-from stemify.core.metrics.frame.confusion import MIDI_MAX, MIDI_MIN, PitchConfusion
+from stemify.metrics.frame.confusion import MIDI_MAX, MIDI_MIN, PitchConfusion
 
 A2 = 110.0   # MIDI 45
 A3 = 220.0   # MIDI 57  (+12 from A2)

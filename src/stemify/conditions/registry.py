@@ -32,12 +32,12 @@ combination, which is much more often than the types do.
 import logging
 import re
 
-from stemify.core.condition_types import Channel, Condition
+from stemify.conditions.types import Channel, Condition
 from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
 logger = logging.getLogger(__name__)
 
-# Re-exported so `from stemify.core.conditions import Condition` keeps working
+# Re-exported so `from stemify.conditions import Condition` keeps working
 # after the types moved out; named in __all__ because --strict does not treat a plain
 # import as a re-export.
 __all__ = [

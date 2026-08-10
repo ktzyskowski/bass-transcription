@@ -18,9 +18,11 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 
 # What each layer may import. The DAG, stated once.
 #
-# ``core`` is being dissolved into vertical pillars, bottom-up. Each extraction adds a
-# row here *before* the move, so the new pillar's edges are policed from the moment it
-# exists rather than after it has grown some.
+# `core` is GONE. It was defined negatively -- "does not depend on a model" -- and a
+# negative definition cannot refuse anything, which is how it reached 4832 lines. It is
+# nine pillars now, each defined by what it *is*. A new one adds a row here *before* the
+# move, so its edges are policed from the moment it exists rather than after it grows
+# some.
 #
 # A pillar's row is *exact*: it names the edges that actually exist, not the ones it
 # would be entitled to. See ``test_a_pillars_allowance_is_not_aspirational``.
@@ -31,24 +33,26 @@ PILLAR_ALLOWANCE = {
     "audio": {"platform", "persistence"},
     "corpus": {"music", "audio"},
     "transcription": {"music", "audio", "persistence"},
+    "metrics": {"music"},
+    "conditions": {"audio", "corpus", "persistence"},
+    "examples": {"platform", "music", "audio", "persistence", "corpus"},
 }
 _BELOW = set(PILLAR_ALLOWANCE)
 ALLOWED = {
     **PILLAR_ALLOWANCE,
-    "core": _BELOW,
-    "models": _BELOW | {"core"},
+    "models": _BELOW,
     # `fitting` holds what a training *strategy* implements -- Recipe, Loss, Batch,
     # TrainConfig. It sits above `models` because `Recipe.build_model()` returns a
     # FrameNet, which is precisely why it could not be merged with the inference
     # contracts in `transcription`: those sit *below* models, which implements them.
-    "fitting": _BELOW | {"core", "models"},
+    "fitting": _BELOW | {"models"},
     # An extension: it implements `fitting` and knows nothing of the framework that
     # drives it. This used to import `training` and be imported by it.
-    "semicrf": _BELOW | {"core", "models", "fitting"},
+    "semicrf": _BELOW | {"models", "fitting"},
     # The framework, and the composition root that names the strategies.
-    "training": _BELOW | {"core", "models", "fitting", "semicrf"},
-    "evaluation": _BELOW | {"core", "models", "fitting"},
-    "serving": _BELOW | {"core", "models", "fitting"},
+    "training": _BELOW | {"models", "fitting", "semicrf"},
+    "evaluation": _BELOW | {"models", "fitting"},
+    "serving": _BELOW | {"models", "fitting"},
 }
 
 # The pillars extracted from ``core`` so far, in dependency order. A pillar is held to a
@@ -206,7 +210,7 @@ def test_semicrf_does_not_import_training_at_all():
     assert not bad, "semicrf reached into training:\n  " + "\n  ".join(bad)
 
 
-@pytest.mark.parametrize("package", [*PILLARS, "core"])
+@pytest.mark.parametrize("package", PILLARS)
 def test_the_lower_layers_import_no_torch(package):
     """Importing every module in ``package`` must not pull torch in.
 

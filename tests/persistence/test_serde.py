@@ -6,7 +6,6 @@ implicitly (a save that completes leaves no .partial).
 import numpy as np
 
 from stemify.music.contour import Contour
-from stemify.core.legacy import migrate_example_cache
 from stemify.persistence.serde import (
     CachedItem,
     features_npy,
@@ -47,20 +46,6 @@ def test_load_mmap_returns_memmap_and_splits_features(tmp_path):
 def test_save_leaves_no_partial(tmp_path):
     _save_example(tmp_path, "clean", np.random.rand(4, 5), np.arange(5))
     assert list(tmp_path.glob("*.partial")) == []  # atomic write cleaned up
-
-
-def test_migrate_splits_legacy_npz_and_is_idempotent(tmp_path):
-    legacy = tmp_path / "old.npz"
-    np.savez_compressed(
-        legacy, name="old", features=np.ones((4, 6), dtype=np.float32),
-        frame_times=np.arange(6), target_onset=np.zeros(6),
-    )
-    assert migrate_example_cache(tmp_path) == 1
-    assert features_npy(legacy).exists()
-    assert "features" not in np.load(legacy).files    # rewritten slim
-    ex = CachedItem.load(legacy)
-    assert ex.features.shape == (4, 6) and "onset" in ex.targets
-    assert migrate_example_cache(tmp_path) == 0        # already split -> no-op
 
 
 def test_contour_round_trips_with_and_without_confidence(tmp_path):

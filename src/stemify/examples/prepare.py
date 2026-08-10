@@ -1,67 +1,31 @@
-"""Assemble per-frame training targets on top of a cached CQT.
+"""Layering labels onto a cached CQT, and keeping them in step as heads are added.
 
-The target layer, on top of the persistence pillar and below the
-windowing that serves batches (``frame/dataset.py``). Two pieces, split so each is
-testable and the expensive one (the CQT) is cached once:
+The expensive half (the CQT) is `audio.cache`'s and the pure half (the target arrays)
+is `music.labels`'. What is left here is the part that is neither: walking a corpus,
+pairing each item with its cache entry, and back-filling the targets a run asks for
+that the entry does not yet carry.
 
-  - ``build_example`` turns one track's features + references into a full-track
-    (features, targets) ``CachedItem``. Pure given the arrays, so a synthetic
-    contour and a few notes exercise the target alignment without touching disk.
-  - ``prepare_examples`` caches each track's CQT (via ``audio.cache.ensure_features``) and layers
-    the requested heads' targets on top. Self-healing: a cached example missing a
-    newly-requested head's target gains it from the reference alone, no CQT recompute.
+That back-fill is why this exists at all. When a head set grows -- adding voicing to an
+onset-only cache -- the features are unchanged and only the labels are new, so a run
+reuses every CQT and pays a MIDI parse per track instead of a full re-featurisation of
+the corpus.
 
-Targets live on the CQT frame grid (``frame_times``); features and every target
-share that one grid, none assume the 10 ms reference grid.
+Targets live on the CQT frame grid (``frame_times``); features and every target share
+that one grid, and none assume the 10 ms reference grid the metrics use.
 """
 
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-import librosa
 import numpy as np
 
-from stemify.platform.atomic import atomic_write
 from stemify.audio.cache import ensure_features
-from stemify.persistence.store import Store
-from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
-from stemify.music.notes import NoteEvent
-from stemify.persistence.serde import CachedItem, write_npz
-from stemify.music.labels import onset_targets, pitch_targets, voicing_targets
 from stemify.audio.transforms import AudioTransform, Identity
-
-
-def build_example(
-    name: str,
-    features: np.ndarray,
-    frame_times: np.ndarray,
-    reference: Contour,
-    notes: Sequence[NoteEvent],
-    heads: Iterable[str],
-    onset_tolerance_frames: int = 1,
-) -> CachedItem:
-    """Assemble the targets each requested head needs, on ``frame_times``.
-
-    ``reference`` is the *gated* reference contour (voicing + pitch); ``notes``
-    give the exact onsets. Labels always come from the clean stem's truth, no
-    matter which audio the features came from.
-    """
-    heads = set(heads)
-    targets: dict[str, np.ndarray] = {}
-    if "onset" in heads:
-        onsets = np.array([n.onset for n in notes], dtype=float)
-        targets["onset"] = onset_targets(onsets, frame_times, onset_tolerance_frames)
-    if "voicing" in heads:
-        targets["voicing"] = voicing_targets(
-            reference.times, reference.voiced, frame_times
-        )
-    if "pitch" in heads:
-        midi = np.full(reference.freqs.shape, np.nan, dtype=float)
-        voiced = reference.freqs > 0
-        midi[voiced] = librosa.hz_to_midi(reference.freqs[voiced])
-        targets["pitch"] = pitch_targets(reference.times, midi, frame_times)
-    return CachedItem(name, features, targets, frame_times)
+from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
+from stemify.music.labels import build_targets
+from stemify.persistence.serde import write_npz
+from stemify.persistence.store import Store
+from stemify.platform.atomic import atomic_write
 
 
 def prepare_examples(
@@ -142,15 +106,13 @@ def _ensure_targets(
             return False
         arrays = {k: z[k] for k in z.files}
         frame_times = z["frame_times"]
-    added = build_example(
-        item.name,
-        np.empty((1, frame_times.size), dtype=np.float32),
+    added = build_targets(
         frame_times,
         item.reference(),
         item.reference_notes(),
         missing,
         onset_tolerance_frames,
-    ).targets
+    )
     for head, target in added.items():
         arrays[f"target_{head}"] = target
     # Atomic like every other store write: this rewrites an npz a later run keys on,

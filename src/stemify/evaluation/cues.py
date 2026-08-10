@@ -36,7 +36,7 @@ from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
 from stemify.transcription.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
-from stemify.core.metrics import MetricResult, AlignedPairs, score_cues
+from stemify.metrics import MetricResult, AlignedPairs, score_cues
 from stemify.audio.sources import Sources
 from stemify.music.labels import onset_targets, voicing_targets
 from stemify.audio.transforms import AudioTransform, Identity

@@ -13,8 +13,8 @@ match -- no second scoring pass, and pooled + per-item can never disagree.
 
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.note.base import NoteMetric, count_matches
+from stemify.metrics.base import MetricResult
+from stemify.metrics.note.base import NoteMetric, count_matches
 from stemify.music.notes import NoteEvent
 
 

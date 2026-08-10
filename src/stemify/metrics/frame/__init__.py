@@ -4,12 +4,12 @@
 one pair and scores once (see ``stemify.evaluation.frame``).
 """
 
-from stemify.core.metrics.frame.base import FrameMetric
-from stemify.core.metrics.frame.confusion import ConfusionResult, PitchConfusion
-from stemify.core.metrics.frame.onset import OnsetPR
-from stemify.core.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
-from stemify.core.metrics.frame.scoring import AlignedPairs, score_cues
-from stemify.core.metrics.frame.voicing import VoicingAUROC
+from stemify.metrics.frame.base import FrameMetric
+from stemify.metrics.frame.confusion import ConfusionResult, PitchConfusion
+from stemify.metrics.frame.onset import OnsetPR
+from stemify.metrics.frame.pitch import PitchAccuracy, PitchAccuracyResult
+from stemify.metrics.frame.scoring import AlignedPairs, score_cues
+from stemify.metrics.frame.voicing import VoicingAUROC
 
 __all__ = [
     "FrameMetric",

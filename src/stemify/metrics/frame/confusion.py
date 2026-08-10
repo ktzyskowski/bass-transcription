@@ -24,8 +24,8 @@ distinction drives entirely different fixes.
 import librosa
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.frame.base import FrameMetric
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.base import FrameMetric
 
 # The physical range of a 5-string bass with 24 frets: B0 (open low B) to G4
 # (24th fret of the G string). Chosen from instrument physics rather than fitted

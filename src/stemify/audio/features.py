@@ -56,7 +56,7 @@ TOP_DB = 80.0     # dB floor for the log-magnitude conversion
 SILENCE_DB = -TOP_DB
 
 # Identity of the CQT *as configured here* -- the producer half of a cached feature's
-# key (see ``stemify.core.cache``). It names every constant above that changes the output,
+# key (see ``stemify.persistence.store``). It names every constant above that changes the output,
 # so editing one invalidates the cache instead of silently serving features computed
 # under the old settings to a model trained on the new ones. That failure is the quiet
 # kind: a stale CQT is still a valid-looking array of the right shape.

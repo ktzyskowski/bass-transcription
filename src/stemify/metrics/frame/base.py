@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
+from stemify.metrics.base import MetricResult
 
 
 class FrameMetric(ABC):

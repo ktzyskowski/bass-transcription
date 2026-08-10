@@ -9,12 +9,12 @@ Two families, each in its own subpackage, split by input shape (see ``base``):
   - ``note`` -- ``NoteMetric`` over lists of per-track note lists. ``PRF``,
     ``Fragmentation``. Matching (``matched_pairs``) is shared within the subpackage.
 
-Everything is re-exported here, so callers import from ``stemify.core.metrics``
+Everything is re-exported here, so callers import from ``stemify.metrics``
 regardless of which subpackage a metric lives in.
 """
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.frame import (
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame import (
     ConfusionResult,
     FrameMetric,
     OnsetPR,
@@ -25,7 +25,7 @@ from stemify.core.metrics.frame import (
     VoicingAUROC,
     score_cues,
 )
-from stemify.core.metrics.note import (
+from stemify.metrics.note import (
     DEFAULT_NOTE_METRICS,
     PRF,
     Fragmentation,

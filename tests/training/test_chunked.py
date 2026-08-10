@@ -17,7 +17,7 @@ import torch
 
 from stemify.audio.features import SILENCE_DB
 from stemify.persistence.store import Store
-from stemify.core.conditions import CONDITIONS
+from stemify.conditions import CONDITIONS
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder

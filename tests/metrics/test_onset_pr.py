@@ -9,7 +9,7 @@ import math
 import numpy as np
 import pytest
 
-from stemify.core.metrics.frame import OnsetPR
+from stemify.metrics.frame import OnsetPR
 
 
 def test_perfect_ranking_scores_one():

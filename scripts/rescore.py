@@ -17,9 +17,9 @@ from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_framenet
-from stemify.core.metrics.note.base import matched_pairs
-from stemify.core.metrics.note.prf import prf_rates
-from stemify.core.conditions import CONDITIONS
+from stemify.metrics.note.base import matched_pairs
+from stemify.metrics.note.prf import prf_rates
+from stemify.conditions import CONDITIONS
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "data/raw/slakh2100"

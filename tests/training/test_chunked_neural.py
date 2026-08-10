@@ -26,7 +26,7 @@ from stemify.audio.cache import feature_path
 import torch
 from torch import nn
 
-from stemify.core.conditions import CONDITIONS
+from stemify.conditions import CONDITIONS
 from stemify.persistence.serde import CachedItem
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate

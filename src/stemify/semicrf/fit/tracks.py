@@ -32,8 +32,8 @@ from stemify.audio.features import SILENCE_DB
 from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
-from stemify.core.conditions import Condition
-from stemify.core.examples import ensure_targets
+from stemify.conditions import Condition
+from stemify.examples import ensure_targets
 
 
 @dataclass(frozen=True)

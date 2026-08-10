@@ -46,8 +46,8 @@ with different voiced fractions.
 import mir_eval
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.frame.base import FrameMetric
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.base import FrameMetric
 
 CENTS_PER_OCTAVE = 1200.0
 

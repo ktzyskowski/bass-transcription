@@ -52,10 +52,10 @@ from stemify.transcription.decoders.greedy import (
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_framenet
 from stemify.audio.features import BINS_PER_SEMITONE, midi_to_bin
-from stemify.core.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
+from stemify.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import features_npy
-from stemify.core.conditions import CONDITIONS, canonical
+from stemify.conditions import CONDITIONS, canonical
 from stemify.training.validation import CheckpointValidator, ValItem
 
 ROOT = "data/raw/slakh2100"

@@ -29,7 +29,7 @@ from typing import Any
 
 from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
 from stemify.evaluation.report import Report, jsonable
-from stemify.core.metrics import (
+from stemify.metrics import (
     DEFAULT_NOTE_METRICS,
     MetricResult,
     NoteMetric,

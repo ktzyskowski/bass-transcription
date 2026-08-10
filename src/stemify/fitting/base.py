@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.models.framenet import FrameNet
-from stemify.core.conditions import resolve
+from stemify.conditions import resolve
 from stemify.fitting.config import TrainConfig
 
 HEADS = ["onset", "voicing"]

@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from stemify.core.conditions import CONDITIONS
+from stemify.conditions import CONDITIONS
 from stemify.fitting.config import TrainConfig
 from stemify.training.recipes import HEADS, RECIPES
 from stemify.semicrf.fit.recipe import (

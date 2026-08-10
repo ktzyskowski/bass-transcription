@@ -56,7 +56,7 @@ from stemify.semicrf.marginals import span_marginals
 from stemify.semicrf.spans import Grid, SpanScorer
 from stemify.semicrf.window import initial_window, push
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.core.metrics.note import count_matches, prf_rates
+from stemify.metrics.note import count_matches, prf_rates
 from stemify.music.notes import NoteEvent
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.validation import build_validators

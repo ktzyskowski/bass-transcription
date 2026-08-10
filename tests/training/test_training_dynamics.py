@@ -60,7 +60,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from stemify.persistence.store import Store
-from stemify.core.conditions import CONDITIONS
+from stemify.conditions import CONDITIONS
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources

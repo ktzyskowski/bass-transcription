@@ -5,17 +5,17 @@ loops tracks and sums counts internally, returning one result (see
 ``stemify.evaluation.note``).
 """
 
-from stemify.core.metrics.note.base import (
+from stemify.metrics.note.base import (
     NoteMetric,
     count_matches,
     matched_pairs,
 )
-from stemify.core.metrics.note.fragmentation import (
+from stemify.metrics.note.fragmentation import (
     Fragmentation,
     FragmentationResult,
 )
-from stemify.core.metrics.note.prf import PRF, PRFResult, prf_rates
-from stemify.core.metrics.note.scoring import (
+from stemify.metrics.note.prf import PRF, PRFResult, prf_rates
+from stemify.metrics.note.scoring import (
     DEFAULT_NOTE_METRICS,
     score_notes,
 )

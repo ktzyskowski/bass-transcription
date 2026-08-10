@@ -19,10 +19,10 @@ the caller.
 
 from collections.abc import Sequence
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.note.base import NoteMetric
-from stemify.core.metrics.note.fragmentation import Fragmentation
-from stemify.core.metrics.note.prf import PRF
+from stemify.metrics.base import MetricResult
+from stemify.metrics.note.base import NoteMetric
+from stemify.metrics.note.fragmentation import Fragmentation
+from stemify.metrics.note.prf import PRF
 from stemify.music.notes import NoteEvent
 
 # One track's notes. This was a bare ``Notes = list`` "kept loose to avoid importing

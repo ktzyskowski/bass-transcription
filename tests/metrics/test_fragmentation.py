@@ -6,7 +6,7 @@ the property the whole note-level design rests on: a phantom in one track must
 never be explained by a reference note in another.
 """
 
-from stemify.core.metrics.note.fragmentation import Fragmentation
+from stemify.metrics.note.fragmentation import Fragmentation
 
 
 def frag(refs, ests):

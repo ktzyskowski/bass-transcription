@@ -22,8 +22,8 @@ default cut is visible. The PR curve itself goes in ``arrays`` for plotting.
 import numpy as np
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
-from stemify.core.metrics.base import MetricResult
-from stemify.core.metrics.frame.base import FrameMetric
+from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.base import FrameMetric
 
 
 class OnsetPR(FrameMetric):

@@ -37,7 +37,7 @@ from abc import ABC, abstractmethod
 import mir_eval
 import numpy as np
 
-from stemify.core.metrics.base import MetricResult
+from stemify.metrics.base import MetricResult
 from stemify.music.notes import NoteEvent
 
 ONSET_TOLERANCE_S = 0.05

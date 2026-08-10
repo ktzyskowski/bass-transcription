@@ -11,9 +11,13 @@ neighbour -- the honest choice for a mask or an onset, where interpolation would
 invent half-voiced frames or smear an onset across two.
 """
 
+from collections.abc import Iterable, Sequence
+
 import numpy as np
 
+from stemify.music.contour import Contour
 from stemify.music.grids import nearest_frame, resample_mask
+from stemify.music.notes import NoteEvent
 
 
 def onset_targets(
@@ -81,3 +85,52 @@ def pitch_targets(
     hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.0
     y[gap <= hop] = resampled[gap <= hop]
     return y
+
+
+def _hz_to_midi(hz: np.ndarray) -> np.ndarray:
+    """Frequency to MIDI semitones: ``69 + 12 log2(f / 440)``.
+
+    Written out rather than taken from librosa, which is the only reason this pillar
+    would need a third-party audio library at all. It is the definition of the MIDI
+    scale, not a signal-processing choice, so it belongs with the notes.
+    """
+    return 69.0 + 12.0 * np.log2(np.asarray(hz, dtype=float) / 440.0)
+
+
+def build_targets(
+    frame_times: np.ndarray,
+    reference: Contour,
+    notes: Sequence[NoteEvent],
+    heads: Iterable[str],
+    onset_tolerance_frames: int = 1,
+) -> dict[str, np.ndarray]:
+    """The target each requested head needs, all on ``frame_times``.
+
+    One entry point rather than three calls, because *which* target a head takes is a
+    property of the head name and every caller was rediscovering it. Requesting a head
+    nothing here builds yields no entry rather than an error -- the caller's cache then
+    reports it missing, which is where a wrong head name is actually visible.
+
+    ``reference`` is the *gated* reference contour (voicing and pitch); ``notes`` give
+    the exact onsets. Labels always come from the clean stem's truth no matter which
+    audio the features were computed from, which is what makes a separated-audio run
+    comparable to a clean one.
+
+    Pure: arrays in, arrays out, no disk and no corpus. Wrapping the result in a
+    ``CachedItem`` is the persistence layer's business, and used to be welded in here.
+    """
+    heads = set(heads)
+    targets: dict[str, np.ndarray] = {}
+    if "onset" in heads:
+        onsets = np.array([n.onset for n in notes], dtype=float)
+        targets["onset"] = onset_targets(onsets, frame_times, onset_tolerance_frames)
+    if "voicing" in heads:
+        targets["voicing"] = voicing_targets(
+            reference.times, reference.voiced, frame_times
+        )
+    if "pitch" in heads:
+        midi = np.full(reference.freqs.shape, np.nan, dtype=float)
+        voiced = reference.freqs > 0
+        midi[voiced] = _hz_to_midi(reference.freqs[voiced])
+        targets["pitch"] = pitch_targets(reference.times, midi, frame_times)
+    return targets

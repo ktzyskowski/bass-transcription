@@ -30,7 +30,7 @@ from stemify.models.framenet import FrameNet
 from stemify.fitting.base import (
     Loss, Recipe, config_field, config_int_list, config_str_list,
 )
-from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
+from stemify.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.fitting.config import TrainConfig
 from stemify.models.assembly import build_framenet
 from stemify.semicrf.fit import dataset as chunked_ds
