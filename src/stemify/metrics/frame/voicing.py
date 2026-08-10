@@ -8,56 +8,87 @@ frame above a random unvoiced one, i.e. the area under the ROC swept over *every
 threshold. 1.0 is perfect ranking, 0.5 a coin flip -- and it is unchanged by where
 0.5 happens to fall.
 
+That invariance is also why ``RankingMetric`` range-checks its inputs: AUROC is
+identical under any monotone squash, so raw logits would score exactly as well here
+while making ``voicing_best_threshold`` a cut on a scale no decoder uses.
+
 The ROC curve itself (fpr, tpr, thresholds) goes in ``arrays`` for plotting and
 for reading off an operating point; the scalars also report the threshold that
 maximises frame-F1 and that F1, so the gap between the optimal cut and the default
 0.5 is visible at a glance.
 """
 
+from dataclasses import dataclass, field
+
 import numpy as np
-from sklearn.metrics import precision_recall_curve, roc_auc_score, roc_curve
+from sklearn.metrics import roc_auc_score, roc_curve
 
 from stemify.metrics.base import MetricResult
-from stemify.metrics.frame.base import FrameMetric
+from stemify.metrics.frame.base import RankingMetric
 
 
-class VoicingAUROC(FrameMetric):
+def _empty() -> np.ndarray:
+    return np.array([], dtype=float)
+
+
+@dataclass(frozen=True)
+class VoicingAUROCResult(MetricResult):
+    """Voicing-head quality. Every field is always present -- see ``voicing_auroc``."""
+
+    name = "voicing_auroc"
+    SCALARS = ("voicing_auroc", "voicing_best_threshold", "voicing_best_f1")
+
+    voicing_auroc: float
+    """Area under the ROC, or ``nan`` when the pool is single-class.
+
+    ``nan`` rather than an absent key, for the same reason as ``OnsetPR``: the
+    training callback turns whatever keys a result carries into MLflow metric names,
+    so a val pool with no rests (or no notes) used to end the two series below for
+    that epoch rather than record that they were undefined.
+    """
+
+    voicing_best_threshold: float
+    voicing_best_f1: float
+
+    roc_fpr: np.ndarray = field(default_factory=_empty)
+    roc_tpr: np.ndarray = field(default_factory=_empty)
+    roc_thresholds: np.ndarray = field(default_factory=_empty)
+
+    @property
+    def arrays(self) -> dict[str, np.ndarray]:
+        return {
+            "roc_fpr": self.roc_fpr,
+            "roc_tpr": self.roc_tpr,
+            "roc_thresholds": self.roc_thresholds,
+        }
+
+
+class VoicingAUROC(RankingMetric):
     """Threshold-free voicing quality.
 
     ``true`` is the per-frame voiced label (1 voiced, 0 rest); ``pred`` is the
-    head's per-frame P(voiced). Both 1-D and aligned. Unlike the pitch metrics
-    these are labels and probabilities, not Hz -- the FrameMetric contract is only
-    that the two arrays are frame-aligned, which they are (same CQT grid)."""
+    head's per-frame P(voiced), both on the same CQT grid.
+    """
 
     name = "voicing_auroc"
 
-    def compute(self, true: np.ndarray, pred: np.ndarray) -> MetricResult:
+    def compute(self, true: np.ndarray, pred: np.ndarray) -> VoicingAUROCResult:
         self._check(true, pred)
         labels = true.astype(bool)
         # AUROC is undefined without both classes present (all-voiced or all-rest).
         if labels.all() or (~labels).all():
-            return MetricResult(self.name, {"voicing_auroc": float("nan")})
-        best_thr, best_f1 = _best_f1_threshold(labels, pred)
+            return VoicingAUROCResult(
+                voicing_auroc=float("nan"),
+                voicing_best_threshold=float("nan"),
+                voicing_best_f1=float("nan"),
+            )
+        best_thr, best_f1 = self._best_f1_threshold(labels, pred)
         fpr, tpr, thresholds = roc_curve(labels, pred)
-        return MetricResult(
-            self.name,
-            scalars={
-                "voicing_auroc": float(roc_auc_score(labels, pred)),
-                "voicing_best_threshold": best_thr,
-                "voicing_best_f1": best_f1,
-            },
-            arrays={"roc_fpr": fpr, "roc_tpr": tpr, "roc_thresholds": thresholds},
+        return VoicingAUROCResult(
+            voicing_auroc=float(roc_auc_score(labels, pred)),
+            voicing_best_threshold=best_thr,
+            voicing_best_f1=best_f1,
+            roc_fpr=fpr,
+            roc_tpr=tpr,
+            roc_thresholds=thresholds,
         )
-
-
-def _best_f1_threshold(labels: np.ndarray, probs: np.ndarray) -> tuple[float, float]:
-    """The probability cut that maximises frame-F1, and that F1 -- the operating
-    point to compare the default 0.5 against."""
-    precision, recall, thresholds = precision_recall_curve(labels, probs)
-    if thresholds.size == 0:
-        return 0.5, 0.0
-    # precision/recall have one more entry than thresholds (the final recall=0
-    # point has no threshold); pair each threshold with its precision/recall.
-    f1 = 2 * precision[:-1] * recall[:-1] / (precision[:-1] + recall[:-1] + 1e-12)
-    best = int(np.argmax(f1))
-    return float(thresholds[best]), float(f1[best])

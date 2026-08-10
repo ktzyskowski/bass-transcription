@@ -9,6 +9,7 @@ reference.
 from stemify.metrics.note.base import (
     ONSET_TOLERANCE_S,
     PITCH_TOLERANCE_CENTS,
+    Counts,
     count_matches,
     matched_pairs,
 )
@@ -60,10 +61,10 @@ def test_default_tolerances_are_the_protocol():
 def test_count_matches_tp_fp_fn(note):
     ref = [note(0.0, 1.0, 40), note(1.0, 2.0, 45)]
     est = [note(0.0, 1.0, 40), note(1.0, 2.0, 45), note(3.0, 3.5, 50)]  # +1 phantom
-    assert count_matches(ref, est) == (2, 1, 0)
+    assert count_matches(ref, est) == Counts(tp=2, fp=1, fn=0)
 
 
 def test_count_matches_empty_sides(note):
-    assert count_matches([], [note(0.0, 1.0, 40), note(2.0, 3.0, 41)]) == (0, 2, 0)
-    assert count_matches([note(0.0, 1.0, 40)], []) == (0, 0, 1)
-    assert count_matches([], []) == (0, 0, 0)
+    assert count_matches([], [note(0.0, 1.0, 40), note(2.0, 3.0, 41)]) == Counts(fp=2)
+    assert count_matches([note(0.0, 1.0, 40)], []) == Counts(fn=1)
+    assert count_matches([], []) == Counts()

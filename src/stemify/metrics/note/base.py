@@ -33,6 +33,7 @@ frame-level protocol.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 import mir_eval
 import numpy as np
@@ -42,6 +43,47 @@ from stemify.music.notes import NoteEvent
 
 ONSET_TOLERANCE_S = 0.05
 PITCH_TOLERANCE_CENTS = 50.0
+
+
+@dataclass(frozen=True)
+class Counts:
+    """One match's ``(tp, fp, fn)``, and the rates that follow from it.
+
+    The unit of note scoring, for one track or for a pooled set. It exists because
+    *counts* are what may be summed and *rates* are what may not: a per-track F1
+    averaged across tracks is not the dataset's F1, so the rates are properties
+    derived on demand rather than fields that could be summed by accident.
+
+    It replaced a bare ``tuple[int, int, int]`` returned by ``count_matches`` and a
+    free ``prf_rates`` function that turned one back into a ``dict[str, float]``. Both
+    the pooled headline and every per-track row in a worst-items table are this type
+    now, so they cannot compute a rate differently.
+    """
+
+    tp: int = 0
+    fp: int = 0
+    fn: int = 0
+
+    @property
+    def precision(self) -> float:
+        return self.tp / (self.tp + self.fp) if self.tp + self.fp else 0.0
+
+    @property
+    def recall(self) -> float:
+        return self.tp / (self.tp + self.fn) if self.tp + self.fn else 0.0
+
+    @property
+    def f1(self) -> float:
+        p, r = self.precision, self.recall
+        return 2 * p * r / (p + r) if p + r else 0.0
+
+    @property
+    def n_reference(self) -> int:
+        return self.tp + self.fn
+
+    @property
+    def n_estimated(self) -> int:
+        return self.tp + self.fp
 
 
 def _to_arrays(notes: list[NoteEvent]) -> tuple[np.ndarray, np.ndarray]:
@@ -86,8 +128,8 @@ def count_matches(
     est: list[NoteEvent],
     onset_tolerance: float = ONSET_TOLERANCE_S,
     pitch_tolerance: float = PITCH_TOLERANCE_CENTS,
-) -> tuple[int, int, int]:
-    """(true positives, false positives, false negatives) for one track.
+) -> Counts:
+    """One track's ``Counts``.
 
     An estimated note is a true positive if some reference note matches it in
     onset and pitch; each reference note matches at most one estimate. Everything
@@ -95,7 +137,7 @@ def count_matches(
     false negative.
     """
     tp = len(matched_pairs(ref, est, onset_tolerance, pitch_tolerance))
-    return tp, len(est) - tp, len(ref) - tp
+    return Counts(tp=tp, fp=len(est) - tp, fn=len(ref) - tp)
 
 
 class NoteMetric(ABC):

@@ -8,6 +8,7 @@ weighted_not_track_averaged`` is the case that fails loudly if someone
 
 import math
 
+from stemify.metrics.note.base import Counts
 from stemify.metrics.note.prf import PRF
 
 
@@ -30,20 +31,28 @@ def test_pooling_sums_counts_across_tracks(note):
 
 def test_per_track_counts_are_emitted_and_sum_to_the_pooled_totals(note):
     # The worst-item ranking reads these instead of a second match, so the rows must
-    # be in input order and sum (column-wise) to the pooled tp/fp/fn.
+    # be in input order and sum to the pooled tp/fp/fn.
     refs = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50)]]
     ests = [[note(0.0, 1.0, 40)], [note(0.0, 1.0, 50), note(2.0, 2.5, 55)]]
     result = PRF().compute(refs, ests)
-    per_item = result.arrays["per_item_counts"]
-    assert per_item.shape == (2, 3)
-    assert list(per_item[0]) == [1, 0, 0]   # track 0: one true positive
-    assert list(per_item[1]) == [1, 1, 0]   # track 1: a hit plus one phantom
-    s = result.scalars
-    assert list(per_item.sum(axis=0)) == [s["tp"], s["fp"], s["fn"]]
+    assert result.per_item == (Counts(tp=1), Counts(tp=1, fp=1))
+    assert sum(c.tp for c in result.per_item) == result.tp
+    assert sum(c.fp for c in result.per_item) == result.fp
+    assert sum(c.fn for c in result.per_item) == result.fn
+
+
+def test_the_result_is_itself_the_pooled_counts(note):
+    """``PRFResult`` inherits ``Counts``, which is what stops a per-track row and the
+    headline from deriving F1 two different ways -- they are the same three
+    properties over the same three fields."""
+    result = PRF().compute([[note(0.0, 1.0, 40)]], [[note(0.0, 1.0, 40)]])
+    assert isinstance(result, Counts)
+    assert (result.tp, result.fp, result.fn) == (1, 0, 0)
+    assert result.f1 == Counts(tp=1).f1
 
 
 def test_empty_dataset_has_no_per_track_rows():
-    assert PRF().compute([], []).arrays["per_item_counts"].shape == (0, 3)
+    assert PRF().compute([], []).per_item == ()
 
 
 def test_pooling_is_count_weighted_not_track_averaged(note):

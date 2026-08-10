@@ -6,7 +6,9 @@ the property the whole note-level design rests on: a phantom in one track must
 never be explained by a reference note in another.
 """
 
-from stemify.metrics.note.fragmentation import Fragmentation
+import pytest
+
+from stemify.metrics.note.fragmentation import Fragmentation, FragmentationResult
 
 
 def frag(refs, ests):
@@ -78,3 +80,17 @@ def test_result_name_and_render(note):
     )
     assert result.name == "fragmentation"
     assert "fragmentation" in result.render()
+
+
+def test_the_buckets_partition_the_false_positives():
+    """The claim the metric rests on: every false positive lands in exactly one
+    bucket, so the shares read as "which head is worth building". Enforced in
+    ``__post_init__`` rather than trusted, because a bucket added without a branch to
+    fill it leaves each individual number looking plausible."""
+    with pytest.raises(ValueError, match="do not partition"):
+        FragmentationResult(fp=10, fragmentation=3, interior_offpitch=2, rest=4)
+
+
+def test_a_consistent_result_is_accepted():
+    r = FragmentationResult(fp=9, fragmentation=3, interior_offpitch=2, rest=4)
+    assert r.scalars["fp"] == 9

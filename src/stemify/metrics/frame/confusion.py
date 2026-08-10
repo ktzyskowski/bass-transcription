@@ -21,11 +21,13 @@ model is not guessing; it is tracking a real partial of the right note. That
 distinction drives entirely different fixes.
 """
 
+from dataclasses import dataclass, field
+
 import librosa
 import numpy as np
 
 from stemify.metrics.base import MetricResult
-from stemify.metrics.frame.base import FrameMetric
+from stemify.metrics.frame.base import PitchMetric
 
 # The physical range of a 5-string bass with 24 frets: B0 (open low B) to G4
 # (24th fret of the G string). Chosen from instrument physics rather than fitted
@@ -55,32 +57,84 @@ HARMONIC_LABELS = {
 }
 
 
-class ConfusionResult(MetricResult):
-    def render(self) -> str:
-        s = self.scalars
-        deltas = self.arrays["delta_values"]
-        counts = self.arrays["delta_counts"]
-        total = counts.sum()
+def _empty_int() -> np.ndarray:
+    return np.array([], dtype=int)
 
+
+@dataclass(frozen=True)
+class ConfusionResult(MetricResult):
+    name = "pitch-confusion"
+    SCALARS = (
+        "n_voiced",
+        "unvoiced_rate",
+        "out_of_range_rate",
+        "reference_out_of_range_rate",
+        "exact_rate",
+        "octave_up_rate",
+    )
+
+    n_voiced: float
+    unvoiced_rate: float
+
+    out_of_range_rate: float
+    """Share of reference-voiced frames whose *prediction* fell outside the matrix.
+
+    Attribution used to be wrong here. The rate was ``answered & ~in_range`` where
+    ``in_range`` required **both** sides to be in bounds, so a reference pitch outside
+    [``MIDI_MIN``, ``MIDI_MAX``] was reported under a line reading "predicted out of
+    range" -- a frame whose prediction was exactly correct could score 1.0 for
+    ``out_of_range_rate`` and 1.0 for ``exact_rate`` at the same time. This counts the
+    estimate only; the reference's own excursions are ``reference_out_of_range_rate``.
+    """
+
+    reference_out_of_range_rate: float
+    """Share of reference-voiced frames whose *reference* fell outside the matrix.
+
+    A property of the corpus, not the model, which is exactly why it is reported
+    apart: it is the fraction of frames the matrix structurally cannot hold, and if it
+    grows the bounds are wrong for the dataset rather than the model being poor.
+    """
+
+    exact_rate: float
+    octave_up_rate: float
+
+    matrix: np.ndarray = field(default_factory=lambda: np.zeros((0, 0), dtype=int))
+    midi_labels: np.ndarray = field(default_factory=_empty_int)
+    delta_values: np.ndarray = field(default_factory=_empty_int)
+    delta_counts: np.ndarray = field(default_factory=_empty_int)
+
+    @property
+    def arrays(self) -> dict[str, np.ndarray]:
+        return {
+            "matrix": self.matrix,
+            "midi_labels": self.midi_labels,
+            "delta_values": self.delta_values,
+            "delta_counts": self.delta_counts,
+        }
+
+    def render(self) -> str:
+        total = self.delta_counts.sum()
         lines = [
             f"  frames compared              {total:>9,.0f}",
-            f"  predicted unvoiced           {s['unvoiced_rate']:>9.1%}",
-            f"  predicted out of range       {s['out_of_range_rate']:>9.1%}",
+            f"  predicted unvoiced           {self.unvoiced_rate:>9.1%}",
+            f"  predicted out of range       {self.out_of_range_rate:>9.1%}",
+            f"  reference out of range       {self.reference_out_of_range_rate:>9.1%}",
             "",
             f"  {'delta':>6} {'share':>8}  interpretation",
         ]
         # Most common deltas first -- the shape of the error, not every bin.
-        for i in np.argsort(counts)[::-1][:8]:
-            if counts[i] == 0:
+        for i in np.argsort(self.delta_counts)[::-1][:8]:
+            if self.delta_counts[i] == 0:
                 continue
-            d = int(deltas[i])
+            d = int(self.delta_values[i])
             lines.append(
-                f"  {d:>+6} {counts[i] / total:>8.1%}  {HARMONIC_LABELS.get(d, '')}"
+                f"  {d:>+6} {self.delta_counts[i] / total:>8.1%}  "
+                f"{HARMONIC_LABELS.get(d, '')}"
             )
         return "\n".join(lines)
 
 
-class PitchConfusion(FrameMetric):
+class PitchConfusion(PitchMetric):
     name = "pitch-confusion"
 
     def __init__(self, midi_min: int = MIDI_MIN, midi_max: int = MIDI_MAX) -> None:
@@ -103,18 +157,22 @@ class PitchConfusion(FrameMetric):
         n_classes = self.midi_max - self.midi_min + 1
         matrix = np.zeros((n_classes, n_classes), dtype=int)
 
-        in_range = (
-            answered
-            & (pred_midi >= self.midi_min)
-            & (pred_midi <= self.midi_max)
-            & (true_midi >= self.midi_min)
-            & (true_midi <= self.midi_max)
+        # Kept apart, because they answer different questions: one is the model's
+        # error, the other is the corpus outrunning the matrix. Conflating them is
+        # what made a perfect prediction score 100% "predicted out of range".
+        pred_in_range = (
+            answered & (pred_midi >= self.midi_min) & (pred_midi <= self.midi_max)
         )
+        ref_in_range = (true_midi >= self.midi_min) & (true_midi <= self.midi_max)
+
+        # A cell needs both axes, so the matrix is the one place the conjunction is
+        # the right question.
+        cell = pred_in_range & ref_in_range
         np.add.at(
             matrix,
             (
-                true_midi[in_range] - self.midi_min,
-                pred_midi[in_range].astype(int) - self.midi_min,
+                true_midi[cell] - self.midi_min,
+                pred_midi[cell].astype(int) - self.midi_min,
             ),
             1,
         )
@@ -128,21 +186,18 @@ class PitchConfusion(FrameMetric):
             np.array([], dtype=int),
         )
 
+        def rate(mask: np.ndarray) -> float:
+            return float(mask.sum() / n) if n else float("nan")
+
         return ConfusionResult(
-            name=self.name,
-            scalars={
-                "n_voiced": float(n),
-                "unvoiced_rate": float((~answered).sum() / n) if n else float("nan"),
-                "out_of_range_rate": (
-                    float((answered & ~in_range).sum() / n) if n else float("nan")
-                ),
-                "exact_rate": float((delta == 0).sum() / n) if n else float("nan"),
-                "octave_up_rate": float((delta == 12).sum() / n) if n else float("nan"),
-            },
-            arrays={
-                "matrix": matrix,
-                "midi_labels": np.arange(self.midi_min, self.midi_max + 1),
-                "delta_values": values,
-                "delta_counts": counts,
-            },
+            n_voiced=float(n),
+            unvoiced_rate=rate(~answered),
+            out_of_range_rate=rate(answered & ~pred_in_range),
+            reference_out_of_range_rate=rate(~ref_in_range),
+            exact_rate=rate(delta == 0),
+            octave_up_rate=rate(delta == 12),
+            matrix=matrix,
+            midi_labels=np.arange(self.midi_min, self.midi_max + 1),
+            delta_values=values,
+            delta_counts=counts,
         )

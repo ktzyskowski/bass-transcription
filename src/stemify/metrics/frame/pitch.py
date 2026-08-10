@@ -43,34 +43,68 @@ handling more heavily than a busy one -- so it is not comparable across datasets
 with different voiced fractions.
 """
 
+from dataclasses import dataclass
+
 import mir_eval
 import numpy as np
 
 from stemify.metrics.base import MetricResult
-from stemify.metrics.frame.base import FrameMetric
+from stemify.metrics.frame.base import PitchMetric
 
 CENTS_PER_OCTAVE = 1200.0
 
 
+@dataclass(frozen=True)
 class PitchAccuracyResult(MetricResult):
+    name = "pitch-accuracy"
+    SCALARS = (
+        "n_frames",
+        "n_voiced",
+        "rpa",
+        "rca",
+        "overall",
+        "octave_gap",
+        "voicing_recall",
+        "voicing_false_alarm",
+        "median_cents",
+    )
+
+    n_frames: float
+    n_voiced: float
+    rpa: float
+    rca: float
+    overall: float
+    voicing_recall: float
+    voicing_false_alarm: float
+    median_cents: float
+
+    @property
+    def octave_gap(self) -> float:
+        """The octave-error rate: what RCA forgives that RPA does not.
+
+        Derived rather than stored, which is why ``SCALARS`` is a written tuple and
+        not ``dataclasses.fields`` -- it is part of the record and there is nothing
+        for a second copy of it to disagree with.
+        """
+        return self.rca - self.rpa
+
     def render(self) -> str:
-        s = self.scalars
         return "\n".join(
             [
                 f"  frames (total / voiced)      "
-                f"{s['n_frames']:>9,.0f} / {s['n_voiced']:,.0f}",
-                f"  RPA (exact)                  {s['rpa']:>9.1%}",
-                f"  RCA (octave-invariant)       {s['rca']:>9.1%}",
-                f"  Overall (incl. silence)      {s['overall']:>9.1%}",
-                f"  octave-error gap             {s['octave_gap']:>9.1%}",
-                f"  voicing recall               {s['voicing_recall']:>9.1%}",
-                f"  voicing false alarm          {s['voicing_false_alarm']:>9.1%}",
-                f"  median cents err (in-chroma) {s['median_cents']:>9.1f}",
+                f"{self.n_frames:>9,.0f} / {self.n_voiced:,.0f}",
+                f"  RPA (exact)                  {self.rpa:>9.1%}",
+                f"  RCA (octave-invariant)       {self.rca:>9.1%}",
+                f"  Overall (incl. silence)      {self.overall:>9.1%}",
+                f"  octave-error gap             {self.octave_gap:>9.1%}",
+                f"  voicing recall               {self.voicing_recall:>9.1%}",
+                f"  voicing false alarm          {self.voicing_false_alarm:>9.1%}",
+                f"  median cents err (in-chroma) {self.median_cents:>9.1f}",
             ]
         )
 
 
-class PitchAccuracy(FrameMetric):
+class PitchAccuracy(PitchMetric):
     name = "pitch-accuracy"
 
     def __init__(self, cent_tolerance: float = 50.0) -> None:
@@ -99,20 +133,16 @@ class PitchAccuracy(FrameMetric):
         )
 
         return PitchAccuracyResult(
-            name=self.name,
-            scalars={
-                "n_frames": float(ref_voicing.size),
-                "n_voiced": float(ref_voicing.sum()),
-                "rpa": float(rpa),
-                "rca": float(rca),
-                "overall": float(overall),
-                "octave_gap": float(rca - rpa),
-                "voicing_recall": float(recall),
-                "voicing_false_alarm": float(false_alarm),
-                "median_cents": self._median_chroma_cents(
-                    ref_cent, est_cent, ref_voicing, est_voicing
-                ),
-            },
+            n_frames=float(ref_voicing.size),
+            n_voiced=float(ref_voicing.sum()),
+            rpa=float(rpa),
+            rca=float(rca),
+            overall=float(overall),
+            voicing_recall=float(recall),
+            voicing_false_alarm=float(false_alarm),
+            median_cents=self._median_chroma_cents(
+                ref_cent, est_cent, ref_voicing, est_voicing
+            ),
         )
 
     def _median_chroma_cents(

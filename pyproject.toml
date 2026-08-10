@@ -16,6 +16,12 @@ dependencies = [
     "pesto-pitch>=2.0.1",
     "pretty-midi>=0.2.11",
     "sagemaker>=3.16.0",
+    # Imported directly by metrics.frame.{onset,voicing} for the PR/ROC curves.
+    # Undeclared until now: it arrived transitively via librosa (and mlflow, which is
+    # a *dev* dependency), so the entire runtime evaluation path rested on librosa
+    # continuing to want it, and a lockfile refresh that dropped it would have broken
+    # `stemify-eval` at import with nothing having warned.
+    "scikit-learn>=1.6",
     "soundfile>=0.14.0",
     "torch>=2.13.0",
     "torchaudio>=2.11.0",

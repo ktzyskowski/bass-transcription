@@ -6,44 +6,43 @@ are summed across tracks, then the rates are derived once from the totals --
 per-track F1 cannot be averaged.
 
 The per-track counts the pooled sum is built from are not thrown away: they go into
-``arrays["per_item_counts"]`` (one ``(tp, fp, fn)`` row per input track, in input
-order). The worst-item ranking a harness shows is then a projection of that single
-match -- no second scoring pass, and pooled + per-item can never disagree.
+``per_item`` (one ``Counts`` per input track, in input order). The worst-item ranking
+a harness shows is then a projection of that single match -- no second scoring pass,
+and pooled + per-item can never disagree.
+
+**The result *is* the pooled counts.** ``PRFResult`` inherits ``Counts``, so the
+headline numbers and every per-track row are the same type and derive their rates
+through the same three properties. There is no ``prf_rates`` helper any more, because
+there is no second way to turn counts into rates for it to be.
 """
 
-import numpy as np
+from dataclasses import dataclass
 
 from stemify.metrics.base import MetricResult
-from stemify.metrics.note.base import NoteMetric, count_matches
+from stemify.metrics.note.base import Counts, NoteMetric, count_matches
 from stemify.music.notes import NoteEvent
 
 
-def prf_rates(tp: int, fp: int, fn: int) -> dict[str, float]:
-    """P/R/F plus the raw counts, from one track's or the pool's ``(tp, fp, fn)``.
+@dataclass(frozen=True)
+class PRFResult(MetricResult, Counts):
+    name = "note-prf"
+    SCALARS = ("tp", "fp", "fn", "precision", "recall", "f1")
 
-    The one place the rate formulas live, so a per-track row and the pooled totals are
-    derived identically (rates are never averaged across tracks -- they are recomputed
-    from counts, which is why the counts, not the rates, are what gets summed/stored)."""
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return {
-        "tp": tp, "fp": fp, "fn": fn,
-        "precision": precision, "recall": recall, "f1": f1,
-    }
+    per_item: tuple[Counts, ...] = ()
+    """Per-track counts, in input order -- the rows the pooled totals were summed from.
 
+    Carried on the result rather than stuffed into ``arrays`` as an ``(n, 3)`` integer
+    block a caller had to know the column order of.
+    """
 
-class PRFResult(MetricResult):
     def render(self) -> str:
-        s = self.scalars
         return "\n".join([
             f"  reference / estimated notes  "
-            f"{int(s['tp'] + s['fn']):,} / {int(s['tp'] + s['fp']):,}",
-            f"  precision                    {s['precision']:>7.1%}",
-            f"  recall                       {s['recall']:>7.1%}",
-            f"  F1                           {s['f1']:>7.1%}",
-            f"  tp / fp / fn                 "
-            f"{int(s['tp']):,} / {int(s['fp']):,} / {int(s['fn']):,}",
+            f"{self.n_reference:,} / {self.n_estimated:,}",
+            f"  precision                    {self.precision:>7.1%}",
+            f"  recall                       {self.recall:>7.1%}",
+            f"  F1                           {self.f1:>7.1%}",
+            f"  tp / fp / fn                 {self.tp:,} / {self.fp:,} / {self.fn:,}",
         ])
 
 
@@ -54,15 +53,14 @@ class PRF(NoteMetric):
         self,
         references: list[list[NoteEvent]],
         estimates: list[list[NoteEvent]],
-    ) -> MetricResult:
-        counts = [
+    ) -> PRFResult:
+        per_item = tuple(
             count_matches(ref, est, self.onset_tolerance, self.pitch_tolerance)
             for ref, est in zip(references, estimates, strict=True)
-        ]
-        per_item = np.array(counts, dtype=int).reshape(-1, 3)  # (n_tracks, 3): tp/fp/fn
-        tp, fp, fn = (int(per_item[:, i].sum()) for i in range(3))
+        )
         return PRFResult(
-            self.name,
-            prf_rates(tp, fp, fn),
-            arrays={"per_item_counts": per_item},
+            tp=sum(c.tp for c in per_item),
+            fp=sum(c.fp for c in per_item),
+            fn=sum(c.fn for c in per_item),
+            per_item=per_item,
         )

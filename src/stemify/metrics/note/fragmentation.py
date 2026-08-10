@@ -17,27 +17,52 @@ into pieces. Reuses ``matched_pairs`` from ``note`` so "matched" -- hence which
 estimates are false positives -- means exactly what it does for ``PRF``.
 """
 
+from dataclasses import dataclass
+
 from stemify.metrics.base import MetricResult
 from stemify.metrics.note.base import NoteMetric, matched_pairs
 from stemify.music.notes import NoteEvent
 
 
+@dataclass(frozen=True)
 class FragmentationResult(MetricResult):
-    def render(self) -> str:
-        s = self.scalars
-        fp = s["fp"]
+    name = "fragmentation"
+    SCALARS = ("fp", "fragmentation", "interior_offpitch", "rest")
 
-        def frac(n: float) -> float:
-            return n / fp if fp else 0.0
+    fp: int
+    fragmentation: int
+    interior_offpitch: int
+    rest: int
+
+    def __post_init__(self) -> None:
+        """Every false positive lands in exactly one bucket.
+
+        The claim the whole metric rests on -- the buckets are a *partition*, so their
+        shares are readable as "which head is worth building". A bucket added without
+        a branch to fill it, or a branch that stopped being reachable, would leave the
+        shares summing to something other than 1 while every individual number still
+        looked plausible.
+        """
+        buckets = self.fragmentation + self.interior_offpitch + self.rest
+        if buckets != self.fp:
+            raise ValueError(
+                f"false positives do not partition: fp={self.fp} but the buckets sum "
+                f"to {buckets} (fragmentation={self.fragmentation}, "
+                f"interior_offpitch={self.interior_offpitch}, rest={self.rest})."
+            )
+
+    def render(self) -> str:
+        def frac(n: int) -> float:
+            return n / self.fp if self.fp else 0.0
 
         return "\n".join([
-            f"  false positives              {int(fp):,}",
-            f"    fragmentation              {int(s['fragmentation']):>7,} "
-            f"({frac(s['fragmentation']):.1%})",
-            f"    voicing (note in a rest)   {int(s['rest']):>7,} "
-            f"({frac(s['rest']):.1%})",
-            f"    interior, wrong pitch      {int(s['interior_offpitch']):>7,} "
-            f"({frac(s['interior_offpitch']):.1%})",
+            f"  false positives              {self.fp:,}",
+            f"    fragmentation              {self.fragmentation:>7,} "
+            f"({frac(self.fragmentation):.1%})",
+            f"    voicing (note in a rest)   {self.rest:>7,} "
+            f"({frac(self.rest):.1%})",
+            f"    interior, wrong pitch      {self.interior_offpitch:>7,} "
+            f"({frac(self.interior_offpitch):.1%})",
         ])
 
 
@@ -48,7 +73,7 @@ class Fragmentation(NoteMetric):
         self,
         references: list[list[NoteEvent]],
         estimates: list[list[NoteEvent]],
-    ) -> MetricResult:
+    ) -> FragmentationResult:
         semitone_tol = self.pitch_tolerance / 100.0
         fragmentation = interior_off = rest = fp = 0
         for ref, est in zip(references, estimates, strict=True):
@@ -71,11 +96,8 @@ class Fragmentation(NoteMetric):
                 else:
                     interior_off += 1
         return FragmentationResult(
-            self.name,
-            {
-                "fp": fp,
-                "fragmentation": fragmentation,
-                "interior_offpitch": interior_off,
-                "rest": rest,
-            },
+            fp=fp,
+            fragmentation=fragmentation,
+            interior_offpitch=interior_off,
+            rest=rest,
         )

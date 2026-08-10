@@ -27,7 +27,7 @@ and both are tested with synthetic inputs and a fake model, no audio.
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import partial
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,7 +46,14 @@ from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, NoteAnnotated
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
-from stemify.metrics import MetricResult, AlignedPairs, score_cues, score_notes
+from stemify.metrics import (
+    AlignedPairs,
+    MetricResult,
+    OnsetPRResult,
+    VoicingAUROCResult,
+    score_cues,
+    score_notes,
+)
 from stemify.music.notes import NoteEvent
 from stemify.transcription.pitch import PyinPitch
 from stemify.persistence.serde import features_npy
@@ -140,30 +147,25 @@ def score_examples(
         ests.append(segment(ex))
         refs.append(ex.notes)
     # Score through the shared note core, so the val numbers use the same metrics and
-    # tolerances the offline NoteEvaluation reports. Flatten to the MLflow-friendly
-    # note_* keys the callback logs.
-    scalars = {r.name: r.scalars for r in score_notes(refs, ests)}
-    prf, frag = scalars["note-prf"], scalars["fragmentation"]
-    return {
-        "note_f1": prf["f1"],
-        "note_precision": prf["precision"],
-        "note_recall": prf["recall"],
-        # All four false-positive counts, not just fragmentation. They are computed
-        # together anyway, and precision alone cannot say *which* error a change
-        # fixed: a "rest" FP is a note invented where nothing sounds, a
-        # "fragmentation" FP is one real note reported as several, and an
-        # "interior_offpitch" FP lands inside a real note at the wrong pitch. Those
-        # have different causes and different fixes, so collapsing them into one
-        # precision number throws the diagnosis away.
-        #
-        # "fragmentation" keeps its bare name: it is the key every earlier run in
-        # docs/experiments.md is recorded under, and renaming it would silently end
-        # those series rather than extend them.
-        "fragmentation": float(frag["fragmentation"]),
-        "fp": float(frag["fp"]),
-        "fp_rest": float(frag["rest"]),
-        "fp_interior_offpitch": float(frag["interior_offpitch"]),
-    }
+    # tolerances the offline NoteEvaluation reports.
+    #
+    # Every number both metrics report, under the metrics' own names. This used to
+    # rename them on the way out -- `f1` became `note_f1` here and a `_NOTE_KEY` table
+    # renamed it back to `f1` at the log site, a round trip through two modules that
+    # left no single place the logged names could be read off. The one projection that
+    # is real (a subset, three of them renamed) now lives at that log site, in
+    # ``NOTE_LOG_KEYS``.
+    #
+    # All four false-positive counts travel, not just fragmentation. They are computed
+    # together anyway, and precision alone cannot say *which* error a change fixed: a
+    # "rest" FP is a note invented where nothing sounds, a "fragmentation" FP is one
+    # real note reported as several, and an "interior_offpitch" FP lands inside a real
+    # note at the wrong pitch. Those have different causes and different fixes, so
+    # collapsing them into one precision number throws the diagnosis away.
+    scalars: dict[str, float] = {}
+    for result in score_notes(refs, ests):
+        scalars |= result.scalars
+    return scalars
 
 
 def score_cues_examples(
@@ -305,14 +307,60 @@ class CheckpointValidator:
 # means a change to what validation measures lands in one file.
 # --------------------------------------------------------------------------- #
 
-# score_examples' metric keys -> the short leaf name under note/<condition>/, so
-# MLflow groups them: note/clean/f1, note/separated/recall, ... one per metric.
-_NOTE_KEY = {
-    "note_f1": "f1", "note_precision": "precision",
-    "note_recall": "recall", "fragmentation": "fragmentation",
-    # The remaining false-positive buckets pass through under their own names
-    # (fp, fp_rest, fp_interior_offpitch) -- see ``score_examples``.
+NOTE_LOG_KEYS: dict[str, str] = {
+    "f1": "f1",
+    "precision": "precision",
+    "recall": "recall",
+    "fragmentation": "fragmentation",
+    "fp": "fp",
+    "rest": "fp_rest",
+    "interior_offpitch": "fp_interior_offpitch",
 }
+"""``score_examples`` key -> the leaf name under ``note/<condition>/``.
+
+The one projection between what the note metrics report and what a run logs: seven of
+the ten numbers, three of them renamed (``rest`` is ``fp_rest`` on a chart, because
+``fp`` alone is ambiguous sitting next to PRF's). ``tp`` and ``fn`` are omitted --
+they are recoverable from the rates and the counts that are logged.
+
+It used to be two tables in two modules that cancelled each other out. Exhaustive
+rather than a fallback lookup, so a metric key that disappears raises here instead of
+quietly logging its own internal name.
+
+**These names are load-bearing.** Every run in docs/experiments.md is recorded under
+them, and ``--monitor`` names one on the command line, so a rename starts a new series
+rather than extending the old one and can leave checkpoint selection reading a key
+that no longer exists. ``tests/metrics/test_logged_schema.py`` pins them.
+"""
+
+# The cues-level results the async validator can produce. Pitch is not among them:
+# `score_cues_examples` supplies no pitch pair, since pyin's contour does not move
+# between checkpoints. Named as *types*, so the metric names below are known without
+# scoring anything.
+CUES_RESULT_TYPES: tuple[type[MetricResult], ...] = (OnsetPRResult, VoicingAUROCResult)
+
+
+def harness_metric_names(conditions: Iterable[str]) -> list[str]:
+    """Every ``note/*`` and ``cues/*`` name this validator will log, before it runs.
+
+    Knowable statically because a result's record is a ``ClassVar`` on its type rather
+    than whatever keys a ``dict`` ended up with -- which is what lets ``--monitor`` be
+    checked against reality at startup instead of at the first epoch boundary, an hour
+    into a run, on the way to deciding which checkpoint survives.
+
+    **An upper bound, not an exact set.** ``score_cues`` drops a channel no track can
+    supply, so an onset-only checkpoint logs no ``voicing_*`` series even though they
+    are listed here. That is the one case a ``--monitor`` check against this list still
+    passes and the run still fails -- narrower than the everything-was-unchecked it
+    replaces, and it needs the model to answer, which this function has no access to.
+    """
+    names: list[str] = []
+    for tag in conditions:
+        names += [f"note/{tag}/{leaf}" for leaf in NOTE_LOG_KEYS.values()]
+        names += [
+            f"cues/{tag}/{key}" for t in CUES_RESULT_TYPES for key in t.SCALARS
+        ]
+    return names
 
 
 def build_validators(
@@ -365,7 +413,7 @@ def build_eval_fn(
 
     Each checkpoint is scored at both altitudes from the *same* model pass per track:
     note-level (the decoder over the encoder's cues) and cues-level (the encoder's
-    onset/voicing head quality, via ``metrics.cues.score_cues`` -- the same core the
+    onset/voicing head quality, via ``metrics.frame.scoring.score_cues`` -- the same core the
     offline ``CuesEvaluation`` uses). If ``report_dir``/``log_artifact`` are given, the
     full breakdown is also written as a per-epoch JSON and attached to the run, so a
     checkpoint's scores survive as a diffable artifact, not only as metric points.
@@ -428,8 +476,8 @@ def build_eval_fn(
         }
         for tag, validator in validators.items():
             note = validator.score(segment)
-            for key, value in note.items():
-                metrics[f"note/{tag}/{_NOTE_KEY.get(key, key)}"] = value
+            for key, leaf in NOTE_LOG_KEYS.items():
+                metrics[f"note/{tag}/{leaf}"] = note[key]
             # Cues-level (encoder) quality: onset-curve AP and voicing-head AUROC,
             # threshold-free. Empty voicing for an onset-only model.
             cues = {r.name: r.scalars for r in validator.score_cues(encode)}

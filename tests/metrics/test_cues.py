@@ -27,7 +27,10 @@ def test_all_three_channels_score_when_supplied():
         pitch=(hz.copy(), hz),
     )
     results = score_cues([track])
-    assert _names(results) == {"onset_pr", "voicing_auroc", "pitch-accuracy"}
+    # pitch-confusion rides with pitch-accuracy: how much is wrong, and what is wrong.
+    assert _names(results) == {
+        "onset_pr", "voicing_auroc", "pitch-accuracy", "pitch-confusion",
+    }
     by = {r.name: r for r in results}
     assert by["onset_pr"].scalars["onset_ap"] == 1.0
     assert by["pitch-accuracy"].scalars["rpa"] == 1.0

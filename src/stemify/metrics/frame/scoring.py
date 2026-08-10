@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from stemify.metrics.base import MetricResult
+from stemify.metrics.frame.confusion import PitchConfusion
 from stemify.metrics.frame.onset import OnsetPR
 from stemify.metrics.frame.pitch import PitchAccuracy
 from stemify.metrics.frame.voicing import VoicingAUROC
@@ -92,5 +93,12 @@ def score_cues(tracks: Sequence[AlignedPairs]) -> list[MetricResult]:
     if len(pitches) == len(tracks):
         pitch_est, pitch_ref = _pool(pitches)
         results.append(PitchAccuracy().compute(pitch_ref, pitch_est))
+        # How much is wrong (RPA/RCA) and *what* is wrong (the semitone-delta
+        # histogram) answer different questions, and the second is the one that says
+        # whether a pitch error is harmonic locking or genuine confusion -- different
+        # fixes. Scored here rather than left to a caller so the offline harness gets
+        # it without wiring; the async validator supplies no pitch pair, so this
+        # branch never runs in training and adds no MLflow series.
+        results.append(PitchConfusion().compute(pitch_ref, pitch_est))
 
     return results

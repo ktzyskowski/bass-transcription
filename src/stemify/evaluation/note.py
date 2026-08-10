@@ -31,9 +31,10 @@ from stemify.corpus.base import Dataset, AudioItem, NoteAnnotated
 from stemify.evaluation.report import Report, jsonable
 from stemify.metrics import (
     DEFAULT_NOTE_METRICS,
+    Counts,
     MetricResult,
     NoteMetric,
-    prf_rates,
+    PRFResult,
     score_notes,
 )
 from stemify.music.notes import NoteEvent
@@ -44,20 +45,22 @@ from stemify.persistence.store import Store
 
 def _per_item_prf(
     overall: list[MetricResult], names: list[str]
-) -> list[tuple[str, dict[str, float]]]:
-    """``(name, PRF scalars)`` per track, projected from PRF's ``per_item_counts``.
+) -> list[tuple[str, Counts]]:
+    """``(name, Counts)`` per track, read off the PRF result.
 
-    Finds the PRF result among the scored metrics and turns each track's stored
-    ``(tp, fp, fn)`` row into P/R/F via the same ``prf_rates`` the pooled totals use --
-    so the worst-item ranking and the headline numbers come from one match. Empty when
-    no PRF was scored."""
-    counts = next(
-        (r.arrays["per_item_counts"] for r in overall if "per_item_counts" in r.arrays),
-        None,
-    )
-    if counts is None:
+    Finds the PRF result among the scored metrics and pairs each track's stored counts
+    with its name -- so the worst-item ranking and the headline numbers come from one
+    match, and both derive their rates through the same ``Counts`` properties. Empty
+    when no PRF was scored.
+
+    Located by type rather than by probing ``arrays`` for a ``"per_item_counts"`` key,
+    which is how this used to find it: a string lookup into an untyped dict, returning
+    an ``(n, 3)`` block whose column order the caller had to know.
+    """
+    prf = next((r for r in overall if isinstance(r, PRFResult)), None)
+    if prf is None:
         return []
-    return [(name, prf_rates(*(int(c) for c in row))) for name, row in zip(names, counts, strict=True)]
+    return list(zip(names, prf.per_item, strict=True))
 
 
 @dataclass(frozen=True)
@@ -72,9 +75,9 @@ class NoteReport(Report):
     # callers keep working, but always recorded: a result is not interpretable
     # without knowing whether it came from a clean stem or a separated one.
     transform: str = "identity"
-    # (name, PRF scalars) per item -- for ranking the tracks the transcriber fails
+    # (name, Counts) per item -- for ranking the tracks the transcriber fails
     # outright, which a pooled F1 hides.
-    per_item: list[tuple[str, dict[str, float]]] = field(default_factory=list)
+    per_item: list[tuple[str, Counts]] = field(default_factory=list)
 
     def scalar(self, metric: str, key: str) -> float | None:
         """One number by name, for comparing runs without parsing text."""
@@ -98,8 +101,12 @@ class NoteReport(Report):
                 for r in self.overall
             },
             "per_item": [
-                {"name": name, **{k: jsonable(v) for k, v in scalars.items()}}
-                for name, scalars in self.per_item
+                {
+                    "name": name,
+                    "tp": c.tp, "fp": c.fp, "fn": c.fn,
+                    "precision": c.precision, "recall": c.recall, "f1": c.f1,
+                }
+                for name, c in self.per_item
             ],
         }
 
@@ -117,13 +124,12 @@ class NoteReport(Report):
         # A pooled F1 hides a handful of tracks the transcriber fails outright,
         # which is a different problem from being uniformly mediocre.
         if len(self.per_item) > 1 and worst:
-            ranked = sorted(self.per_item, key=lambda pair: pair[1]["f1"])[:worst]
+            ranked = sorted(self.per_item, key=lambda pair: pair[1].f1)[:worst]
             lines.append(f"\nworst {len(ranked)} items by F1")
             lines.append(f"  {'F1':>7} {'tp':>5} {'fp':>5} {'fn':>5}  item")
-            for name, s in ranked:
+            for name, c in ranked:
                 lines.append(
-                    f"  {s['f1']:>7.1%} {int(s['tp']):>5} {int(s['fp']):>5} "
-                    f"{int(s['fn']):>5}  {name[:44]}"
+                    f"  {c.f1:>7.1%} {c.tp:>5} {c.fp:>5} {c.fn:>5}  {name[:44]}"
                 )
         return "\n".join(lines)
 

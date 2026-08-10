@@ -46,7 +46,11 @@ from stemify.fitting.config import TrainConfig
 from stemify.fitting.base import epoch_batches
 from stemify.training.recipes import HEADS, RECIPES, Recipe
 from stemify.training.trainer import Trainer
-from stemify.training.validation import build_eval_fn, build_validators
+from stemify.training.validation import (
+    build_eval_fn,
+    build_validators,
+    harness_metric_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +178,18 @@ def train(
             f"--monitor {config.monitor!r} is scored by the harness, so it must run "
             f"every epoch, but --val-every is {val_every}. On a skipped epoch the "
             "monitored metric would not exist and the run would die mid-training."
+        )
+    if sync_scoring and config.monitor not in harness_metric_names(val_conditions):
+        # Checked here, before the val contours are cached (minutes) and before a
+        # single batch. The monitor is a string the user typed, matched against names
+        # the harness builds by concatenation, and it decides which checkpoint
+        # survives -- so a typo used to surface only when `Trainer` failed the lookup
+        # at the first epoch boundary, well past the setup cost. The full name list is
+        # a property of the result types, so it costs nothing to ask now.
+        raise ValueError(
+            f"--monitor {config.monitor!r} is not a metric this run will produce. "
+            f"Available with --val-conditions {val_conditions}: "
+            f"{sorted(harness_metric_names(val_conditions))}, or a loss/<head>/val key."
         )
 
     # Written on every improvement, not once at the end: `fit` restores the best

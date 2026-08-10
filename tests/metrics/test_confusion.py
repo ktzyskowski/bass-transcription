@@ -77,3 +77,49 @@ def test_matrix_axes_are_fixed_size():
 def test_misaligned_arrays_are_rejected():
     with pytest.raises(ValueError):
         PitchConfusion().compute(np.array([A2, A2]), np.array([A2]))
+
+
+# --------------------------------------------------------------------------- #
+# Out-of-range attribution: whose fault is it                                 #
+# --------------------------------------------------------------------------- #
+# The matrix needs both axes in bounds to name a cell, and `out_of_range_rate` was
+# computed off that same two-sided mask -- under a rendered line reading "predicted
+# out of range". So a reference pitch below MIDI_MIN was reported as the estimate's
+# error. The estimate's rate and the corpus's are separate numbers now, because they
+# argue for different fixes: a bad model, versus bounds that are wrong for the data.
+B0_FLAT = 25.96   # MIDI 20, below MIDI_MIN=23
+
+
+def test_a_reference_below_the_axis_is_not_the_estimates_fault():
+    r = result([B0_FLAT], [A2])
+    assert r.out_of_range_rate == 0.0
+    assert r.reference_out_of_range_rate == 1.0
+
+
+def test_an_estimate_off_the_axis_is():
+    r = result([A2], [B0_FLAT])
+    assert r.out_of_range_rate == 1.0
+    assert r.reference_out_of_range_rate == 0.0
+
+
+def test_both_in_range_blames_neither():
+    r = result([A2], [A3])
+    assert r.out_of_range_rate == 0.0
+    assert r.reference_out_of_range_rate == 0.0
+
+
+def test_an_out_of_range_reference_can_still_be_answered_exactly():
+    """The case that made the old attribution visible: a frame scoring 1.0 for
+    `exact_rate` and 1.0 for "predicted out of range" at the same time."""
+    r = result([B0_FLAT], [B0_FLAT])
+    assert r.exact_rate == 1.0
+    assert r.reference_out_of_range_rate == 1.0
+
+
+def test_the_delta_histogram_still_spans_out_of_range_frames():
+    """Unchanged, and the reason the matrix and the rates use different masks: a +19
+    harmonic error off a high note lands above MIDI_MAX, and dropping it would hide
+    exactly the failure this metric exists to surface."""
+    r = result([A2], [A5])          # +36, far above the axis
+    assert list(r.arrays["delta_values"]) == [36]
+    assert r.out_of_range_rate == 1.0

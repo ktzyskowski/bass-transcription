@@ -9,8 +9,8 @@ anyway because two callers need exactly this and must not drift: the offline
 a tolerance or a default-metric change lands in both.
 
 The worst-item breakdown a harness shows is *not* a second scoring pass here: ``PRF``
-emits its per-track counts in ``arrays["per_item_counts"]`` from its one match, and
-the harness projects the ranking off that (see ``evaluation.note``).
+emits its per-track ``Counts`` on ``PRFResult.per_item`` from its one match, and the
+harness projects the ranking off that (see ``evaluation.note``).
 
 Pure over the note lists -- no dataset, no model -- so how the estimates were produced
 (a whole ``Transcriber`` offline, a checkpoint's encoder+decoder in training) stays with

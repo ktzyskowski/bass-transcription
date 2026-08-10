@@ -106,20 +106,23 @@ def test_score_examples_returns_note_metrics():
     # so onsets split the held contour into the right notes.
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0, 30, 60])
     scores = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
+    # The metrics' own names, undecorated. Renaming to `note_*` here and back again
+    # at the log site is what `NOTE_LOG_KEYS` replaced; the MLflow names are pinned
+    # separately, in tests/metrics/test_logged_schema.py.
     assert set(scores) == {
-        "note_f1", "note_precision", "note_recall",
+        "tp", "fp", "fn", "precision", "recall", "f1",
         # Every false-positive bucket, not just fragmentation: precision alone
         # cannot say which error a change fixed, and they cost nothing extra --
         # the metric computes all four in one pass.
-        "fragmentation", "fp", "fp_rest", "fp_interior_offpitch",
+        "fragmentation", "interior_offpitch", "rest",
     }
     # The buckets partition the false positives, so they must add up. If they ever
     # stop doing so, some FP is being counted twice or dropped on the floor.
     assert scores["fp"] == (
-        scores["fragmentation"] + scores["fp_rest"] + scores["fp_interior_offpitch"]
+        scores["fragmentation"] + scores["rest"] + scores["interior_offpitch"]
     )
-    assert scores["note_recall"] > 0.5  # found the re-articulated notes
-    assert 0.0 <= scores["note_f1"] <= 1.0
+    assert scores["recall"] > 0.5  # found the re-articulated notes
+    assert 0.0 <= scores["f1"] <= 1.0
 
 
 def test_missing_onsets_lower_recall():
@@ -127,7 +130,7 @@ def test_missing_onsets_lower_recall():
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0, 30, 60])
     few = score_examples(_segment(_FakeOnsetModel([0])), [ex])
     many = score_examples(_segment(_FakeOnsetModel([0, 30, 60])), [ex])
-    assert few["note_recall"] < many["note_recall"]
+    assert few["recall"] < many["recall"]
 
 
 class _FakeVoicingModel(_FakeFrameNet):
@@ -250,7 +253,7 @@ def test_pitch_head_model_never_reaches_for_pyin():
     ex._contour = None
 
     scores = score_examples(_segment(_FakePitchHeadModel()), [ex])
-    assert "note_f1" in scores
+    assert "f1" in scores
 
 
 def test_headless_model_still_gets_its_contour():
