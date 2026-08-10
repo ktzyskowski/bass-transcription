@@ -87,7 +87,7 @@ def test_identity_cache_path_is_the_source(tmp_path):
 
 
 def test_cache_path_does_no_work(tmp_path):
-    # The property Cache.ensure_features relies on to avoid separating a track just to
+    # The property Store.ensure_features relies on to avoid separating a track just to
     # discover its CQT is already cached: resolving the path must never call _run.
     class _Exploding(AudioTransform):
         @property

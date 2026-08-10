@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.core.serde import features_npy
+from stemify.persistence.serde import features_npy
 
 
 def migrate_example_cache(cache_root: Path) -> int:

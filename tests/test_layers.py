@@ -27,7 +27,8 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 PILLAR_ALLOWANCE = {
     "platform": set(),
     "music": set(),
-    "audio": {"platform"},
+    "persistence": {"platform", "music"},
+    "audio": {"platform", "persistence"},
     "corpus": {"music", "audio"},
 }
 _BELOW = set(PILLAR_ALLOWANCE)
@@ -45,16 +46,18 @@ ALLOWED = {
 # stronger rule than a layer: it may import only the pillars *below* it, which for the
 # bottom one means nothing from ``stemify`` at all.
 #
-# This is the property that makes a pillar testable without doubles. ``core`` failed it
-# in both directions -- ``Cache`` welds corpus, transform, features and persistence into
-# one call, which is why every training test has to subclass it into a ``_NoOpCache``
-# just to get it out of the way. A pillar that its own consumers must stub is a pillar
-# whose seam is in the wrong place.
+# This is the property that makes a pillar testable without doubles, and the reason
+# `core` failed it: its `Cache` welded corpus, transform, features and persistence into
+# one call, so every training test had to subclass it into a `_NoOpCache` just to get it
+# out of the way. A pillar its own consumers must stub is a pillar whose seam is in the
+# wrong place. `persistence` is what that inverted into.
 #
-# The graph is not a chain. ``platform``, ``music`` and ``audio`` form no line at all:
-# ``audio`` reaches ``platform`` for the filesystem and the accelerator, and does not
-# touch ``music`` -- a waveform and a CQT have nothing to say about notes. Only
-# ``corpus`` needs both, because an item is the place audio and truth meet.
+# The graph is not a chain. `audio` reaches `platform` for the filesystem and the
+# accelerator and `persistence` to hold a CQT, but never `music` -- a waveform has
+# nothing to say about notes. Only `corpus` needs both, because an item is the place
+# audio and truth meet. `persistence` sits *below* `audio` rather than above it, which
+# is what lets the CQT memoiser live in `audio` where the CQT is defined instead of in
+# a class that has to know about corpora to reach it.
 PILLARS = list(PILLAR_ALLOWANCE)
 
 # Edges that exist today and are known to be wrong -- the work still outstanding from

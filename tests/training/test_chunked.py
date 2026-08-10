@@ -11,10 +11,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from stemify.audio.cache import feature_path
 import torch
 
 from stemify.audio.features import SILENCE_DB
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.conditions import CONDITIONS
 from stemify.music.contour import Contour
 from stemify.core.frames import Frames
@@ -23,7 +25,7 @@ from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.spans import Grid
 from stemify.music.notes import NoteEvent
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.semicrf.fit.dataset import ChunkDataset, collate
 from stemify.semicrf.fit.tracks import channel_window, train_items
@@ -59,7 +61,7 @@ class _Item:
 class _FakeDataset(list):
     """A Slakh-like dataset of synthetic tracks, with their CQTs already cached."""
 
-    def __init__(self, tmp: Path, cache: Cache, lengths: list[int]) -> None:
+    def __init__(self, tmp: Path, cache: Store, lengths: list[int]) -> None:
         super().__init__()
         rng = np.random.default_rng(0)
         for k, n in enumerate(lengths):
@@ -68,25 +70,14 @@ class _FakeDataset(list):
             feats = rng.standard_normal((N_BINS, n)).astype(np.float32)
             CachedItem(
                 item.name, feats, {}, np.arange(n) * HOP_S
-            ).save(cache.feature_path(item.audio()))
+            ).save(feature_path(cache, item.audio()))
             self.append(item)
 
-
-class _NoOpCache(Cache):
-    """`ensure_features` is a no-op: the fixtures write their CQTs directly, and
-    `contour` returns a synthetic pyin track rather than running pyin on empty audio."""
-
-    def ensure_features(self, dataset, transform=None, role="bass"):
-        return [self.feature_path(i.sources().role(role)) for i in dataset]
-
-    def contour(self, estimator, audio):
-        n = 400
-        return Contour(times=np.arange(n) * HOP_S, freqs=np.full(n, 110.0))
 
 
 @pytest.fixture
 def cache(tmp_path):
-    return _NoOpCache(tmp_path / "cache")
+    return Store(tmp_path / "cache")
 
 
 def _dataset(tmp_path, cache, lengths, chunk, dmax, batch_size, right=0):
@@ -247,6 +238,18 @@ def _cues(frame_times, contour):
     )
 
 
+def _synthetic_contour() -> Contour:
+    """A flat pitch track, standing in for pyin without running it on empty audio.
+
+    Used to be reached through a `_NoOpCache.contour` override, which is what a
+    persistence god-object does to a test: the only way to say "do not run pyin" was to
+    subclass the thing that stored the result. It is a value, so it is now written as
+    one.
+    """
+    n = 400
+    return Contour(times=np.arange(n) * HOP_S, freqs=np.full(n, 110.0))
+
+
 def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, cache):
     # The end-to-end property: geometry from the dataset, scanned with the carry, must
     # reproduce the whole-track log Z. This is what ties the chunking to the objective.
@@ -259,7 +262,7 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
     n_dp = (n_cqt // STRIDE // chunk) * chunk
 
     # whole track, over exactly the frames the chunks cover
-    contour = _NoOpCache(tmp_path).contour(None, "x")
+    contour = _synthetic_contour()
     ft = np.arange(n_dp * STRIDE) * HOP_S
     whole_e = build_evidence(_cues(ft, contour), STRIDE)
     whole = log_partitions(dec.scorer, whole_e, grid)

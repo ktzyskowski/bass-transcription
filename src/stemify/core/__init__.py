@@ -5,9 +5,9 @@ a model" -- and a negative definition cannot refuse anything, which is how it re
 1800 lines of loose modules and two god-objects (``cache``, fan-out 6; ``examples``,
 fan-out 8) whose consumers must stub them to test anything. It is being replaced by
 vertical pillars, each defined by what it *is* and each detachable and testable on its
-own. Out so far: ``platform`` (atomic, device), ``music`` (notes, grids, labels) and
-``audio`` (sources, transforms, features). ``corpus``, ``persistence`` and ``contracts``
-follow. ``tests/test_layers.py`` carries the running order and polices the edges.
+own. Out so far: ``platform`` (atomic, device), ``music`` (notes, grids, labels, contour),
+``persistence`` (store, serde), ``audio`` (sources, transforms, features, cache) and
+``corpus`` (the four loaders). ``contracts`` follows. ``tests/test_layers.py`` carries the running order and polices the edges.
 
 **The rule, in one line:** ``core`` imports nothing from ``models``, ``training``,
 ``semicrf``, ``evaluation`` or ``serving``. Nothing above it may be imported here, ever.
@@ -27,17 +27,18 @@ What is left holds three kinds of thing, each with a pillar waiting for it:
                   implements (Recipe, Loss, Batch) are a different set and live in
                   ``training``: they are about how a model is fitted, which nothing
                   here needs to know. -> ``contracts``
-    data          Contour and Frames -- values that cross every seam -- plus the serde
-                  and cache that persist them. -> ``persistence``, once ``cache`` is
-                  inverted to store arrays by key instead of orchestrating the corpus
+    data          ``Frames`` -- the value that crosses the encoder/decoder seam.
+                  ``Contour`` and the serde/store that persist both have already gone
+                  to ``music`` and ``persistence``.
     impls         the torch-free implementations of those protocols --
                   ``ClassicalEncoder``, ``PyinPitch``, ``GreedyDecoder``, the metrics,
                   the datasets. Their learned counterparts wear the same contracts from
-                  ``models``, which is what the contracts are *for*: ``Cache`` accepts
-                  any ``PitchEstimator`` without knowing whether it runs a network.
+                  ``models``, which is what the contracts are *for*: ``ensure_contour``
+                  accepts any ``PitchEstimator`` without knowing whether it runs a
+                  network.
                   -> ``corpus`` for ``data/``; the rest stay implementations
 
-``conditions`` and ``examples`` moved down from ``training`` because the evaluation
+``conditions`` and ``examples`` came down from ``training`` because the evaluation
 harness varies conditions too, so neither was ever training-specific --
 ``conditions.py`` had been saying so in its own docstring for some time. ``labels``
 came down for the same reason and has since carried on into ``music``, which is the

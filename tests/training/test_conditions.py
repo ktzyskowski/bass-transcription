@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.music.notes import NoteEvent
 from stemify.audio.sources import Sources
 from stemify.core.conditions import CONDITIONS, Channel, Condition, resolve
@@ -138,7 +138,7 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
             np.full((4, 6), float(seed), dtype=np.float32), np.arange(6) * 0.0116
         )
 
-    monkeypatch.setattr("stemify.core.cache.extract_features", fake_extract)
+    monkeypatch.setattr("stemify.audio.cache.extract_features", fake_extract)
 
     items = []
     for i in range(3):
@@ -150,7 +150,7 @@ def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypa
     condition = Condition(
         "bichannel-clean", "stem", (Channel("bass", Identity()), Channel("mix", Identity()))
     )
-    per_track = condition.channel_paths(items, Cache(tmp_path / "cache"))
+    per_track = condition.channel_paths(items, Store(tmp_path / "cache"))
 
     assert len(per_track) == 3
     for item, (ch0, ch1) in zip(items, per_track, strict=True):

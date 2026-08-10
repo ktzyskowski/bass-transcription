@@ -14,7 +14,7 @@ share of errors attributable to pitch, holding the segmentation fixed.
 import sys
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
@@ -25,7 +25,7 @@ from stemify.core.conditions import CONDITIONS
 from stemify.training.validation import CheckpointValidator
 
 ROOT = "/home/ktzys/dev/tabgen/stemify-ml/data/raw/slakh2100"
-CACHE = Cache("/home/ktzys/dev/tabgen/stemify-ml/data/cache")
+CACHE = Store("/home/ktzys/dev/tabgen/stemify-ml/data/cache")
 IGNORE_PITCH = 1e6  # cents: any pitch matches, so matching is onset-only
 
 print(f"{'condition':12} {'F1':>8} {'F1 no-pitch':>12} {'gain':>8} {'pitch share':>12}")

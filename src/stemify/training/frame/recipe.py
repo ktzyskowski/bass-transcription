@@ -11,7 +11,7 @@ from pathlib import Path
 
 from torch.utils.data import DataLoader
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.base import Decoder
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.heads import onset_head, pitch_head, voicing_head
@@ -174,7 +174,7 @@ class FrameRecipe(Recipe):
         self,
         root: str,
         split: str,
-        cache: Cache,
+        store: Store,
         condition: Condition,
         limit: int | None,
     ) -> list[tuple[Path, ...]]:
@@ -183,8 +183,8 @@ class FrameRecipe(Recipe):
         Targets are layered onto channel 0's npz -- it is the audio the labels
         describe -- and the remaining channels contribute features only."""
         ds = condition.dataset(root, split, limit)
-        prepare_examples(ds, self.heads, cache, condition.primary.transform)
-        return condition.channel_paths(ds, cache)
+        prepare_examples(ds, self.heads, store, condition.primary.transform)
+        return condition.channel_paths(ds, store)
 
     def _loader(
         self, tracks: list[tuple[Path, ...]], config: TrainConfig, shuffle: bool
@@ -212,20 +212,20 @@ class FrameRecipe(Recipe):
         )
 
     def train_loader(
-        self, root: str, cache: Cache, config: TrainConfig, limit: int | None
+        self, root: str, store: Store, config: TrainConfig, limit: int | None
     ) -> DataLoader[FrameBatch]:
         tracks: list[tuple[Path, ...]] = []
         for condition in self.conditions:
-            tracks += self._tracks(root, "train", cache, condition, limit)
+            tracks += self._tracks(root, "train", store, condition, limit)
         return self._loader(tracks, config, shuffle=True)
 
     def val_loader(
-        self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
+        self, root: str, store: Store, config: TrainConfig, val_limit: int | None
     ) -> DataLoader[FrameBatch]:
         # Clean stems, but through the *same channel layout* the model was built
         # for -- a 2-channel model cannot be fed 1-channel val windows.
         condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
-        tracks = self._tracks(root, "validation", cache, condition, val_limit)
+        tracks = self._tracks(root, "validation", store, condition, val_limit)
         return self._loader(tracks, config, shuffle=False)
 
     def decoder_from(self, state: Mapping[str, Any]) -> Decoder:

@@ -13,7 +13,7 @@ It also settles bichannel on equal terms. ``recall-w5`` confounds the mix channe
 import argparse
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
@@ -48,7 +48,7 @@ def main() -> None:
         encoder = LearnedEncoder(load_cuenet(Path(f"data/checkpoints/{name}.pt")))
         for split in args.splits.split(","):
             v = CheckpointValidator(
-                condition.dataset(ROOT, split, args.limit), condition, cache=Cache("data/cache")
+                condition.dataset(ROOT, split, args.limit), condition, cache=Store("data/cache")
             )
             tp = fp = fn = stp = sfp = sfn = 0
             for ex in v.examples:

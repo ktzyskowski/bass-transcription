@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.cues import Cues
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
@@ -84,7 +84,7 @@ def main() -> None:
     pitch_model = load_cuenet(args.pitch_checkpoint).eval()
     if "pitch" not in getattr(pitch_model, "frequency_heads", {}):
         raise SystemExit(f"{args.pitch_checkpoint} has no pitch head")
-    decoder, cache = GreedyDecoder(), Cache("data/cache")
+    decoder, cache = GreedyDecoder(), Store("data/cache")
 
     print(f"\npitch source: {args.pitch_checkpoint.stem} (held constant across arms)\n")
     print(f"{'arm':<14} {'split':<11} {'pitch':<9} {'recall':>8} {'prec':>7} "

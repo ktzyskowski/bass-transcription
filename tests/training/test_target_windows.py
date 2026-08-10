@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.models.heads import pitch_ce
 from stemify.semicrf.fit.tracks import target_windows
 

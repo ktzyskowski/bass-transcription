@@ -40,7 +40,7 @@ from pathlib import Path
 
 import torch
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.core.metrics import score_notes
 from stemify.training.checkpoint import Checkpoint
@@ -69,7 +69,7 @@ def sweep(
     print(f"{checkpoint}  pitch_source={encoder.pitch_source}  "
           f"encode={ENCODE_DEVICE} decode={DECODE_DEVICE}")
 
-    validators = build_validators(root, limit, conditions, cache=Cache(cache_dir), split=split)
+    validators = build_validators(root, limit, conditions, cache=Store(cache_dir), split=split)
     for tag, validator in validators.items():
         examples = validator.examples
         refs = [ex.notes for ex in examples]

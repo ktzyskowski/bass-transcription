@@ -21,6 +21,8 @@ before any of the above matters.
 
 import numpy as np
 import pytest
+
+from stemify.persistence.store import Store
 import torch
 
 from stemify.core.conditions import CONDITIONS
@@ -42,7 +44,7 @@ from stemify.training.trainer import Trainer
 # ruff as a redefinition -- the standard false positive for a shared fixture. A
 # `conftest.py` is the real fix; it means moving fixtures out of passing files.
 from test_chunk_carry import (  # noqa: F401  (fixtures)
-    CHUNK, DMAX, STRIDE, _NoOpCache, _Pointwise, track,
+    CHUNK, DMAX, STRIDE, _Pointwise, track,
 )
 from test_chunked import _FakeDataset
 
@@ -97,7 +99,7 @@ def _chunked(tmp_path, lengths, *, batch_size, segment_chunks):
     name shadows the local ``cache`` this module unpacks from ``track`` everywhere
     else, and renaming those to dodge a lint is a worse trade than four lines.
     """
-    store = _NoOpCache(tmp_path / "multi")
+    store = Store(tmp_path / "multi")
     ds = _FakeDataset(tmp_path, store, lengths)
     return ChunkDataset(
         train_items(ds, CONDITIONS["clean"], store),
@@ -380,5 +382,5 @@ def test_a_segment_length_the_step_cannot_land_on_is_refused():
 
     recipe = SemiCRFRecipe(["clean"], segment_chunks=4)
     with pytest.raises(ValueError, match="accumulate_steps"):
-        recipe._chunks("", "train", [CONDITIONS["clean"]], _NoOpCache("/tmp/nope"),
+        recipe._chunks("", "train", [CONDITIONS["clean"]], Store("/tmp/nope"),
                        TrainConfig(accumulate_steps=2), None)

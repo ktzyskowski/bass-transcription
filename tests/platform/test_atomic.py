@@ -21,7 +21,7 @@ def test_the_payload_lands_at_the_destination(tmp_path):
 
 def test_the_parent_directory_is_created(tmp_path):
     """Callers hand over a path inside a cache layout that may not exist yet -- the
-    features/contours/transforms directories are named by ``Cache``, not pre-made."""
+    features/contours/transforms directories are named by ``Store``, not pre-made."""
     dest = tmp_path / "a" / "b" / "c" / "out.txt"
     atomic_write(dest, lambda partial: partial.write_text("payload"))
     assert dest.read_text() == "payload"

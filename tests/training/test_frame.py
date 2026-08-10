@@ -11,10 +11,11 @@ import pytest
 import torch
 
 from stemify.audio.features import SILENCE_DB
-from stemify.core.cache import Cache
+from stemify.audio.cache import feature_path
+from stemify.persistence.store import Store
 from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.core.examples import build_example
 from stemify.training.frame.dataset import FrameWindowDataset, collate
@@ -157,7 +158,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     tmp_path, monkeypatch
 ):
     from stemify.music.contour import Contour
-    from stemify.core.serde import features_npy
+    from stemify.persistence.serde import features_npy
     from stemify.core.examples import prepare_examples
     from stemify.audio.transforms import Identity
 
@@ -166,13 +167,13 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     # writer used -- the resolved audio path.
     audio = tmp_path / "trk.wav"
     audio.write_text("x")
-    cache = Cache(tmp_path / "cache")
+    cache = Store(tmp_path / "cache")
     ft = np.arange(8) * 0.0116
     CachedItem(
         "trk", np.random.rand(5, 8).astype(np.float32),
         {"onset": np.zeros(8, np.float32)}, ft,
-    ).save(cache.feature_path(audio))
-    path = cache.feature_path(audio)
+    ).save(feature_path(cache, audio))
+    path = feature_path(cache, audio)
     feat_mtime = features_npy(path).stat().st_mtime_ns  # CQT sidecar must not change
 
     ref = Contour(ft, np.where(np.arange(8) < 4, 110.0, 0.0))  # voiced first half
@@ -182,7 +183,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
     def _no_cqt(path):
         raise AssertionError("backfill must not recompute the CQT")
 
-    monkeypatch.setattr("stemify.core.cache.extract_features", _no_cqt)
+    monkeypatch.setattr("stemify.audio.cache.extract_features", _no_cqt)
 
     class _Item:
         name = "trk"
@@ -213,7 +214,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     # exists so relaxing that filter cannot silently mislabel training data.
     import pytest
 
-    from stemify.core.cache import Cache
+    from stemify.persistence.store import Store
     from stemify.music.contour import Contour
     from stemify.core.examples import prepare_examples
     from stemify.audio.transforms import Identity
@@ -226,7 +227,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
         from stemify.audio.features import FrameFeatures
         return FrameFeatures(np.random.rand(5, 8).astype(np.float32), ft)
 
-    monkeypatch.setattr("stemify.core.cache.extract_features", fake_extract)
+    monkeypatch.setattr("stemify.audio.cache.extract_features", fake_extract)
 
     class _Item:
         def __init__(self, name):
@@ -243,7 +244,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     with pytest.raises(ValueError, match="share cached features"):
         prepare_examples(
             [_Item("Track01/S00"), _Item("Track01/S01")],
-            ["onset"], Cache(tmp_path / "cache"), Identity(),
+            ["onset"], Store(tmp_path / "cache"), Identity(),
         )
 
 

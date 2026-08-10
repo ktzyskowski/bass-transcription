@@ -13,7 +13,8 @@ One-way by construction: this module knows nothing about which conditions exist,
 from dataclasses import dataclass
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.audio.cache import ensure_features
+from stemify.persistence.store import Store
 from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
 from stemify.corpus.slakh import SlakhDataset
 from stemify.audio.transforms import AudioTransform
@@ -34,7 +35,7 @@ class Channel:
         """The resolved audio file, running the transform if it is not yet cached.
 
         Use this when the file itself is needed (pyin wants something to listen to).
-        Feature caching goes through ``Cache.ensure_features``, which keys on
+        Feature caching goes through ``audio.cache.ensure_features``, which keys on
         ``transform.cache_path`` instead so that a cache *hit* never pays for a
         separation just to discover it was a hit.
         """
@@ -96,18 +97,29 @@ What it adds over the old ``source``-only rule is that ``bichannel-clean`` is
         )
 
     def channel_paths(
-        self, dataset: SlakhLikeDataset[EvalItem], cache: Cache
+        self, dataset: SlakhLikeDataset[EvalItem], store: Store
     ) -> list[tuple[Path, ...]]:
         """Cached CQT paths per track, ordered by model input channel.
 
-        One ``ensure_features`` pass per channel rather than per track, so each
-        channel's progress log reads as one sweep, and the transposition at the end
-        is what binds a track's channels together. ``strict=True`` because a length
-        mismatch between channels would silently pair track *i*'s bass with track
-        *j*'s mixture -- labels intact, inputs scrambled, loss still falling.
+        One sweep per channel rather than per track, so each channel's progress log
+        reads as one pass, and the transposition at the end is what binds a track's
+        channels together. ``strict=True`` because a length mismatch between channels
+        would silently pair track *i*'s bass with track *j*'s mixture -- labels intact,
+        inputs scrambled, loss still falling.
+
+        The sweep is written here rather than behind a persistence method because it is
+        this type that knows a corpus has channels: ``ensure_features`` takes audio
+        files and a transform, and turning a ``Dataset`` into audio files is exactly
+        what a ``Channel`` is for.
         """
+        items = list(dataset)
         per_channel = [
-            cache.ensure_features(dataset, c.transform, role=c.role)
+            ensure_features(
+                store,
+                c.transform,
+                [item.sources().role(c.role) for item in items],
+                label=f"{c.role}/{c.transform.name}",
+            )
             for c in self.channels
         ]
         return list(zip(*per_channel, strict=True))

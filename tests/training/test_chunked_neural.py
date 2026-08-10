@@ -21,11 +21,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from stemify.audio.cache import feature_path
 import torch
 from torch import nn
 
 from stemify.core.conditions import CONDITIONS
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
@@ -38,7 +40,7 @@ from stemify.semicrf.neural import NeuralSpanScorer
 # across modules. The real fix is a `conftest.py`; that means moving fixtures out of
 # a passing file, which is worth doing when something else brings us here.
 from test_chunk_carry import (  # noqa: F401  (fixtures)
-    CHUNK, DMAX, HOP_S, N_BINS, N_CQT, STRIDE, _Item, _NoOpCache, track,
+    CHUNK, DMAX, HOP_S, N_BINS, N_CQT, STRIDE, _Item, track,
 )
 from stemify.semicrf.fit.tracks import train_items
 
@@ -180,7 +182,7 @@ def _second_track(tmp_path, cache) -> list[_Item]:
     rng = np.random.default_rng(1)
     feats = rng.standard_normal((N_BINS, N_CQT)).astype(np.float32)
     CachedItem(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
-        cache.feature_path(item.audio())
+        feature_path(cache, item.audio())
     )
     return [item]
 

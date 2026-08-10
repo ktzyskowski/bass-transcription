@@ -21,7 +21,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
@@ -78,7 +78,7 @@ class Bench:
     def __init__(self, ckpt: Path, tag: str, split: str, limit: int) -> None:
         condition = CONDITIONS[canonical(tag)]
         dataset = condition.dataset(ROOT, split, limit)
-        validator = CheckpointValidator(dataset, condition, cache=Cache(CACHE_DIR))
+        validator = CheckpointValidator(dataset, condition, cache=Store(CACHE_DIR))
         encoder = LearnedEncoder(load_cuenet(ckpt))
         self.cues = [
             encoder.encode_features(ex.contour, ex.load_features())

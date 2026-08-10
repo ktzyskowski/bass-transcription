@@ -24,7 +24,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.base import Decoder
 from stemify.models.cuenet import CueNet
 from stemify.core.conditions import resolve
@@ -345,19 +345,19 @@ class Recipe(ABC):
     def train_loader(
         self,
         root: str,
-        cache: Cache,
+        store: Store,
         config: TrainConfig,
         limit: int | None,
     ) -> "DataLoader[Any]":
         """Batches from the union of this recipe's input conditions.
 
-        Takes the corpus and the cache rather than pre-built paths, because the two
+        Takes the corpus and the store rather than pre-built paths, because the two
         paradigms need different things from them: the frame path wants per-frame
         target npz paths, the sequence path wants whole tracks with their contours."""
 
     @abstractmethod
     def val_loader(
-        self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
+        self, root: str, store: Store, config: TrainConfig, val_limit: int | None
     ) -> "DataLoader[Any]":
         """The inline early-stopping set. Clean stems only -- it is the cheap proxy,
         not the number that matters (see ``Trainer``'s docstring)."""

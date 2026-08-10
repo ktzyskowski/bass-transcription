@@ -36,7 +36,8 @@ from typing import Any
 import torch
 import numpy as np
 
-from stemify.core.cache import Cache
+from stemify.core.pitch.cache import ensure_contour
+from stemify.persistence.store import Store
 from stemify.core.decoders.base import Decoder
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
@@ -48,7 +49,7 @@ from stemify.audio.features import FrameFeatures, extract_features, stack_channe
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.music.notes import NoteEvent
 from stemify.core.pitch import PyinPitch
-from stemify.core.serde import features_npy
+from stemify.persistence.serde import features_npy
 from stemify.core.conditions import CONDITIONS, Condition
 from stemify.core.examples import prepare_examples
 from stemify.music.labels import onset_targets
@@ -57,7 +58,7 @@ from stemify.music.labels import onset_targets
 class ValItem:
     """One val track, everything fixed across checkpoints precomputed.
 
-    FrameFeatures are held either in memory (``features``, e.g. tests or the no-cache
+    FrameFeatures are held either in memory (``features``, e.g. tests or the no-store
     path) or lazily on disk (``feature_paths``, the cached paths -- one per model
     input channel). Holding all val features in memory for a full-scale val set is
     ~21 GB across three conditions, so when they are cached to disk we keep only the
@@ -208,15 +209,15 @@ class CheckpointValidator:
         self,
         dataset: Dataset[NoteAnnotated],
         condition: Condition | None = None,
-        cache: Cache | None = None,
+        store: Store | None = None,
     ) -> None:
         # A bare stem condition is the neutral default -- one channel, no transform
         # -- so a caller scoring clean audio need not name one.
         condition = condition or CONDITIONS["clean"]
         estimator = PyinPitch()
 
-        # One ``cache`` replaces the old separate ``contour_cache``/``feature_cache``
-        # paths, and unifies what their two ``None``s meant: with a cache, both the
+        # One ``store`` replaces the old separate ``contour_cache``/``feature_cache``
+        # paths, and unifies what their two ``None``s meant: with a store, both the
         # CQT and the contour are disk-backed; without one, features are held in
         # memory and pyin reruns per launch (the test/small-set path).
         #
@@ -226,19 +227,19 @@ class CheckpointValidator:
         # special case worth a comment. Prepare the voicing target too (a cheap
         # backfill, no CQT recompute), so the per-frame voiced label the AUROC path
         # needs is present for every condition.
-        if cache is not None:
-            prepare_examples(dataset, ["onset", "voicing"], cache, condition.primary.transform)
+        if store is not None:
+            prepare_examples(dataset, ["onset", "voicing"], store, condition.primary.transform)
             # Every channel's CQT, keyed on its own resolved audio -- so a second
-            # channel is typically a pure cache hit from whichever run already built
+            # channel is typically a pure store hit from whichever run already built
             # that condition. Ordered per track, channel 0 first.
-            per_track = condition.channel_paths(dataset, cache)
+            per_track = condition.channel_paths(dataset, store)
 
         self.examples: list[ValItem] = []
         for i, item in enumerate(dataset):
             # The contour describes channel 0: it is the audio being transcribed,
             # and the context channels are never pitch-tracked.
             primary = condition.primary.audio(item)
-            if cache is not None:
+            if store is not None:
                 # Keep only the paths + small frame_times/label resident; the feature
                 # tensors are loaded transiently per score (load_features), so the
                 # whole val set's CQT never sits in memory at once.
@@ -249,9 +250,9 @@ class CheckpointValidator:
                     cached["target_voicing"] if "target_voicing" in cached.files else None
                 )
                 features = None
-                contour_source = partial(cache.contour, estimator, primary)
+                contour_source = partial(ensure_contour, store, estimator, primary)
             else:
-                # No cache: featurise each channel now and hold them resident. Only
+                # No store: featurise each channel now and hold them resident. Only
                 # the small-set/test path takes this branch.
                 feats = stack_channels(
                     [extract_features(c.audio(item)) for c in condition.channels]
@@ -314,7 +315,7 @@ def build_validators(
     root: str,
     val_limit: int,
     conditions: list[str],
-    cache: Cache | None = None,
+    store: Store | None = None,
     split: str = "validation",
 ) -> dict[str, CheckpointValidator]:
     """One ``CheckpointValidator`` per condition, keyed by tag. A condition names the
@@ -322,7 +323,7 @@ def build_validators(
     same ``CONDITIONS`` table that defines the *training* conditions defines the
     validation ones.
 
-    Every condition shares the one ``cache``: contours and CQTs are keyed on each
+    Every condition shares the one ``store``: contours and CQTs are keyed on each
     condition's *resolved* audio path, so they cannot collide and no per-tag
     subdirectory is needed. pyin then runs once per file ever rather than at every
     launch -- what makes a large val set affordable. The demucs condition separates
@@ -332,14 +333,14 @@ def build_validators(
     numeric backend**. On macOS/Accelerate pyin's FFTs already spread across cores and
     a process pool only oversubscribes; on Linux/OpenBLAS (scipy's pocketfft is
     single-threaded unless handed ``workers``) it pins one core and a pool measures
-    ~4.9x. Serial is the right default because the cache means this is paid once per
+    ~4.9x. Serial is the right default because the store means this is paid once per
     file ever -- but see ``docs/refactor-plan.md`` before concluding a pool is
     pointless on a given machine."""
     return {
         tag: CheckpointValidator(
             CONDITIONS[tag].dataset(root, split, val_limit),
             CONDITIONS[tag],
-            cache=cache,
+            store=store,
         )
         for tag in conditions
     }

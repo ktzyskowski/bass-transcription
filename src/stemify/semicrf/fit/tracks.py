@@ -5,10 +5,10 @@ Both structured-training datasets -- whole tracks (``sequence``) and ordered chu
 of the resolution logic::
 
     transform = transform or Identity()
-    cache.ensure_features(dataset, transform)
+    store.ensure_features(dataset, transform)
     for item in dataset:
         audio = transform.apply(item.audio())
-        ... cache.feature_path(audio), cache.contour(estimator, audio)
+        ... store.feature_path(audio), store.contour(estimator, audio)
 
 That predates ``core/conditions.py``. It hardcodes a single ``(source, transform)``
 pair, so neither dataset could feed a model more than one input channel, and the two
@@ -27,11 +27,11 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.audio.features import SILENCE_DB
 from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
 from stemify.music.notes import NoteEvent
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.core.conditions import Condition
 from stemify.core.examples import ensure_targets
 
@@ -52,7 +52,7 @@ class TrainItem:
         """This track's cached examples, one per channel.
 
         ``mmap`` keeps the features on disk so a window is paged in per read and the
-        OS page cache is shared across workers; pass ``False`` to materialise.
+        OS page store is shared across workers; pass ``False`` to materialise.
         """
         return tuple(CachedItem.load(p, mmap=mmap) for p in self.features)
 
@@ -116,14 +116,14 @@ def target_windows(
 def train_items(
     dataset: SlakhLikeDataset[NoteAnnotated],
     condition: Condition,
-    cache: Cache,
+    store: Store,
     heads: Sequence[str] = (),
 ) -> list[TrainItem]:
-    """Resolve and cache every track's inputs for one condition, in dataset order.
+    """Resolve and store every track's inputs for one condition, in dataset order.
 
     The CQT of each channel is ensured through ``Condition.channel_paths`` -- one
     ``ensure_features`` sweep per channel, so a second channel is typically a pure
-    cache hit from whichever run already built that condition.
+    store hit from whichever run already built that condition.
 
     **No contour.** There was a ``contour`` field here and an ``estimator`` parameter
     to fill it, defaulting to ``None`` on the reasoning that no DP potential reads one.
@@ -139,7 +139,7 @@ def train_items(
     self-healing writer the frame path uses, so adding one costs a MIDI parse per track
     and no CQT recompute.
     """
-    per_track = condition.channel_paths(dataset, cache)
+    per_track = condition.channel_paths(dataset, store)
     ensure_targets(dataset, [paths[0] for paths in per_track], heads)
     return [
         TrainItem(features=paths, notes=item.reference_notes())

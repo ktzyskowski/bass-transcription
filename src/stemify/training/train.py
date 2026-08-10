@@ -1,7 +1,7 @@
 """Train the frame heads on Slakh, scored by note-level F1.
 
     uv run stemify-train --root data/raw/slakh2100 \
-        --cache-dir data/cache --tracking-uri file:./mlruns \
+        --store-dir data/store --tracking-uri file:./mlruns \
         --sources clean,separated --pitch
 
 (``python -m stemify.training.train`` still works; the console script is declared in
@@ -31,7 +31,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.training.checkpoint import Checkpoint
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -107,10 +107,10 @@ def train(
             f"{recipe.in_channels} input channel(s) (training on {sources}). "
             "Scoring needs the same channel layout the model was trained with."
         )
-    cache = Cache(cache_dir)
+    store = Store(cache_dir)
     # **No default path, and the check runs before any work starts.**
     #
-    # There was a default (`<cache-dir>/onset_model.pt`), and it was wrong twice over.
+    # There was a default (`<store-dir>/onset_model.pt`), and it was wrong twice over.
     # Wrong as a *name*, because it stopped describing the model when a voicing head
     # arrived and stopped describing it three ways over once pitch did. Wrong as a
     # *default*, because every run ever launched without `--out` wrote the same file:
@@ -134,14 +134,14 @@ def train(
             "run's checkpoint, and there is nowhere to put those without one."
         )
 
-    # One cache for every condition and both splits. Features are content-addressed on
+    # One store for every condition and both splits. Features are content-addressed on
     # the resolved audio path, so a stem, a mix and a separated mix of the same track
     # land on distinct keys without any tag/split subdirectory to keep them apart --
     # and the val conditions transparently reuse whatever this loop already built.
     # The recipe owns the batch shape: fixed windows for frame BCE, whole tracks for
     # the semi-CRF, whose objective scans a whole segmentation.
-    train_loader = recipe.train_loader(root, cache, config, limit)
-    val_loader = recipe.val_loader(root, cache, config, val_limit)
+    train_loader = recipe.train_loader(root, store, config, limit)
+    val_loader = recipe.val_loader(root, store, config, val_limit)
 
     model = recipe.build_model()
     if init_from is not None:
@@ -229,7 +229,7 @@ def train(
             "caching val contours for %d tracks x conditions %s...",
             val_limit, val_conditions,
         )
-        validators = build_validators(root, val_limit, val_conditions, cache=cache)
+        validators = build_validators(root, val_limit, val_conditions, store=store)
         # Per-epoch validation reports (all conditions x note+cues) are written here
         # and attached to the run under "validation/", so each scored checkpoint leaves
         # a diffable JSON artifact, not only metric points.
@@ -259,7 +259,7 @@ def train(
             val_limit, val_conditions, config.monitor,
         )
         eval_fn = build_eval_fn(
-            build_validators(root, val_limit, val_conditions, cache=cache),
+            build_validators(root, val_limit, val_conditions, store=store),
             build_decoder=recipe.decoder_from,
             build_model=recipe.build_model,
         )

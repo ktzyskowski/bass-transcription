@@ -7,7 +7,7 @@ import numpy as np
 
 from stemify.music.contour import Contour
 from stemify.core.legacy import migrate_example_cache
-from stemify.core.serde import (
+from stemify.persistence.serde import (
     CachedItem,
     features_npy,
     load_contour,

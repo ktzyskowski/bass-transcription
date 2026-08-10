@@ -48,7 +48,7 @@ from pathlib import Path
 
 import torch
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.semicrf.constants import NEG, NOTE, START
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import candidate_starts, log_partitions, step_terms
@@ -195,7 +195,7 @@ def probe(
           f"encode={ENCODE_DEVICE} decode={DECODE_DEVICE}  K={samples}  bias={bias}")
 
     gen = torch.Generator(device=DECODE_DEVICE).manual_seed(seed)
-    validators = build_validators(root, limit, conditions, cache=Cache(cache_dir))
+    validators = build_validators(root, limit, conditions, cache=Store(cache_dir))
     for tag, validator in validators.items():
         examples = validator.examples
         t0 = time.perf_counter()

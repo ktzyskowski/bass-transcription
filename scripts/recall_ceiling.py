@@ -40,7 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.greedy import (
     MIN_NOTE_S,
     MIN_ONSET_GAP_S,
@@ -54,7 +54,7 @@ from stemify.training.checkpoint import load_cuenet
 from stemify.audio.features import BINS_PER_SEMITONE, midi_to_bin
 from stemify.core.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
 from stemify.music.notes import NoteEvent
-from stemify.core.serde import features_npy
+from stemify.persistence.serde import features_npy
 from stemify.core.conditions import CONDITIONS, canonical
 from stemify.training.validation import CheckpointValidator, ValItem
 
@@ -213,7 +213,7 @@ def profile_track(
     return rows
 
 
-def clean_features(limit: int, cache: Cache) -> dict[str, Path]:
+def clean_features(limit: int, cache: Store) -> dict[str, Path]:
     """Each val track's *clean stem* CQT, by track name.
 
     Joined by name rather than position: ``clean`` and the separated conditions filter
@@ -228,7 +228,7 @@ def clean_features(limit: int, cache: Cache) -> dict[str, Path]:
 
 
 def collect(tag: str, ckpt: Path, limit: int, threshold: float) -> list[RefNote]:
-    cache = Cache(CACHE_DIR)
+    cache = Store(CACHE_DIR)
     condition = CONDITIONS[canonical(tag)]
     dataset = condition.dataset(ROOT, "validation", limit)
     names = [item.name for item in dataset]

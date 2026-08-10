@@ -35,7 +35,7 @@ from pathlib import Path
 
 import torch
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.semicrf.marginals import span_marginals
 from stemify.semicrf.viterbi import viterbi
 from stemify.models.learned_encoder import LearnedEncoder
@@ -111,7 +111,7 @@ def main() -> None:
     encoder = LearnedEncoder(model, device="cuda" if torch.cuda.is_available() else "cpu")
 
     validators = build_validators(
-        args.root, args.limit, args.conditions.split(","), cache=Cache(args.cache_dir)
+        args.root, args.limit, args.conditions.split(","), cache=Store(args.cache_dir)
     )
     for tag, validator in validators.items():
         print(f"\n=== {tag} ===")

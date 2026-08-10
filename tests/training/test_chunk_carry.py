@@ -25,16 +25,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from stemify.audio.cache import feature_path
 import torch
 from torch import nn
 
-from stemify.core.cache import Cache
-from stemify.music.contour import Contour
+from stemify.persistence.store import Store
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.music.notes import NoteEvent
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.core.conditions import CONDITIONS
 from stemify.semicrf.fit.tracks import train_items
@@ -66,17 +67,6 @@ class _Item:
         ]
 
 
-class _NoOpCache(Cache):
-    """The fixture writes its CQT directly; pyin never runs on the empty audio."""
-
-    def ensure_features(self, dataset, transform=None, role="bass"):
-        return [self.feature_path(i.sources().role(role)) for i in dataset]
-
-    def contour(self, estimator, audio):
-        return Contour(
-            times=np.arange(N_CQT) * HOP_S, freqs=np.full(N_CQT, 110.0, dtype=np.float32)
-        )
-
 
 class _Pointwise(nn.Module):
     """Frame *t*'s logits from frame *t*'s features alone -- receptive field 1.
@@ -101,13 +91,13 @@ class _Pointwise(nn.Module):
 
 @pytest.fixture
 def track(tmp_path):
-    cache = _NoOpCache(tmp_path / "cache")
+    cache = Store(tmp_path / "cache")
     item = _Item("t0", tmp_path)
     Path(item.audio()).write_bytes(b"")
     rng = np.random.default_rng(0)
     feats = rng.standard_normal((N_BINS, N_CQT)).astype(np.float32)
     CachedItem(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
-        cache.feature_path(item.audio())
+        feature_path(cache, item.audio())
     )
     return [item], cache, feats
 

@@ -16,7 +16,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.base import Decoder
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import DMAX_S, STRIDE
@@ -369,7 +369,7 @@ class SemiCRFRecipe(Recipe):
         root: str,
         split: str,
         conditions: Sequence[Condition],
-        cache: Cache,
+        store: Store,
         config: TrainConfig,
         limit: int | None,
     ) -> chunked_ds.ChunkDataset:
@@ -406,7 +406,7 @@ class SemiCRFRecipe(Recipe):
         items: list[TrainItem] = []
         for c in conditions:
             items += train_items(
-                c.dataset(root, split, limit), c, cache, heads=self.aux_heads
+                c.dataset(root, split, limit), c, store, heads=self.aux_heads
             )
         return chunked_ds.ChunkDataset(
             items,
@@ -426,18 +426,18 @@ class SemiCRFRecipe(Recipe):
         )
 
     def train_loader(
-        self, root: str, cache: Cache, config: TrainConfig, limit: int | None
+        self, root: str, store: Store, config: TrainConfig, limit: int | None
     ) -> DataLoader[ChunkBatch]:
         return self._loader(
-            self._chunks(root, "train", self.conditions, cache, config, limit)
+            self._chunks(root, "train", self.conditions, store, config, limit)
         )
 
     def val_loader(
-        self, root: str, cache: Cache, config: TrainConfig, val_limit: int | None
+        self, root: str, store: Store, config: TrainConfig, val_limit: int | None
     ) -> DataLoader[ChunkBatch]:
         condition = CONDITIONS[CLEAN_BY_WIDTH[self.in_channels]]
         return self._loader(
-            self._chunks(root, "validation", [condition], cache, config, val_limit)
+            self._chunks(root, "validation", [condition], store, config, val_limit)
         )
 
     def decoder_from(self, state: Mapping[str, Any]) -> Decoder:

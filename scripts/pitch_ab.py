@@ -25,7 +25,7 @@ wider claim than "only the pitch changed".
 import argparse
 from pathlib import Path
 
-from stemify.core.cache import Cache
+from stemify.persistence.store import Store
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
@@ -48,7 +48,7 @@ def main() -> None:
 
     model = load_cuenet(args.checkpoint)
     decoder = GreedyDecoder()
-    cache = Cache("data/cache")
+    cache = Store("data/cache")
 
     print(f"\n{args.checkpoint.stem}\n")
     print(f"{'condition':<12} {'split':<11} {'pitch':<9} {'recall':>8} {'prec':>7} "

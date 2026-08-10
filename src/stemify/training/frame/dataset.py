@@ -18,7 +18,7 @@ import torch
 from torch.utils.data import Dataset
 
 from stemify.audio.features import SILENCE_DB
-from stemify.core.serde import CachedItem
+from stemify.persistence.serde import CachedItem
 
 # How many tracks' resident state one dataset keeps open. Sized to be negligible per
 # worker rather than to hit some ratio -- see ``_examples`` for why a larger cache
