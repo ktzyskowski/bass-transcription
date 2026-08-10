@@ -59,7 +59,7 @@ from torch.utils.data import DataLoader
 
 from stemify.core.cache import Cache
 from stemify.core.conditions import CONDITIONS
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.audio.sources import Sources

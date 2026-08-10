@@ -7,7 +7,7 @@ peak-pick + threshold + group path is covered without a model.
 
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.core.decoders.greedy import GreedyDecoder, group_contour
 

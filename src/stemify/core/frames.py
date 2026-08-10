@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, TypeAlias
 
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 
 if TYPE_CHECKING:  # torch is not imported at runtime -- see below
     import torch

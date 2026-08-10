@@ -23,8 +23,8 @@ import numpy as np
 
 from stemify.platform.atomic import atomic_write
 from stemify.core.cache import Cache
-from stemify.core.contour import Contour
-from stemify.core.data.base import Dataset as SlakhLikeDataset, EvalItem
+from stemify.music.contour import Contour
+from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem, write_npz
 from stemify.music.labels import onset_targets, pitch_targets, voicing_targets

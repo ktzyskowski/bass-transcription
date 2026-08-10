@@ -29,7 +29,7 @@ import torch
 from torch import nn
 
 from stemify.core.cache import Cache
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY

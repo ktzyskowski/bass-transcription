@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stemify.core.cache import Cache
-from stemify.core.data.base import Dataset as SlakhLikeDataset, EvalItem
-from stemify.core.data.slakh import SlakhDataset
+from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
+from stemify.corpus.slakh import SlakhDataset
 from stemify.audio.transforms import AudioTransform
 
 @dataclass(frozen=True)

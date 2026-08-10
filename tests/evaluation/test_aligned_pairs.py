@@ -6,7 +6,7 @@ the reference grid), so it is exercised with a hand-built item and Frames -- no 
 
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.evaluation.cues import aligned_pairs
 from stemify.music.notes import NoteEvent

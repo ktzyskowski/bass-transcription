@@ -15,9 +15,9 @@ This is destructive and one-way -- re-obtaining a pruned stem means
 re-downloading the 104 GB tarball. It defaults to a dry run for that reason, and
 refuses to touch a tree it cannot parse as Slakh.
 
-Lives in ``scripts/`` rather than in ``stemify.core.data``: it is corpus preparation, run
+Lives in ``scripts/`` rather than in ``stemify.corpus``: it is corpus preparation, run
 once per copy of the dataset, and nothing imports it -- it is a leaf *consumer* of
-``stemify.core.data.slakh``, not part of what the package does. The two CLIs that stayed in
+``stemify.corpus.slakh``, not part of what the package does. The two CLIs that stayed in
 the package (``stemify-train``, ``stemify-eval``) did so because they carry library
 code other modules import; this carries none.
 """
@@ -26,7 +26,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from stemify.core.data.slakh import bass_stem_ids, read_metadata
+from stemify.corpus.slakh import bass_stem_ids, read_metadata
 
 
 def prunable(track_dir: Path) -> list[Path]:

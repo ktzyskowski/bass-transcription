@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.audio.features import BINS_PER_SEMITONE
 from stemify.semicrf.placement import on_device
 from stemify.music.grids import resample_mask

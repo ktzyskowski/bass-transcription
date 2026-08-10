@@ -25,8 +25,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core.contour import Contour
-from stemify.core.data.base import Dataset, EvalItem
+from stemify.music.contour import Contour
+from stemify.corpus.base import Dataset, EvalItem
 
 # Voicing is inferred, not annotated: a 10 ms grid gated at 40 dB below the
 # clip's own peak. See Note.reference for why this is the weakest reference here.

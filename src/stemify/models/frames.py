@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import PROBABILITY_HEADS, Frames
 
 

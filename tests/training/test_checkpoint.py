@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.music.notes import NoteEvent

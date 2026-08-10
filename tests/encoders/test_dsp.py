@@ -7,7 +7,7 @@ onsets off, so no audio is read.
 
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.encoders.classical import ClassicalEncoder
 from stemify.core.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources

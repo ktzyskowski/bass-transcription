@@ -33,7 +33,7 @@ from typing import cast
 import numpy as np
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.audio.features import BINS_PER_SEMITONE
 from stemify.semicrf.cumsums import (

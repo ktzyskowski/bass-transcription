@@ -19,7 +19,7 @@ import librosa
 import numpy as np
 
 from stemify.audio import features
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.pitch.base import PitchEstimator
 
 # Search range. The lower bound is the open low E (E1, ~41 Hz). The upper bound sits

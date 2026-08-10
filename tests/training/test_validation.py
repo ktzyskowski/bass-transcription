@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.music.notes import NoteEvent

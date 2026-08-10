@@ -22,7 +22,7 @@ import librosa
 import numpy as np
 from scipy.signal import find_peaks
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.core.decoders.base import Decoder
 from stemify.music.grids import resample_mask

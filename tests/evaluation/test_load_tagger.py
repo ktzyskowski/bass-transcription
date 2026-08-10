@@ -9,7 +9,7 @@ that would be discovered, long after training.
 import numpy as np
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_cuenet
 from stemify.audio.features import FrameFeatures

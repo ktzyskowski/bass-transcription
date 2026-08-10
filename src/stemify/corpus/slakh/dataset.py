@@ -9,9 +9,9 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
-from stemify.core.data.base import Dataset
-from stemify.core.data.slakh.index import index
-from stemify.core.data.slakh.item import BassStem
+from stemify.corpus.base import Dataset
+from stemify.corpus.slakh.index import index
+from stemify.corpus.slakh.item import BassStem
 
 
 class SlakhDataset(Dataset):

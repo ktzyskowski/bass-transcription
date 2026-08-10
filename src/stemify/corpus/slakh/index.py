@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from stemify.core.data.slakh.item import BassStem
+from stemify.corpus.slakh.item import BassStem
 
 # Slakh's instrument taxonomy labels bass stems with this inst_class.
 BASS_CLASS = "Bass"

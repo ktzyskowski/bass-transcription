@@ -22,7 +22,7 @@ import numpy as np
 import numpy.typing as npt
 
 from stemify.platform.atomic import atomic_write
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 
 
 def _write_npy(dest: Path, arr: np.ndarray) -> None:

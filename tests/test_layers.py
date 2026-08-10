@@ -21,16 +21,24 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 # ``core`` is being dissolved into vertical pillars, bottom-up. Each extraction adds a
 # row here *before* the move, so the new pillar's edges are policed from the moment it
 # exists rather than after it has grown some.
-ALLOWED = {
+#
+# A pillar's row is *exact*: it names the edges that actually exist, not the ones it
+# would be entitled to. See ``test_a_pillars_allowance_is_not_aspirational``.
+PILLAR_ALLOWANCE = {
     "platform": set(),
     "music": set(),
-    "audio": {"platform", "music"},
-    "core": {"platform", "music", "audio"},
-    "models": {"platform", "music", "audio", "core"},
-    "training": {"platform", "music", "audio", "core", "models"},
-    "semicrf": {"platform", "music", "audio", "core", "models", "training"},
-    "evaluation": {"platform", "music", "audio", "core", "models"},
-    "serving": {"platform", "music", "audio", "core", "models"},
+    "audio": {"platform"},
+    "corpus": {"music", "audio"},
+}
+_BELOW = set(PILLAR_ALLOWANCE)
+ALLOWED = {
+    **PILLAR_ALLOWANCE,
+    "core": _BELOW,
+    "models": _BELOW | {"core"},
+    "training": _BELOW | {"core", "models"},
+    "semicrf": _BELOW | {"core", "models", "training"},
+    "evaluation": _BELOW | {"core", "models"},
+    "serving": _BELOW | {"core", "models"},
 }
 
 # The pillars extracted from ``core`` so far, in dependency order. A pillar is held to a
@@ -43,10 +51,11 @@ ALLOWED = {
 # just to get it out of the way. A pillar that its own consumers must stub is a pillar
 # whose seam is in the wrong place.
 #
-# ``platform`` and ``music`` are siblings, not a chain: neither imports the other, and
-# the order between them here is arbitrary. What the list fixes is that ``audio`` may
-# reach both and neither may reach back.
-PILLARS = ["platform", "music", "audio"]
+# The graph is not a chain. ``platform``, ``music`` and ``audio`` form no line at all:
+# ``audio`` reaches ``platform`` for the filesystem and the accelerator, and does not
+# touch ``music`` -- a waveform and a CQT have nothing to say about notes. Only
+# ``corpus`` needs both, because an item is the place audio and truth meet.
+PILLARS = list(PILLAR_ALLOWANCE)
 
 # Edges that exist today and are known to be wrong -- the work still outstanding from
 # the layering plan (docs/refactor-plan.md, steps A and C). Listed rather than allowed,
@@ -129,6 +138,31 @@ def test_a_pillar_depends_only_on_the_pillars_beneath_it(pillar):
     assert not strays, (
         f"`{pillar}` may import only {sorted(beneath) or 'nothing'}, but:\n  "
         + "\n  ".join(strays)
+    )
+
+
+@pytest.mark.parametrize("pillar", PILLARS)
+def test_a_pillars_allowance_is_not_aspirational(pillar):
+    """``PILLAR_ALLOWANCE`` names the edges that exist, not the ones a pillar could have.
+
+    The same discipline ``PENDING`` is held to, for the same reason: a declared graph
+    that drifts from the real one stops being a description and starts being a licence.
+    An entry nobody uses is a claim of coupling that is not there -- and the next
+    genuinely-new edge then slips in under it, unremarked, because the row already
+    permitted it.
+
+    Deleting a line is the fix. That deletion is the signal: it means a pillar just got
+    more detachable, which is the thing this whole exercise is for.
+    """
+    used = {
+        _layer(target)
+        for source, target, _ in _edges()
+        if _layer(source) == pillar and _layer(target) != pillar
+    }
+    unused = set(PILLAR_ALLOWANCE[pillar]) - used
+    assert not unused, (
+        f"`{pillar}` is allowed {sorted(unused)} but imports nothing from them. "
+        "Delete the entry."
     )
 
 

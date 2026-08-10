@@ -22,7 +22,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 
 # Frame grid for the reference contour. 10 ms is the mir_eval melody convention
 # and matches PESTO's default step; unlike MDB-bass-synth's 2.9 ms this is our

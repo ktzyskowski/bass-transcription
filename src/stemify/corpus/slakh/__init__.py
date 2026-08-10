@@ -49,18 +49,18 @@ Three modules, split from a single 453-line one along what changes together:
   - dataset -- SlakhDataset: the filtering policy over that index.
 
 Everything callers already imported is re-exported here, so
-from stemify.core.data.slakh import SlakhDataset is unchanged.
+from stemify.corpus.slakh import SlakhDataset is unchanged.
 """
 
-from stemify.core.data.slakh.dataset import SlakhDataset
-from stemify.core.data.slakh.index import (
+from stemify.corpus.slakh.dataset import SlakhDataset
+from stemify.corpus.slakh.index import (
     ARCHIVE_DIR, SPLITS, bass_stem_ids, index, read_metadata, resolve_root,
 )
 # REFERENCE_HOP_S comes from ``midi_contour`` rather than through ``item``: the grid
 # belongs to the shared MIDI->contour gate now, and re-exporting it from here keeps
-# ``from stemify.core.data.slakh import REFERENCE_HOP_S`` working for callers outside.
-from stemify.core.data.midi_contour import REFERENCE_HOP_S
-from stemify.core.data.slakh.item import BASS_TRANSPOSE, BassStem
+# ``from stemify.corpus.slakh import REFERENCE_HOP_S`` working for callers outside.
+from stemify.corpus.midi_contour import REFERENCE_HOP_S
+from stemify.corpus.slakh.item import BASS_TRANSPOSE, BassStem
 
 __all__ = [
     "ARCHIVE_DIR", "BASS_TRANSPOSE", "BassStem", "REFERENCE_HOP_S", "SPLITS",

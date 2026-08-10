@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from stemify.core.data.base import Dataset, EvalItem
+from stemify.corpus.base import Dataset, EvalItem
 from stemify.evaluation.report import Report, jsonable
 from stemify.core.metrics import (
     DEFAULT_NOTE_METRICS,

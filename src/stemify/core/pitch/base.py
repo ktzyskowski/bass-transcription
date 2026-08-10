@@ -17,7 +17,7 @@ differs is only how the logits were obtained.
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 
 
 class PitchEstimator(ABC):

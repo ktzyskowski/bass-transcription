@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 
 from stemify.core.frames import Frames
-from stemify.core.data.base import Dataset, EvalItem
+from stemify.corpus.base import Dataset, EvalItem
 from stemify.core.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable

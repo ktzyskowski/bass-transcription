@@ -24,11 +24,11 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
-from stemify.core.data.base import Dataset
-from stemify.core.data.filobass import FiloBassDataset
-from stemify.core.data.idmt_smt_bass import IdmtDataset
-from stemify.core.data.mdb_bass_synth import MdbDataset
-from stemify.core.data.slakh import SlakhDataset
+from stemify.corpus.base import Dataset
+from stemify.corpus.filobass import FiloBassDataset
+from stemify.corpus.idmt_smt_bass import IdmtDataset
+from stemify.corpus.mdb_bass_synth import MdbDataset
+from stemify.corpus.slakh import SlakhDataset
 from stemify.core.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
 from stemify.core.decoders.base import Decoder
 from stemify.semicrf import SemiCRFDecoder
@@ -109,7 +109,7 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
 # dataset can read whichever flags it cares about and ignore the rest.
 DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset]]] = {
     # Stems only, so it ignores --source: FiloBass ships no mixture and a bichannel
-    # checkpoint cannot be scored on it. See core/data/filobass.py.
+    # checkpoint cannot be scored on it. See corpus/filobass.py.
     "filobass": (
         "data/raw/filobass",
         lambda root, a: FiloBassDataset(root, limit=a.limit),

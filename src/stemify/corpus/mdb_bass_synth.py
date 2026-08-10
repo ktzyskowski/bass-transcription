@@ -52,8 +52,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from stemify.core.contour import Contour
-from stemify.core.data.base import Dataset, EvalItem
+from stemify.music.contour import Contour
+from stemify.corpus.base import Dataset, EvalItem
 
 # Annotation hop, per the dataset documentation. Not used for parsing -- the
 # CSV carries explicit timestamps -- but recorded because it sets the reference

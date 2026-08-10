@@ -10,7 +10,7 @@ the grouping moved into ``decoders.greedy``; the merge cases use a generous gap
 import numpy as np
 import pytest
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.decoders.greedy import (
     DSP_PITCH_SPLIT_SEMITONES,
     MERGE_GAP_S,

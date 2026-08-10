@@ -23,7 +23,7 @@ import pytest
 import torch
 from torch import nn
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import log_partitions
 from stemify.semicrf.labelset import LabelSet

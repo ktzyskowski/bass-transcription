@@ -30,7 +30,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.audio.features import BINS_PER_OCTAVE, FMIN, N_BINS, midi_to_bin
 
 # Frequency dilations grow ~3x per level so the branch can see across harmonics rather

@@ -71,9 +71,9 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
-from stemify.core.contour import Contour
-from stemify.core.data.base import Dataset, EvalItem
-from stemify.core.data.midi_contour import (
+from stemify.music.contour import Contour
+from stemify.corpus.base import Dataset, EvalItem
+from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
 from stemify.music.notes import NoteEvent

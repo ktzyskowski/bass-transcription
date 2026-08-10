@@ -12,7 +12,7 @@ one track cannot collide" is now load-bearing rather than incidental.
 import numpy as np
 
 from stemify.core.cache import Cache, content_key
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.audio.sources import Sources

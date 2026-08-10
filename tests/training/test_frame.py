@@ -12,7 +12,7 @@ import torch
 
 from stemify.audio.features import SILENCE_DB
 from stemify.core.cache import Cache
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.audio.sources import Sources
@@ -156,7 +156,7 @@ def test_channels_of_different_lengths_are_rejected(tmp_path):
 def test_prepare_backfills_missing_target_without_recomputing_features(
     tmp_path, monkeypatch
 ):
-    from stemify.core.contour import Contour
+    from stemify.music.contour import Contour
     from stemify.core.serde import features_npy
     from stemify.core.examples import prepare_examples
     from stemify.audio.transforms import Identity
@@ -214,7 +214,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
     import pytest
 
     from stemify.core.cache import Cache
-    from stemify.core.contour import Contour
+    from stemify.music.contour import Contour
     from stemify.core.examples import prepare_examples
     from stemify.audio.transforms import Identity
 

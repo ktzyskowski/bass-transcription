@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
 from stemify.audio.sources import Sources
 

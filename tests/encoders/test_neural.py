@@ -10,7 +10,7 @@ import soundfile as sf
 import torch
 from torch import nn
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.decoders.greedy import GreedyDecoder, onset_times_from_probs
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.audio.features import SAMPLE_RATE, FrameFeatures

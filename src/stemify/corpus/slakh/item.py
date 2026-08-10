@@ -13,9 +13,9 @@ from pathlib import Path
 
 import numpy as np
 
-from stemify.core.contour import Contour
-from stemify.core.data.base import EvalItem
-from stemify.core.data.midi_contour import (
+from stemify.music.contour import Contour
+from stemify.corpus.base import EvalItem
+from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
 from stemify.music.notes import NoteEvent
@@ -132,7 +132,7 @@ class BassStem(EvalItem):
         is ground truth about the bass, independent of what a baseline listens
         to. Overlapping notes collapse to the lowest voice (``np.fmin``).
 
-        The gate itself lives in ``core.data.midi_contour``: it is a fact about bass
+        The gate itself lives in ``corpus.midi_contour``: it is a fact about bass
         decay rather than about Slakh, and FiloBass reads the same one. What stays
         here is the only part that is Slakh's own -- ``BASS_TRANSPOSE``.
         """

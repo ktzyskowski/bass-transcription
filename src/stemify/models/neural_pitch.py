@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.platform.device import best_device
 from stemify.audio.features import extract_features
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour

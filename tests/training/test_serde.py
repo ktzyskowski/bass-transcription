@@ -5,7 +5,7 @@ implicitly (a save that completes leaves no .partial).
 
 import numpy as np
 
-from stemify.core.contour import Contour
+from stemify.music.contour import Contour
 from stemify.core.legacy import migrate_example_cache
 from stemify.core.serde import (
     CachedItem,
