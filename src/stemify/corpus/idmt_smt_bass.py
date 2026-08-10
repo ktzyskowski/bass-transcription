@@ -18,7 +18,6 @@ else.
 """
 
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,10 +25,11 @@ import librosa
 import numpy as np
 
 from stemify.audio.sources import Sources
+from stemify.corpus.loader import Corpus
 from stemify.music.contour import Contour
 
 # Voicing is inferred, not annotated: a 10 ms grid gated at 40 dB below the
-# clip's own peak. See Note.reference for why this is the weakest reference here.
+# clip's own peak. See Item.reference for why this is the weakest reference here.
 REF_HOP_S = 0.01
 REF_FLOOR_DB = -40.0
 
@@ -95,7 +95,7 @@ _LONG = re.compile(
 
 
 @dataclass(frozen=True)
-class Note:
+class Item:
     """A single recorded note and its ground-truth labels."""
 
     path: Path
@@ -140,7 +140,7 @@ class Note:
         open_midi = OPEN_STRING_MIDI.get(self.string)
         return None if open_midi is None else open_midi + self.fret
 
-    def reference(self) -> Contour:
+    def reference_contour(self) -> Contour:
         """This note's labelled pitch, wherever the clip has energy.
 
         Unlike the annotated datasets, IDMT has no voicing ground truth -- the
@@ -161,12 +161,12 @@ class Note:
         )
 
 
-def parse_filename(path: Path) -> Note | None:
+def parse_filename(path: Path) -> Item | None:
     """Parse a dataset filename, returning None if it does not match a schema."""
     match = _LONG.match(path.name) or _SHORT.match(path.name)
     if match is None:
         return None
-    return Note(
+    return Item(
         path=path,
         bass=int(match["bass"]),
         pickup=int(match["eq"]),
@@ -177,32 +177,12 @@ def parse_filename(path: Path) -> Note | None:
     )
 
 
-def index(root: str | Path, drop_duplicates: bool = True) -> list[Note]:
-    """Index every note in the dataset.
+_Item = Item
+"""Private alias so the ``Dataset.Item`` class attribute below can shadow the name
+without making annotations inside that class resolve to the attribute instead of the
+type. mypy reads `_Item`; readers read `Item`."""
 
-    ES/NO and PS/FS hold 469 byte-identical files -- the same finger-style
-    normal notes reached through either taxonomy. ``drop_duplicates`` keeps only
-    the PS/FS copy, which matters because otherwise the same recording can land
-    on both sides of a train/test split.
-
-    Three files claim string 5 on instruments the documentation lists as
-    4-string; they are dropped as mislabelled.
-    """
-    root = Path(root)
-    notes: list[Note] = []
-    for path in sorted(root.rglob("*.wav")):
-        note = parse_filename(path)
-        if note is None:
-            continue
-        if note.string not in OPEN_STRING_MIDI:
-            continue
-        if drop_duplicates and path.parent.name == "NO" and note.plucking == "FS":
-            continue
-        notes.append(note)
-    return notes
-
-
-class IdmtDataset:
+class IdmtDataset(Corpus[_Item]):
     """IDMT-SMT-Bass isolated notes, restricted to those with a known pitch.
 
     Only NO/VI/VIF/VIS are scoreable: harmonics, dead notes, bends and slides
@@ -211,23 +191,49 @@ class IdmtDataset:
     dataset cannot answer.
     """
 
+    Item = _Item
+    """The item type this dataset yields, reachable from the dataset that yields it.
+
+    An alias, not a nested class: ``Item`` is defined at module scope so it stays
+    picklable by a plain qualified name and, for Slakh, so ``index`` can build one
+    without importing the dataset that indexes it. Both spellings work -- ``idmt_smt_bass.Item``
+    when you have the module, ``IdmtDataset.Item`` when you have the dataset.
+    """
+
+
     def __init__(self, root: str | Path, limit: int | None = None) -> None:
-        self.root = Path(root)
-        if not self.root.exists():
-            raise FileNotFoundError(
-                f"{self.root} does not exist -- see docs/datasets.md for the fetch."
-            )
-        notes = [n for n in index(self.root) if n.midi_pitch is not None]
-        # Sorted order groups by expression, so a limit takes a slice of one
-        # technique rather than a sample. Callers get a smoke test, not a result.
-        self._notes = notes[:limit] if limit else notes
+        super().__init__(root, limit)
+
+    def _index(self) -> list[_Item]:
+        """Every note recording under ``root``.
+
+        ES/NO and PS/FS hold 469 byte-identical files -- the same finger-style normal
+        notes reached through either taxonomy. Only the PS/FS copy is kept, which
+        matters because otherwise the same recording lands on both sides of a
+        train/test split. Unconditional: there is no run that wants the duplicates.
+
+        Three files claim string 5 on instruments the documentation lists as 4-string;
+        they are dropped as mislabelled.
+        """
+        notes: list[_Item] = []
+        for path in sorted(self.root.rglob("*.wav")):
+            note = parse_filename(path)
+            if note is None:
+                continue
+            if note.string not in OPEN_STRING_MIDI:
+                continue
+            if path.parent.name == "NO" and note.plucking == "FS":
+                continue
+            notes.append(note)
+        return notes
+
+    def _reject(self, item: _Item) -> str | None:
+        """Only NO/VI/VIF/VIS are scoreable: harmonics, dead notes, bends and slides are
+        not pinned down by ``(string, fret)``, so there is no ground truth to compare
+        against and including them would score a baseline on a question the dataset
+        cannot answer."""
+        return None if item.midi_pitch is not None else "no determinate pitch"
 
     @property
     def name(self) -> str:
-        return "idmt-smt-bass"
-
-    def __iter__(self) -> Iterator[Note]:
-        return iter(self._notes)
-
-    def __len__(self) -> int:
-        return len(self._notes)
+        return "IDMT-SMT-Bass"

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from stemify.audio.cache import ensure_features
 from stemify.persistence.store import Store
-from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
+from stemify.corpus.base import Dataset as SlakhLikeDataset, AudioItem
 from stemify.corpus.slakh import SlakhDataset
 from stemify.audio.transforms import AudioTransform
 
@@ -31,7 +31,7 @@ class Channel:
     role: str                    # a ``Sources`` field: "bass" (transcribed) or "mix"
     transform: AudioTransform
 
-    def audio(self, item: EvalItem, store: Store) -> Path:
+    def audio(self, item: AudioItem, store: Store) -> Path:
         """The resolved audio file, running the transform if it is not yet cached.
 
         Use this when the file itself is needed (pyin wants something to listen to).
@@ -97,7 +97,7 @@ What it adds over the old ``source``-only rule is that ``bichannel-clean`` is
         )
 
     def channel_paths(
-        self, dataset: SlakhLikeDataset[EvalItem], store: Store
+        self, dataset: SlakhLikeDataset[AudioItem], store: Store
     ) -> list[tuple[Path, ...]]:
         """Cached CQT paths per track, ordered by model input channel.
 

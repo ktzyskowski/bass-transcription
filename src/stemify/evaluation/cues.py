@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 
 from stemify.transcription.frames import Frames
-from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
+from stemify.corpus.base import Dataset, FrameAnnotated, NoteAnnotated
 from stemify.transcription.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
@@ -43,7 +43,7 @@ from stemify.audio.transforms import AudioTransform, Identity
 from stemify.persistence.store import Store
 
 
-def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
+def aligned_pairs(frames: Frames, item: FrameAnnotated) -> AlignedPairs:
     """The aligned per-channel pairs for one track: what ``score_cues`` scores.
 
     Onset target is impulses on the frame grid at the reference onsets; voicing target
@@ -63,7 +63,7 @@ def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
     at this level. ``NoteAnnotated`` now makes the difference visible, and a corpus
     without note truth reports its voicing and pitch channels instead of failing.
     """
-    reference = item.reference()
+    reference = item.reference_contour()
     onset = None
     if isinstance(item, NoteAnnotated):
         onset_true = onset_targets(
@@ -139,7 +139,7 @@ class CuesEvaluation:
 
     def __init__(
         self,
-        dataset: Dataset[EvalItem],
+        dataset: Dataset[FrameAnnotated],
         encoder: Encoder,
         transform: AudioTransform | None = None,
         store: Store | None = None,
@@ -153,7 +153,7 @@ class CuesEvaluation:
         self.store = store or Store()
         self.progress = progress
 
-    def _channels(self, item: EvalItem) -> AlignedPairs:
+    def _channels(self, item: FrameAnnotated) -> AlignedPairs:
         path = self.transform.apply(self.store, item.sources().bass)
         cues = self.encoder.encode(Sources(bass=path))
         return aligned_pairs(cues, item)

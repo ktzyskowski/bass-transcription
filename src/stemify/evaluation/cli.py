@@ -25,7 +25,7 @@ from collections.abc import Callable
 from typing import cast
 from pathlib import Path
 
-from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
+from stemify.corpus.base import Dataset, FrameAnnotated, NoteAnnotated
 from stemify.persistence.store import DEFAULT_ROOT, Store
 from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
@@ -109,7 +109,7 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
 # Dataset subclass itself -- the runner, metrics and report are untouched, because a
 # dataset owns how its own references are built. Factories take the parsed args so a
 # dataset can read whichever flags it cares about and ignore the rest.
-DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset[EvalItem]]]] = {
+DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset[FrameAnnotated]]]] = {
     # Stems only, so it ignores --source: FiloBass ships no mixture and a bichannel
     # checkpoint cannot be scored on it. See corpus/filobass.py.
     "filobass": (
@@ -133,16 +133,16 @@ DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset[EvalI
 }
 
 
-def build_dataset(args: argparse.Namespace) -> Dataset[EvalItem]:
+def build_dataset(args: argparse.Namespace) -> Dataset[FrameAnnotated]:
     default_root, factory = DATASETS[args.dataset]
     return factory(args.root or default_root, args)
 
 
-def require_notes(dataset: Dataset[EvalItem], name: str) -> Dataset[NoteAnnotated]:
+def require_notes(dataset: Dataset[FrameAnnotated], name: str) -> Dataset[NoteAnnotated]:
     """Narrow a corpus to one with note-level truth, or refuse with a usable message.
 
     The `--level note` path needs ``reference_notes()`` from every item, and only Slakh
-    and FiloBass have it. The table above is typed at ``EvalItem`` because it holds all
+    and FiloBass have it. The table above is typed at ``AudioItem`` because it holds all
     four corpora, so this is the one place the requirement has to be checked rather than
     proved -- and checking it *here*, against the empty corpus too, is what keeps the
     failure at the CLI boundary. Previously there was no check at all and the eventual

@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from stemify.corpus.slakh.item import BassStem
+from stemify.corpus.slakh.item import Item
 
 # Slakh's instrument taxonomy labels bass stems with this inst_class.
 BASS_CLASS = "Bass"
@@ -86,7 +86,7 @@ def bass_stem_ids(track_dir: Path, require_rendered: bool = True) -> set[str]:
     return ids
 
 
-def _bass_stems(track_dir: Path, split: str) -> list[BassStem]:
+def _bass_stems(track_dir: Path, split: str) -> list[Item]:
     stems = read_metadata(track_dir)
     mix = track_dir / "mix.flac"
     found = []
@@ -104,7 +104,7 @@ def _bass_stems(track_dir: Path, split: str) -> list[BassStem]:
         found.append((stem_id, stem_path, midi_path, program))
 
     return [
-        BassStem(
+        Item(
             track=track_dir.name,
             split=split,
             stem_id=stem_id,
@@ -122,7 +122,7 @@ def index(
     root: str | Path,
     splits: tuple[str, ...] = SPLITS,
     unambiguous_only: bool = False,
-) -> list[BassStem]:
+) -> list[Item]:
     """Index every rendered bass stem under ``root``.
 
     A track with two bass stems yields two entries. Pass ``unambiguous_only`` to
@@ -130,7 +130,7 @@ def index(
     """
     root = resolve_root(root)
 
-    stems: list[BassStem] = []
+    stems: list[Item] = []
     for split in splits:
         split_dir = root / split
         if not split_dir.is_dir():

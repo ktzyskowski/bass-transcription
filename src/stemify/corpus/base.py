@@ -4,7 +4,7 @@ Previously each loader exposed its own type and its own module-level ``index()``
 runner bridged them with one adapter function per dataset plus a branch in ``main``.
 Adding a dataset meant editing the runner in three places. The interface below was not
 invented to fix that: MDB's ``Track`` and Slakh's ``BassStem`` had independently
-converged on ``.name``, ``.sources()`` and ``.reference()`` before it existed. It only
+converged on ``.name``, ``.sources()`` and ``.reference_contour()`` before it existed. It only
 declares what they already were.
 
 **Protocols, not base classes.** Nothing here needs to be inherited from. Every loader
@@ -43,8 +43,8 @@ from stemify.music.notes import NoteEvent
 
 
 @runtime_checkable
-class EvalItem(Protocol):
-    """One scorable unit: some audio, and the pitch truth to score it against."""
+class AudioItem(Protocol):
+    """One track's identity and the audio it is about. Carries no ground truth."""
 
     @property
     def name(self) -> str:
@@ -75,19 +75,30 @@ class EvalItem(Protocol):
         """
         ...
 
-    def reference(self) -> Contour:
-        """Ground-truth pitch over time, on the corpus's own grid."""
+
+@runtime_checkable
+class FrameAnnotated(AudioItem, Protocol):
+    """An item with frame-level pitch truth. Every corpus here satisfies this."""
+
+    def reference_contour(self) -> Contour:
+        """Ground-truth pitch over time, on the corpus's own grid.
+
+        Named for what it returns, so it reads beside ``reference_notes`` as the pair it
+        is. It used to be ``reference()``, which said *that* it was truth but not
+        *which kind* -- and it was the one required member while the note-level truth
+        every trainer actually reads was optional and raised.
+        """
         ...
 
 
 @runtime_checkable
-class NoteAnnotated(EvalItem, Protocol):
+class NoteAnnotated(FrameAnnotated, Protocol):
     """An item whose truth is note events, not only a contour.
 
     Slakh (rendered from MIDI) and FiloBass (transcribed to it) qualify;
     MDB-bass-synth and IDMT are frame-annotated and do not. Everything that trains or
     scores at the note level -- ``semicrf.fit.tracks``, ``training.validation``,
-    ``evaluation.note`` -- takes this rather than ``EvalItem``, which is what turns
+    ``evaluation.note`` -- takes this rather than ``AudioItem``, which is what turns
     "this corpus has no note boundaries" from a mid-run exception into a type error.
 
     ``runtime_checkable`` so the one consumer that can *degrade* rather than refuse
@@ -101,7 +112,7 @@ class NoteAnnotated(EvalItem, Protocol):
         ...
 
 
-ItemT_co = TypeVar("ItemT_co", bound=EvalItem, covariant=True)
+ItemT_co = TypeVar("ItemT_co", bound=AudioItem, covariant=True)
 
 
 class Dataset(Protocol[ItemT_co]):

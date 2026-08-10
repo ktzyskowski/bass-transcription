@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
+from stemify.corpus.base import Dataset, AudioItem, NoteAnnotated
 from stemify.evaluation.report import Report, jsonable
 from stemify.metrics import (
     DEFAULT_NOTE_METRICS,
@@ -154,7 +154,7 @@ class NoteEvaluation:
         self.store = store or Store()
         self.progress = progress
 
-    def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
+    def _estimate_notes(self, item: AudioItem) -> list[NoteEvent]:
         """The notes this transcriber reports for one item, over *every* role the
         dataset offers rather than the bass alone.
 

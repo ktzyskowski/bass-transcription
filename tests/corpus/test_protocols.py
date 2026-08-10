@@ -1,6 +1,6 @@
 """Which corpora satisfy which contract -- the classification the whole design rests on.
 
-``EvalItem`` and ``NoteAnnotated`` exist to make one distinction checkable: every corpus
+``AudioItem`` and ``NoteAnnotated`` exist to make one distinction checkable: every corpus
 here has a frame-level pitch contour, but only Slakh and FiloBass have note-native truth.
 Everything that trains or scores at the note level asks for ``Dataset[NoteAnnotated]``,
 so if this classification is wrong the type system is confidently wrong -- which is worse
@@ -16,28 +16,28 @@ from pathlib import Path
 
 import pytest
 
-from stemify.corpus.base import EvalItem, NoteAnnotated
-from stemify.corpus.filobass import Track as FiloBassTrack
-from stemify.corpus.idmt_smt_bass import Note as IdmtNote
-from stemify.corpus.mdb_bass_synth import Track as MdbTrack
-from stemify.corpus.slakh.item import BassStem
+from stemify.corpus.base import AudioItem, NoteAnnotated
+from stemify.corpus.filobass import FiloBassDataset
+from stemify.corpus.idmt_smt_bass import IdmtDataset
+from stemify.corpus.mdb_bass_synth import MdbDataset
+from stemify.corpus.slakh import SlakhDataset
 
 NOTE_NATIVE = {
-    "slakh": BassStem(
+    "slakh": SlakhDataset.Item(
         track="Track00042", split="train", stem_id="S03", stem_path=Path("a.flac"),
         midi_path=Path("a.mid"), mix_path=Path("mix.flac"),
         program_name="Electric Bass (finger)", n_bass_stems=1,
     ),
-    "filobass": FiloBassTrack(
+    "filobass": FiloBassDataset.Item(
         tune="Autumn Leaves", audio_path=Path("a.mp3"), midi_path=Path("a.mid")
     ),
 }
 
 FRAME_ONLY = {
-    "mdb": MdbTrack(
+    "mdb": MdbDataset.Item(
         track_name="song", stem_path=Path("a.wav"), annotation_path=Path("a.csv")
     ),
-    "idmt": IdmtNote(
+    "idmt": IdmtDataset.Item(
         path=Path("BS_1_EQ_1_FS_NO_1_00.wav"), bass=1, pickup=1, plucking="FS",
         expression="NO", string=1, fret=0,
     ),
@@ -54,7 +54,7 @@ def test_every_corpus_item_is_an_eval_item(item):
     replaced was an inheritance edge that only the real loaders honoured, while every
     test fixture duck-typed past it.
     """
-    assert isinstance(item, EvalItem)
+    assert isinstance(item, AudioItem)
 
 
 @pytest.mark.parametrize("item", NOTE_NATIVE.values(), ids=NOTE_NATIVE)

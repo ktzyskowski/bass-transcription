@@ -1,4 +1,4 @@
-"""BassStem: one Slakh bass stem as an EvalItem, and the constants it needs.
+"""Item: one Slakh bass stem as an AudioItem, and the constants it needs.
 
 Split out of a 453-line slakh.py. What one item *is* -- its audio roles, its
 reference contour, its notes -- changes for different reasons than how the corpus tree
@@ -6,7 +6,6 @@ is walked (index) or how the collection is filtered (dataset). See the package
 docstring for the corpus-level facts, including why bass MIDI is transposed.
 """
 
-import warnings
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
@@ -14,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from stemify.music.contour import Contour
+from stemify.corpus.midi import Note as MidiNote, read_notes
 from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
@@ -45,7 +45,7 @@ BASS_TRANSPOSE = 12
 
 
 @dataclass(frozen=True)
-class BassStem:
+class Item:
     """One rendered bass stem, its MIDI, and the mix it sits inside."""
 
     track: str  # e.g. "Track00042"
@@ -98,24 +98,13 @@ class BassStem:
         return Sources(bass=self._audio(), mix=self.mix_path)
 
     @cached_property
-    def _notes(self) -> list[tuple[float, float, int]]:
-        """(start, end, pitch) for every note, sorted by onset."""
-        import pretty_midi  # deferred: pulls in mido at import time
+    def _notes(self) -> list[MidiNote]:
+        """``(start, end, pitch)`` for every note, sorted by onset -- at *written*
+        pitch. ``BASS_TRANSPOSE`` is applied by the two readers below, not here, so the
+        raw file's numbers stay inspectable."""
+        return read_notes(self.midi_path)
 
-        with warnings.catch_warnings():
-            # Lakh MIDI is full of harmless oddities (stray key signatures,
-            # out-of-range tempo events); they are not our problem to fix.
-            warnings.simplefilter("ignore")
-            midi = pretty_midi.PrettyMIDI(str(self.midi_path))
-        notes = [
-            (n.start, n.end, n.pitch)
-            for inst in midi.instruments
-            if not inst.is_drum
-            for n in inst.notes
-        ]
-        return sorted(notes)
-
-    def reference(
+    def reference_contour(
         self, hop_s: float = REFERENCE_HOP_S, decay_db: float = NOTE_DECAY_DB
     ) -> Contour:
         """Frame-level ``(times, freqs)``, 0 Hz where no bass sounds.

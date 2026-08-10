@@ -5,15 +5,15 @@ monophonic premise, the limit -- is what changes here, independently of how the 
 walked or what one stem holds.
 """
 
-from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
+from stemify.corpus.loader import Corpus
 from stemify.corpus.slakh.index import index
-from stemify.corpus.slakh.item import BassStem
+from stemify.corpus.slakh.item import Item as _Item
 
 
-class SlakhDataset:
+class SlakhDataset(Corpus[_Item]):
     """Slakh2100 bass stems, filtered to those the monophonic premise holds for.
 
     Defaults to the ``test`` split. Slakh is large enough to train on, so
@@ -31,6 +31,16 @@ class SlakhDataset:
     iterating.
     """
 
+    Item = _Item
+    """The item type this dataset yields, reachable from the dataset that yields it.
+
+    An alias, not a nested class: ``Item`` is defined at module scope so it stays
+    picklable by a plain qualified name and, for Slakh, so ``index`` can build one
+    without importing the dataset that indexes it. Both spellings work -- ``slakh.Item``
+    when you have the module, ``SlakhDataset.Item`` when you have the dataset.
+    """
+
+
     def __init__(
         self,
         root: str | Path,
@@ -44,6 +54,7 @@ class SlakhDataset:
             raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
         self.split = split
         self.source = source
+        self.max_polyphony = max_polyphony
         # Mixes *require* single-bass tracks -- with two basses sounding, one
         # reference contour cannot describe the mix. Stems do not, so the two
         # sources otherwise yield different track sets (147 vs 124 on test),
@@ -53,32 +64,26 @@ class SlakhDataset:
         if unambiguous_only is None:
             unambiguous_only = source == "mix"
         self.unambiguous_only = unambiguous_only
-        stems = index(root, splits=(split,), unambiguous_only=unambiguous_only)
-        if limit:
-            stems = stems[:limit]
+        super().__init__(root, limit)  # last: the filters below read the fields above
 
+    def _index(self) -> list[_Item]:
+        return index(
+            self.root, splits=(self.split,), unambiguous_only=self.unambiguous_only
+        )
+
+    def _reject(self, item: _Item) -> str | None:
         # Stem audio is only required when it is what gets listened to.
-        self.skipped_missing_audio = 0
-        if source == "stem":
-            present = [s for s in stems if s.stem_path.exists()]
-            self.skipped_missing_audio = len(stems) - len(present)
-            stems = present
+        if self.source == "stem" and not item.stem_path.exists():
+            return "missing audio"
+        # Expensive -- a MIDI parse per track -- which is why the base stops as soon as
+        # `limit` items are kept rather than filtering the whole split first.
+        if item.polyphony_rate() > self.max_polyphony:
+            return "polyphonic"
+        return None
 
-        self.skipped_polyphonic = 0
-        kept = []
-        for stem in stems:
-            if stem.polyphony_rate() > max_polyphony:
-                self.skipped_polyphonic += 1
-                continue
-            kept.append(replace(stem, source=source))
-        self._stems = kept
+    def _adopt(self, item: _Item) -> _Item:
+        return replace(item, source=self.source)
 
     @property
     def name(self) -> str:
         return f"slakh2100 {self.split} ({self.source})"
-
-    def __iter__(self) -> Iterator[BassStem]:
-        return iter(self._stems)
-
-    def __len__(self) -> int:
-        return len(self._stems)

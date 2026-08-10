@@ -65,14 +65,14 @@ bassist, as it would if the stems had been separately recorded.
 """
 
 import csv
-import warnings
-from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
 from stemify.audio.sources import Sources
+from stemify.corpus.loader import Corpus, refuse_layout
 from stemify.music.contour import Contour
+from stemify.corpus.midi import Note as MidiNote, read_notes
 from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
@@ -84,7 +84,7 @@ METADATA_CSV = "notebooks_and_scripts/note_data.csv"
 
 
 @dataclass(frozen=True)
-class Track:
+class Item:
     """One tune: a Demucs-separated upright bass stem and its audio-aligned MIDI."""
 
     tune: str
@@ -113,27 +113,12 @@ class Track:
         return Sources(bass=self.audio_path)
 
     @cached_property
-    def _notes(self) -> list[tuple[float, float, int]]:
-        """``(start, end, pitch)`` for every note, sorted by onset.
+    def _notes(self) -> list[MidiNote]:
+        """``(start, end, pitch)`` for every note, sorted by onset. No transposition --
+        FiloBass MIDI is annotated at sounding pitch; see the module docstring."""
+        return read_notes(self.midi_path)
 
-        Every file holds exactly one non-drum instrument, but the comprehension does
-        not assume it: an unexpected second track would otherwise be dropped
-        silently, and a reference missing half its notes scores a model as
-        hallucinating rather than as correct.
-        """
-        import pretty_midi  # deferred: pulls in mido at import time
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            midi = pretty_midi.PrettyMIDI(str(self.midi_path))
-        return sorted(
-            (n.start, n.end, n.pitch)
-            for inst in midi.instruments
-            if not inst.is_drum
-            for n in inst.notes
-        )
-
-    def reference(
+    def reference_contour(
         self, hop_s: float = REFERENCE_HOP_S, decay_db: float = NOTE_DECAY_DB
     ) -> Contour:
         """Frame-level ``(times, freqs)``, 0 Hz where no bass sounds.
@@ -178,51 +163,12 @@ def _bassists(root: Path) -> dict[str, str]:
     return out
 
 
-def index(root: str | Path) -> list[Track]:
-    """Index every tune under ``root``, driven by the aligned MIDI.
+_Item = Item
+"""Private alias so the ``Dataset.Item`` class attribute below can shadow the name
+without making annotations inside that class resolve to the attribute instead of the
+type. mypy reads `_Item`; readers read `Item`."""
 
-    MIDI-first rather than audio-first: a stem without a transcription cannot be
-    scored, so it is not an item, while a transcription without audio is a broken
-    copy worth naming.
-    """
-    root = Path(root)
-    if not root.exists():
-        raise FileNotFoundError(
-            f"{root} does not exist. FiloBass is a single zip from "
-            "https://zenodo.org/records/10069709 -- see docs/datasets.md"
-        )
-
-    midis = sorted((root / MIDI_DIR).glob("*.mid"))
-    if not midis:
-        present = sorted(p.name for p in root.iterdir()) if root.is_dir() else []
-        raise FileNotFoundError(
-            f"No MIDI in {root / MIDI_DIR}. Contents of {root}: {present or 'empty'}. "
-            f"Expected the archive's own layout ({AUDIO_DIR}/, {MIDI_DIR}/, ...) with "
-            "the 'FiloBass ISMIR Publication' directory flattened away."
-        )
-
-    players = _bassists(root)
-    tracks, orphans = [], []
-    for midi in midis:
-        audio = root / AUDIO_DIR / f"{midi.stem}.mp3"
-        if not audio.exists():
-            orphans.append(midi.name)
-            continue
-        tracks.append(
-            Track(
-                tune=midi.stem,
-                audio_path=audio,
-                midi_path=midi,
-                bassist=players.get(midi.stem, ""),
-            )
-        )
-
-    if orphans:
-        print(f"warning: {len(orphans)} transcriptions without audio, e.g. {orphans[:3]}")
-    return tracks
-
-
-class FiloBassDataset:
+class FiloBassDataset(Corpus[_Item]):
     """FiloBass, evaluated on the Demucs-separated bass stems.
 
     No ``source`` parameter, unlike MDB and Slakh: only one rendering ships. That is a
@@ -230,20 +176,48 @@ class FiloBassDataset:
     from exists, it is just behind a paywall. See the module docstring.
     """
 
+    Item = _Item
+    """The item type this dataset yields, reachable from the dataset that yields it.
+
+    An alias, not a nested class: ``Item`` is defined at module scope so it stays
+    picklable by a plain qualified name and, for Slakh, so ``index`` can build one
+    without importing the dataset that indexes it. Both spellings work -- ``filobass.Item``
+    when you have the module, ``FiloBassDataset.Item`` when you have the dataset.
+    """
+
+
     def __init__(self, root: str | Path, limit: int | None = None) -> None:
-        tracks = index(root)
-        self._tracks = tracks[:limit] if limit else tracks
+        super().__init__(root, limit)
+
+    def _index(self) -> list[_Item]:
+        """Every tune under ``root``, driven by the aligned MIDI.
+
+        MIDI-first rather than audio-first: a stem without a transcription cannot be
+        scored, so it is not an item, while a transcription without audio is a broken
+        copy worth naming.
+        """
+        midis = sorted((self.root / MIDI_DIR).glob("*.mid"))
+        if not midis:
+            refuse_layout(self.root, MIDI_DIR, f"{AUDIO_DIR}/, {MIDI_DIR}/")
+        players = _bassists(self.root)
+        tracks, orphans = [], []
+        for midi in midis:
+            audio = self.root / AUDIO_DIR / f"{midi.stem}.mp3"
+            if not audio.exists():
+                orphans.append(midi.name)
+                continue
+            tracks.append(
+                Item(
+                    tune=midi.stem,
+                    audio_path=audio,
+                    midi_path=midi,
+                    bassist=players.get(midi.stem, ""),
+                )
+            )
+        if orphans:
+            print(f"warning: {len(orphans)} transcriptions without audio, e.g. {orphans[:3]}")
+        return tracks
 
     @property
     def name(self) -> str:
-        # Names the *state* of the audio, the way `separated` does in core/conditions.py.
-        # A reader comparing this against a Slakh number has to know which of
-        # `clean`/`separated` it lines up with, and "bass stems" read as clean for a
-        # whole session of analysis before anyone checked the paper.
-        return "filobass (separated)"
-
-    def __iter__(self) -> Iterator[Track]:
-        return iter(self._tracks)
-
-    def __len__(self) -> int:
-        return len(self._tracks)
+        return "FiloBass"

@@ -18,7 +18,7 @@ FRAME_TIMES = np.arange(12) * 0.0116
 class _FrameOnlyItem:
     """A corpus with a contour and no note truth -- MDB-bass-synth and IDMT.
 
-    Implements ``EvalItem`` and stops there. It has to be *complete* at that protocol
+    Implements ``AudioItem`` and stops there. It has to be *complete* at that protocol
     rather than only carrying the two members ``aligned_pairs`` reads, because the
     capability check downstream is an ``isinstance`` against a runtime-checkable
     protocol, which verifies every inherited member. A fake missing ``sources`` would
@@ -37,7 +37,7 @@ class _FrameOnlyItem:
     def sources(self) -> Sources:
         return Sources(bass="/nonexistent.wav")
 
-    def reference(self) -> Contour:
+    def reference_contour(self) -> Contour:
         return Contour(times=FRAME_TIMES, freqs=np.full(FRAME_TIMES.size, 110.0))
 
 

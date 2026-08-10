@@ -5,7 +5,7 @@ about it* -- and nothing else. It does not know what a CQT is, what a model is, 
 anything gets cached; it hands over paths and truth, and every consumer decides what to
 do with them.
 
-    base           the contracts -- ``EvalItem`` (one scorable unit) and ``Dataset``
+    base           the contracts -- ``AudioItem`` (one scorable unit) and ``Dataset``
     slakh/         synthesised multitrack MIDI: bass stems beside their mixtures
     filobass       transcribed jazz double bass
     idmt_smt_bass  single-note clips, annotated by string and playing technique

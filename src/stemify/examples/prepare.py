@@ -108,7 +108,7 @@ def _ensure_targets(
         frame_times = z["frame_times"]
     added = build_targets(
         frame_times,
-        item.reference(),
+        item.reference_contour(),
         item.reference_notes(),
         missing,
         onset_tolerance_frames,

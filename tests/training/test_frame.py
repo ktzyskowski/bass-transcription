@@ -170,7 +170,7 @@ def test_prepare_backfills_missing_target_without_recomputing_features(
             return audio
         def sources(self):
             return Sources(bass=audio)
-        def reference(self):
+        def reference_contour(self):
             return ref
         def reference_notes(self):
             return [NoteEvent(onset=0.0, offset=0.05, midi_pitch=45.0)]
@@ -214,7 +214,7 @@ def test_two_items_sharing_audio_but_not_targets_is_an_error(tmp_path, monkeypat
             return audio            # both items resolve to the SAME file
         def sources(self):
             return Sources(bass=audio)
-        def reference(self):
+        def reference_contour(self):
             return Contour(ft, np.full(8, 110.0))
         def reference_notes(self):
             return [NoteEvent(onset=0.0, offset=0.05, midi_pitch=45.0)]

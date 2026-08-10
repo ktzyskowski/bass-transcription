@@ -43,7 +43,7 @@ violates the premise and should probably be filtered out rather than trusted.
 
 Three modules, split from a single 453-line one along what changes together:
 
-  - item    -- BassStem: what one stem is, and the constants describing it.
+  - item    -- Item: what one stem is, and the constants describing it.
   - index   -- walking the tree: resolve_root, read_metadata,
     bass_stem_ids, index. Corpus *layout* knowledge.
   - dataset -- SlakhDataset: the filtering policy over that index.
@@ -60,9 +60,9 @@ from stemify.corpus.slakh.index import (
 # belongs to the shared MIDI->contour gate now, and re-exporting it from here keeps
 # ``from stemify.corpus.slakh import REFERENCE_HOP_S`` working for callers outside.
 from stemify.corpus.midi_contour import REFERENCE_HOP_S
-from stemify.corpus.slakh.item import BASS_TRANSPOSE, BassStem
+from stemify.corpus.slakh.item import BASS_TRANSPOSE, Item
 
 __all__ = [
-    "ARCHIVE_DIR", "BASS_TRANSPOSE", "BassStem", "REFERENCE_HOP_S", "SPLITS",
+    "ARCHIVE_DIR", "BASS_TRANSPOSE", "Item", "REFERENCE_HOP_S", "SPLITS",
     "SlakhDataset", "bass_stem_ids", "index", "read_metadata", "resolve_root",
 ]

@@ -23,7 +23,7 @@ Each track ships three files:
 
 Evaluating on the stem measures pitch tracking; evaluating on the mix measures
 pitch tracking *plus* whether the bass survives a full arrangement. Same labels
-for both, which makes that a clean controlled comparison -- see ``Track.audio``.
+for both, which makes that a clean controlled comparison -- see ``Item.audio``.
 
 Download: https://synthdatasets.weebly.com/mdb-bass-synth.html (behind an email
 form, so there is no scriptable fetch). License is **CC BY-NC 4.0** -- non-
@@ -45,7 +45,6 @@ stripping it rather than by globbing a shared stem.
 
 import csv
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -53,6 +52,7 @@ import librosa
 import numpy as np
 
 from stemify.audio.sources import Sources
+from stemify.corpus.loader import Corpus, refuse_layout
 from stemify.music.contour import Contour
 
 # Annotation hop, per the dataset documentation. Not used for parsing -- the
@@ -69,7 +69,7 @@ MIX_DIR = "audio_mix"
 
 
 @dataclass(frozen=True)
-class Track:
+class Item:
     """One song: a bass stem, the full mix it came from, and their shared labels.
 
     ``source`` is fixed per item rather than passed to ``audio()``, so a dataset
@@ -110,7 +110,7 @@ class Track:
         """The selected audio, plus the mixture where this corpus ships one."""
         return Sources(bass=self._audio(), mix=self.mix_path)
 
-    def reference(self) -> Contour:
+    def reference_contour(self) -> Contour:
         """Load the annotation as ``(times, freqs)``, 0 Hz where silent.
 
         This replaces the RMS-gated synthetic reference IDMT has to
@@ -140,64 +140,27 @@ class Track:
 _ANNOTATION = re.compile(r"^(?P<song>.+)_STEM_(?P<stem_id>\d+)\.RESYN$")
 
 
-def index(root: str | Path) -> list[Track]:
-    """Index every annotated track under ``root``.
+_Item = Item
+"""Private alias so the ``Dataset.Item`` class attribute below can shadow the name
+without making annotations inside that class resolve to the attribute instead of the
+type. mypy reads `_Item`; readers read `Item`."""
 
-    Driven by the naming conventions in the archive's own README rather than by
-    pattern-matching, since the three files for one track do *not* share a
-    common prefix -- the mix drops the ``_STEM_<id>.RESYN`` part that the bass
-    and annotation both carry.
-    """
-    root = Path(root)
-    if not root.exists():
-        raise FileNotFoundError(
-            f"{root} does not exist. MDB-bass-synth is requested via the form at "
-            "https://synthdatasets.weebly.com/mdb-bass-synth-download.html -- "
-            "see docs/datasets.md"
-        )
-
-    annotations = sorted((root / ANNOTATION_DIR).glob("*.csv"))
-    if not annotations:
-        present = sorted(p.name for p in root.iterdir()) if root.is_dir() else []
-        raise FileNotFoundError(
-            f"No annotations in {root / ANNOTATION_DIR}. Contents of {root}: "
-            f"{present or 'empty'}. Expected the archive's own layout: "
-            f"{ANNOTATION_DIR}/, {BASS_DIR}/, {MIX_DIR}/."
-        )
-
-    tracks: list[Track] = []
-    orphans: list[str] = []
-    for annotation in annotations:
-        match = _ANNOTATION.match(annotation.stem)
-        if match is None:
-            orphans.append(annotation.name)
-            continue
-        song = match["song"]
-        stem_path = root / BASS_DIR / f"{annotation.stem}.wav"
-        mix_path = root / MIX_DIR / f"{song}_MIX_basssynth.wav"
-        if not stem_path.exists():
-            orphans.append(annotation.name)
-            continue
-        tracks.append(
-            Track(
-                track_name=song,
-                stem_path=stem_path,
-                annotation_path=annotation,
-                mix_path=mix_path if mix_path.exists() else None,
-            )
-        )
-
-    if orphans:
-        print(f"warning: {len(orphans)} annotations without audio, e.g. {orphans[:3]}")
-    return tracks
-
-
-class MdbDataset:
+class MdbDataset(Corpus[_Item]):
     """MDB-bass-synth, evaluated on either the isolated stem or the full mix.
 
     The same annotations describe both, which is what makes stem-vs-mix a
     controlled comparison rather than two unrelated numbers.
     """
+
+    Item = _Item
+    """The item type this dataset yields, reachable from the dataset that yields it.
+
+    An alias, not a nested class: ``Item`` is defined at module scope so it stays
+    picklable by a plain qualified name and, for Slakh, so ``index`` can build one
+    without importing the dataset that indexes it. Both spellings work -- ``mdb_bass_synth.Item``
+    when you have the module, ``MdbDataset.Item`` when you have the dataset.
+    """
+
 
     def __init__(
         self,
@@ -208,18 +171,51 @@ class MdbDataset:
         if source not in ("stem", "mix"):
             raise ValueError(f"source must be 'stem' or 'mix', got {source!r}")
         self.source = source
-        tracks = index(root)
-        if limit:
-            tracks = tracks[:limit]
-        # Source is bound into each item at construction, so it cannot drift.
-        self._tracks = [replace(t, source=source) for t in tracks]
+        super().__init__(root, limit)  # last: `_adopt` reads `source`
+
+    def _index(self) -> list[_Item]:
+        """Every annotated track under ``root``.
+
+        Driven by the naming conventions in the archive's own README rather than by
+        pattern-matching, since the three files for one track do *not* share a common
+        prefix -- the mix drops the ``_STEM_<id>.RESYN`` part that the bass and
+        annotation both carry.
+        """
+        annotations = sorted((self.root / ANNOTATION_DIR).glob("*.csv"))
+        if not annotations:
+            refuse_layout(
+                self.root, ANNOTATION_DIR,
+                f"{ANNOTATION_DIR}/, {BASS_DIR}/, {MIX_DIR}/",
+            )
+        tracks: list[_Item] = []
+        orphans: list[str] = []
+        for annotation in annotations:
+            match = _ANNOTATION.match(annotation.stem)
+            if match is None:
+                orphans.append(annotation.name)
+                continue
+            song = match["song"]
+            stem_path = self.root / BASS_DIR / f"{annotation.stem}.wav"
+            mix_path = self.root / MIX_DIR / f"{song}_MIX_basssynth.wav"
+            if not stem_path.exists():
+                orphans.append(annotation.name)
+                continue
+            tracks.append(
+                Item(
+                    track_name=song,
+                    stem_path=stem_path,
+                    annotation_path=annotation,
+                    mix_path=mix_path if mix_path.exists() else None,
+                )
+            )
+        if orphans:
+            print(f"warning: {len(orphans)} annotations without audio, e.g. {orphans[:3]}")
+        return tracks
+
+    def _adopt(self, item: _Item) -> _Item:
+        """Source is bound into each item here, so it cannot drift from the dataset's."""
+        return replace(item, source=self.source)
 
     @property
     def name(self) -> str:
-        return f"mdb-bass-synth ({self.source})"
-
-    def __iter__(self) -> Iterator[Track]:
-        return iter(self._tracks)
-
-    def __len__(self) -> int:
-        return len(self._tracks)
+        return f"MDB-bass-synth ({self.source})"

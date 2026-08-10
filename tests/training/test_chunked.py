@@ -44,7 +44,7 @@ class _Item:
         return str(self.root / f"{self.name}.wav")
 
     def sources(self) -> Sources:
-        # Mirrors EvalItem's default. These fakes have only the one rendering, so
+        # Mirrors AudioItem's default. These fakes have only the one rendering, so
         # every channel of a condition resolves to the same file -- enough to
         # exercise the geometry, which is what this module tests.
         return Sources(bass=self.audio(), mix=self.audio())
