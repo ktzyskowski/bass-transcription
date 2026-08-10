@@ -25,8 +25,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset, EvalItem
 
 # Voicing is inferred, not annotated: a 10 ms grid gated at 40 dB below the
 # clip's own peak. See Note.reference for why this is the weakest reference here.
@@ -95,7 +95,7 @@ _LONG = re.compile(
 
 
 @dataclass(frozen=True)
-class Note(EvalItem):
+class Note:
     """A single recorded note and its ground-truth labels."""
 
     path: Path
@@ -110,8 +110,9 @@ class Note(EvalItem):
     def name(self) -> str:
         return self.path.name
 
-    def audio(self) -> Path:
-        return self.path
+    def sources(self) -> Sources:
+        """A single dry note recording -- there is no mixture it came from."""
+        return Sources(bass=self.path)
 
     @property
     def groups(self) -> dict[str, str]:
@@ -201,7 +202,7 @@ def index(root: str | Path, drop_duplicates: bool = True) -> list[Note]:
     return notes
 
 
-class IdmtDataset(Dataset):
+class IdmtDataset:
     """IDMT-SMT-Bass isolated notes, restricted to those with a known pitch.
 
     Only NO/VI/VIF/VIS are scoreable: harmonics, dead notes, bends and slides

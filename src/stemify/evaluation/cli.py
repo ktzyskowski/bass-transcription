@@ -22,9 +22,10 @@ and one line in ``DATASETS``; the runners, metrics and reports need no changes.
 
 import argparse
 from collections.abc import Callable
+from typing import cast
 from pathlib import Path
 
-from stemify.corpus.base import Dataset
+from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
 from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
 from stemify.corpus.mdb_bass_synth import MdbDataset
@@ -107,7 +108,7 @@ def build_decoder(args: argparse.Namespace) -> Decoder:
 # Dataset subclass itself -- the runner, metrics and report are untouched, because a
 # dataset owns how its own references are built. Factories take the parsed args so a
 # dataset can read whichever flags it cares about and ignore the rest.
-DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset]]] = {
+DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset[EvalItem]]]] = {
     # Stems only, so it ignores --source: FiloBass ships no mixture and a bichannel
     # checkpoint cannot be scored on it. See corpus/filobass.py.
     "filobass": (
@@ -131,9 +132,30 @@ DATASETS: dict[str, tuple[str, Callable[[str, argparse.Namespace], Dataset]]] = 
 }
 
 
-def build_dataset(args: argparse.Namespace) -> Dataset:
+def build_dataset(args: argparse.Namespace) -> Dataset[EvalItem]:
     default_root, factory = DATASETS[args.dataset]
     return factory(args.root or default_root, args)
+
+
+def require_notes(dataset: Dataset[EvalItem], name: str) -> Dataset[NoteAnnotated]:
+    """Narrow a corpus to one with note-level truth, or refuse with a usable message.
+
+    The `--level note` path needs ``reference_notes()`` from every item, and only Slakh
+    and FiloBass have it. The table above is typed at ``EvalItem`` because it holds all
+    four corpora, so this is the one place the requirement has to be checked rather than
+    proved -- and checking it *here*, against the empty corpus too, is what keeps the
+    failure at the CLI boundary. Previously there was no check at all and the eventual
+    ``NotImplementedError`` came from inside the scoring loop, after the encoder had
+    already run over the corpus.
+    """
+    first = next(iter(dataset), None)
+    if first is not None and not isinstance(first, NoteAnnotated):
+        raise SystemExit(
+            f"{name} is frame-annotated and has no note-level reference, so "
+            f"--level note cannot be scored on it. Use --level cues, or a "
+            f"note-native corpus (slakh, filobass)."
+        )
+    return cast("Dataset[NoteAnnotated]", dataset)
 
 
 def main() -> None:
@@ -204,7 +226,9 @@ def main() -> None:
         report: Report
         if args.level == "note":
             transcriber = Transcriber(encoder, build_decoder(args))
-            report = NoteEvaluation(dataset, transcriber, transform=transform).run()
+            report = NoteEvaluation(
+                require_notes(dataset, args.dataset), transcriber, transform=transform
+            ).run()
         else:
             report = CuesEvaluation(dataset, encoder, transform=transform).run()
     except (FileNotFoundError, ValueError, NotImplementedError) as exc:

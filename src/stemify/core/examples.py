@@ -24,7 +24,7 @@ import numpy as np
 from stemify.platform.atomic import atomic_write
 from stemify.core.cache import Cache
 from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
+from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem, write_npz
 from stemify.music.labels import onset_targets, pitch_targets, voicing_targets
@@ -64,7 +64,7 @@ def build_example(
 
 
 def prepare_examples(
-    dataset: SlakhLikeDataset,
+    dataset: SlakhLikeDataset[NoteAnnotated],
     heads: Iterable[str],
     cache: Cache,
     transform: AudioTransform | None = None,
@@ -85,7 +85,7 @@ def prepare_examples(
 
 
 def ensure_targets(
-    dataset: SlakhLikeDataset,
+    dataset: SlakhLikeDataset[NoteAnnotated],
     paths: Sequence[Path],
     heads: Iterable[str],
     onset_tolerance_frames: int = 1,
@@ -122,7 +122,7 @@ def ensure_targets(
 
 
 def _ensure_targets(
-    path: Path, item: EvalItem, heads: Iterable[str], onset_tolerance_frames: int
+    path: Path, item: NoteAnnotated, heads: Iterable[str], onset_tolerance_frames: int
 ) -> bool:
     """Add any requested head-targets a cached example is missing -- without
     recomputing its CQT. When the head set grows (e.g. adding voicing to an

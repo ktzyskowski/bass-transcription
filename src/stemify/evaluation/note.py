@@ -27,7 +27,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from stemify.corpus.base import Dataset, EvalItem
+from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
 from stemify.evaluation.report import Report, jsonable
 from stemify.core.metrics import (
     DEFAULT_NOTE_METRICS,
@@ -137,7 +137,7 @@ class NoteEvaluation:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: Dataset[NoteAnnotated],
         transcriber: Transcriber,
         metrics: Iterable[NoteMetric] = DEFAULT_NOTE_METRICS,
         transform: AudioTransform | None = None,

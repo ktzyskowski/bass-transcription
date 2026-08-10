@@ -1,101 +1,126 @@
-"""What every dataset must look like to be evaluable.
+"""What a corpus must look like to be usable -- split by what it can actually answer.
 
-Previously each loader exposed its own type and its own module-level ``index()``,
-and the runner bridged them with one adapter function per dataset plus a branch
-in ``main``. Adding a dataset meant editing the runner in three places -- and for
-IDMT, the runner also had to know *how to build that dataset's reference*, which
-is dataset knowledge sitting in the wrong file.
+Previously each loader exposed its own type and its own module-level ``index()``, and the
+runner bridged them with one adapter function per dataset plus a branch in ``main``.
+Adding a dataset meant editing the runner in three places. The interface below was not
+invented to fix that: MDB's ``Track`` and Slakh's ``BassStem`` had independently
+converged on ``.name``, ``.sources()`` and ``.reference()`` before it existed. It only
+declares what they already were.
 
-The interface below was not invented for this module. MDB's ``Track`` and Slakh's
-``BassStem`` had independently converged on ``.name``, ``.audio()`` and
-``.reference()`` before it existed; this only declares what they already were.
+**Protocols, not base classes.** Nothing here needs to be inherited from. Every loader
+satisfies these structurally, every test fixture already duck-types them, and the
+``ABC`` this replaced was buying an inheritance edge and no enforcement -- the fakes
+never subclassed it, so the abstractness only ever constrained the real implementations.
+Structural typing checks the same thing at every point that matters (the call site) and
+lets a two-line stand-in in a test be a first-class item.
 
-Two design points worth stating:
+**Two protocols, because there are two kinds of truth.** This is the correction that
+motivated the split. Every corpus here has a frame-level pitch contour; only Slakh and
+FiloBass have note-native truth. That was previously expressed by making
+``reference()`` abstract and ``reference_notes()`` a method that *raises* -- so the
+optional member was the one the semi-CRF, the trainer's validator and both evaluation
+levels actually call, and asking for it from MDB or IDMT was a ``NotImplementedError``
+raised deep inside a harness, one that no annotation could see coming. It is now a
+static property of the type: a consumer that needs notes says ``Dataset[NoteAnnotated]``,
+and a corpus without them cannot be passed to it.
 
-**References are lazy.** ``reference()`` is a method, not a field, because
-building one can be expensive -- Slakh parses a MIDI file per item -- and a run
-that stops early, or filters most items out, should not pay for all of them up
-front.
+**References are lazy.** ``reference()`` and ``reference_notes()`` are methods rather
+than fields because building one can cost a MIDI parse per item, and a run that stops
+early or filters most items out should not pay for all of them up front.
 
-**Grouping is the item's business.** An item declares its own ``groups``
-("string 1", "plucking FS", "split test"), and the report machinery slices by
-whatever keys it finds. That is how per-string and per-technique breakdowns
-survive without the evaluation layer knowing anything about bass guitars.
+**Grouping is the item's business.** An item declares its own ``groups`` ("string 1",
+"plucking FS", "split test") and the report machinery slices by whatever keys it finds.
+That is how per-string and per-technique breakdowns survive without the evaluation layer
+knowing anything about bass guitars.
 """
 
-from abc import ABC, abstractmethod
-from collections.abc import Iterator
-from pathlib import Path
+from collections.abc import Iterator, Mapping
+from typing import Protocol, TypeVar, runtime_checkable
 
+from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
 from stemify.music.notes import NoteEvent
-from stemify.audio.sources import Sources
 
 
-class EvalItem(ABC):
-    """One scorable unit: some audio and the pitch truth to score it against."""
+@runtime_checkable
+class EvalItem(Protocol):
+    """One scorable unit: some audio, and the pitch truth to score it against."""
 
     @property
-    @abstractmethod
     def name(self) -> str:
         """Identifier, unique within its dataset. Shown in per-item breakdowns."""
-
-    @abstractmethod
-    def audio(self) -> Path:
-        """The audio a baseline should listen to."""
-
-    def sources(self) -> Sources:
-        """Every audio role this item can offer, not just the one being listened to.
-
-        ``audio()`` answers "which single file is this item *about*"; this answers
-        "what else is on hand for the same music". They differ only for a dataset
-        that ships more than one rendering -- Slakh has the mixture beside every
-        stem -- and that difference is exactly what a multi-channel encoder reads:
-        the bass in channel 0, the mixture it sits inside in channel 1.
-
-        The default keeps the two the same, so a single-file dataset needs no
-        change and simply has no second channel to offer.
-        """
-        return Sources(bass=self.audio())
-
-    @abstractmethod
-    def reference(self) -> Contour:
-        """Ground-truth pitch over time. Built on demand, not at index time."""
-
-    def reference_notes(self) -> list[NoteEvent]:
-        """Ground-truth note events, for note-level evaluation.
-
-        Optional: only datasets with note-native truth (Slakh's MIDI, IDMT's
-        one-note clips) implement this. A frame-annotated dataset like
-        MDB-bass-synth has no note boundaries to report and stays frame-level.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} has no note-level reference"
-        )
-
-    @property
-    def groups(self) -> dict[str, str]:
-        """Labels this item can be broken down by, e.g. ``{"string": "1"}``.
-
-        Empty by default: a dataset with no meaningful strata simply reports its
-        aggregate.
-        """
-        return {}
-
-
-class Dataset(ABC):
-    """An iterable of evaluable items, owning how its references are built."""
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Human-readable identity, including any variant -- the source or split
-        matters as much as the dataset name when reading a result months later."""
-
-    @abstractmethod
-    def __iter__(self) -> Iterator[EvalItem]:
         ...
 
-    @abstractmethod
+    @property
+    def groups(self) -> Mapping[str, str]:
+        """Labels this item can be broken down by, e.g. ``{"string": "1"}``.
+
+        A dataset with no meaningful strata returns an empty mapping and simply reports
+        its aggregate. Required rather than defaulted: all four corpora implement it,
+        so the default was dead code that only made the protocol longer.
+        """
+        ...
+
+    def sources(self) -> Sources:
+        """Every audio role this item can offer.
+
+        One member rather than two. There used to be an ``audio()`` beside this,
+        answering "which single file is this item *about*" against this one's "what else
+        is on hand for the same music" -- but ``Sources.bass`` is defined as the audio
+        that gets transcribed, so the two answers were the same answer and every caller
+        had to know which spelling a given site had picked. Where a loader still needs
+        the distinction internally (MDB selects stem-or-mix and raises if the mix is
+        absent) it keeps a private helper; that is an implementation detail, not
+        contract.
+        """
+        ...
+
+    def reference(self) -> Contour:
+        """Ground-truth pitch over time, on the corpus's own grid."""
+        ...
+
+
+@runtime_checkable
+class NoteAnnotated(EvalItem, Protocol):
+    """An item whose truth is note events, not only a contour.
+
+    Slakh (rendered from MIDI) and FiloBass (transcribed to it) qualify;
+    MDB-bass-synth and IDMT are frame-annotated and do not. Everything that trains or
+    scores at the note level -- ``semicrf.fit.tracks``, ``training.validation``,
+    ``evaluation.note`` -- takes this rather than ``EvalItem``, which is what turns
+    "this corpus has no note boundaries" from a mid-run exception into a type error.
+
+    ``runtime_checkable`` so the one consumer that can *degrade* rather than refuse
+    (``evaluation.cues`` drops its onset channel) can ask at runtime. Presence is all
+    that check verifies, which is exactly right here: the member either exists or the
+    corpus does not have notes.
+    """
+
+    def reference_notes(self) -> list[NoteEvent]:
+        """Ground-truth note events, for note-level training and evaluation."""
+        ...
+
+
+ItemT_co = TypeVar("ItemT_co", bound=EvalItem, covariant=True)
+
+
+class Dataset(Protocol[ItemT_co]):
+    """An iterable of evaluable items, owning how its references are built.
+
+    Generic in the item so a consumer's requirement travels with the dataset it is
+    handed: ``Dataset[NoteAnnotated]`` is a corpus whose items have note truth, and
+    ``SlakhDataset`` satisfies it while ``MdbDataset`` does not. Covariant because a
+    dataset only ever produces items, never consumes them.
+    """
+
+    @property
+    def name(self) -> str:
+        """Human-readable identity, including any variant -- the source or split matters
+        as much as the dataset name when reading a result months later."""
+        ...
+
+    def __iter__(self) -> Iterator[ItemT_co]:
+        ...
+
     def __len__(self) -> int:
         ...

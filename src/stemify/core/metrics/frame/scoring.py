@@ -38,11 +38,20 @@ Pair = tuple[np.ndarray, np.ndarray]
 class AlignedPairs:
     """One track's aligned ``(prediction, truth)`` pairs, ready to pool and score.
 
-    ``onset`` is always present. ``voicing`` is ``None`` for an encoder with no
-    voicing head; ``pitch`` is ``None`` when no reference contour is available. The
-    caller has already put every pair on a common grid -- this module only pools."""
+    Every channel is optional, and for two different reasons. ``voicing`` is ``None``
+    for an encoder with no voicing head and ``pitch`` when no reference contour is
+    available -- the *estimate* side is missing. ``onset`` is ``None`` when the corpus
+    has no note-level truth to build a target from (MDB-bass-synth, IDMT) -- the
+    *reference* side is missing.
 
-    onset: Pair
+    Onset used to be required, which encoded the assumption that every corpus is
+    note-annotated. Two of the four are not, so scoring either raised from inside the
+    harness. Optional on the same terms as the others is what lets those corpora report
+    the channels they do have.
+
+    The caller has already put every pair on a common grid -- this module only pools."""
+
+    onset: Pair | None = None
     voicing: Pair | None = None
     pitch: Pair | None = None
 
@@ -65,13 +74,15 @@ def score_cues(tracks: Sequence[AlignedPairs]) -> list[MetricResult]:
 
     results: list[MetricResult] = []
 
-    onset_pred, onset_true = _pool([t.onset for t in tracks])
-    results.append(OnsetPR().compute(onset_true, onset_pred))
-
     # Filter-then-count rather than `all(... is not None)` then re-read: the two
     # express the same "every track carries it" rule, but this one leaves the list
     # holding the non-optional type, so the pooled call cannot be handed a None that
     # a later edit to the guard stopped excluding.
+    onsets = [t.onset for t in tracks if t.onset is not None]
+    if len(onsets) == len(tracks):
+        onset_pred, onset_true = _pool(onsets)
+        results.append(OnsetPR().compute(onset_true, onset_pred))
+
     voicings = [t.voicing for t in tracks if t.voicing is not None]
     if len(voicings) == len(tracks):
         voi_pred, voi_true = _pool(voicings)

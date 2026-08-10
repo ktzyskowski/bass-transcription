@@ -29,7 +29,7 @@ import numpy as np
 
 from stemify.core.cache import Cache
 from stemify.audio.features import SILENCE_DB
-from stemify.corpus.base import Dataset as SlakhLikeDataset
+from stemify.corpus.base import Dataset as SlakhLikeDataset, NoteAnnotated
 from stemify.music.notes import NoteEvent
 from stemify.core.serde import CachedItem
 from stemify.core.conditions import Condition
@@ -114,7 +114,7 @@ def target_windows(
 
 
 def train_items(
-    dataset: SlakhLikeDataset,
+    dataset: SlakhLikeDataset[NoteAnnotated],
     condition: Condition,
     cache: Cache,
     heads: Sequence[str] = (),

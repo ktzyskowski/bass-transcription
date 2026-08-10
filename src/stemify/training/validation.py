@@ -43,7 +43,7 @@ from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.cuenet import CueNet
 from stemify.music.contour import Contour
 from stemify.core.frames import Frames
-from stemify.corpus.base import Dataset
+from stemify.corpus.base import Dataset, NoteAnnotated
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.core.metrics import MetricResult, AlignedPairs, score_cues, score_notes
 from stemify.music.notes import NoteEvent
@@ -206,7 +206,7 @@ class CheckpointValidator:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: Dataset[NoteAnnotated],
         condition: Condition | None = None,
         cache: Cache | None = None,
     ) -> None:

@@ -96,7 +96,7 @@ What it adds over the old ``source``-only rule is that ``bichannel-clean`` is
         )
 
     def channel_paths(
-        self, dataset: SlakhLikeDataset, cache: Cache
+        self, dataset: SlakhLikeDataset[EvalItem], cache: Cache
     ) -> list[tuple[Path, ...]]:
         """Cached CQT paths per track, ordered by model input channel.
 

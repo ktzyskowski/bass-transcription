@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 
 from stemify.music.contour import Contour
-from stemify.corpus.base import EvalItem
 from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
@@ -46,7 +45,7 @@ BASS_TRANSPOSE = 12
 
 
 @dataclass(frozen=True)
-class BassStem(EvalItem):
+class BassStem:
     """One rendered bass stem, its MIDI, and the mix it sits inside."""
 
     track: str  # e.g. "Track00042"
@@ -81,7 +80,10 @@ class BassStem(EvalItem):
         """
         return self.n_bass_stems == 1
 
-    def audio(self) -> Path:
+    def _audio(self) -> Path:
+        """Which rendering this item is *about*, per its configured ``source``.
+        Private: the contract is ``sources()``, and this is how one of its roles is
+        chosen."""
         return self.stem_path if self.source == "stem" else self.mix_path
 
     def sources(self) -> Sources:
@@ -93,7 +95,7 @@ class BassStem(EvalItem):
         separated says so with its own transform, which is what keeps the
         demucs-bass and raw-mix channels on distinct cache keys for the same file.
         """
-        return Sources(bass=self.audio(), mix=self.mix_path)
+        return Sources(bass=self._audio(), mix=self.mix_path)
 
     @cached_property
     def _notes(self) -> list[tuple[float, float, int]]:

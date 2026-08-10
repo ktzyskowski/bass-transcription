@@ -43,7 +43,7 @@ import logging
 from pathlib import Path
 
 from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset as SlakhLikeDataset
+from stemify.corpus.base import Dataset as SlakhLikeDataset, EvalItem
 from stemify.audio.features import SIGNATURE as CQT_SIGNATURE
 from stemify.audio.features import extract_features
 from stemify.core.pitch import PitchEstimator
@@ -119,7 +119,7 @@ class Cache:
 
     def ensure_features(
         self,
-        dataset: SlakhLikeDataset,
+        dataset: SlakhLikeDataset[EvalItem],
         transform: AudioTransform | None = None,
         role: str = "bass",
     ) -> list[Path]:

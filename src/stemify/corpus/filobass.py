@@ -71,8 +71,8 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
+from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset, EvalItem
 from stemify.corpus.midi_contour import (
     NOTE_DECAY_DB, REFERENCE_HOP_S, notes_to_contour,
 )
@@ -84,7 +84,7 @@ METADATA_CSV = "notebooks_and_scripts/note_data.csv"
 
 
 @dataclass(frozen=True)
-class Track(EvalItem):
+class Track:
     """One tune: a Demucs-separated upright bass stem and its audio-aligned MIDI."""
 
     tune: str
@@ -107,8 +107,10 @@ class Track(EvalItem):
         """
         return {"bassist": self.bassist} if self.bassist else {}
 
-    def audio(self) -> Path:
-        return self.audio_path
+    def sources(self) -> Sources:
+        """Stem only. FiloBass ships no mixture, so there is no second channel to
+        offer and a bichannel checkpoint cannot be scored on this corpus."""
+        return Sources(bass=self.audio_path)
 
     @cached_property
     def _notes(self) -> list[tuple[float, float, int]]:
@@ -220,7 +222,7 @@ def index(root: str | Path) -> list[Track]:
     return tracks
 
 
-class FiloBassDataset(Dataset):
+class FiloBassDataset:
     """FiloBass, evaluated on the Demucs-separated bass stems.
 
     No ``source`` parameter, unlike MDB and Slakh: only one rendering ships. That is a

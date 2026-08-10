@@ -9,12 +9,11 @@ from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
-from stemify.corpus.base import Dataset
 from stemify.corpus.slakh.index import index
 from stemify.corpus.slakh.item import BassStem
 
 
-class SlakhDataset(Dataset):
+class SlakhDataset:
     """Slakh2100 bass stems, filtered to those the monophonic premise holds for.
 
     Defaults to the ``test`` split. Slakh is large enough to train on, so

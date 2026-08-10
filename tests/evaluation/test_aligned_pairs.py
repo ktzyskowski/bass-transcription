@@ -6,6 +6,7 @@ the reference grid), so it is exercised with a hand-built item and Frames -- no 
 
 import numpy as np
 
+from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
 from stemify.core.frames import Frames
 from stemify.evaluation.cues import aligned_pairs
@@ -14,16 +15,37 @@ from stemify.music.notes import NoteEvent
 FRAME_TIMES = np.arange(12) * 0.0116
 
 
-class _FakeItem:
-    def __init__(self, note_onset: float):
-        self._onset = note_onset
+class _FrameOnlyItem:
+    """A corpus with a contour and no note truth -- MDB-bass-synth and IDMT.
+
+    Implements ``EvalItem`` and stops there. It has to be *complete* at that protocol
+    rather than only carrying the two members ``aligned_pairs`` reads, because the
+    capability check downstream is an ``isinstance`` against a runtime-checkable
+    protocol, which verifies every inherited member. A fake missing ``sources`` would
+    be classified "no note truth" for the wrong reason and would pass this file's tests
+    while proving nothing about the real corpora.
+    """
 
     @property
     def name(self) -> str:
         return "fake"
 
+    @property
+    def groups(self) -> dict[str, str]:
+        return {}
+
+    def sources(self) -> Sources:
+        return Sources(bass="/nonexistent.wav")
+
     def reference(self) -> Contour:
         return Contour(times=FRAME_TIMES, freqs=np.full(FRAME_TIMES.size, 110.0))
+
+
+class _FakeItem(_FrameOnlyItem):
+    """The same, plus note-level truth -- Slakh and FiloBass."""
+
+    def __init__(self, note_onset: float):
+        self._onset = note_onset
 
     def reference_notes(self):
         return [NoteEvent(onset=self._onset, offset=self._onset + 0.05, midi_pitch=45.0)]
@@ -59,3 +81,15 @@ def test_voicing_and_pitch_aligned_to_the_frame_grid():
     est_hz, ref_hz = ch.pitch
     assert est_hz.shape == ref_hz.shape  # both on the reference grid
     assert np.allclose(ref_hz, 110.0)
+
+
+def test_a_frame_annotated_corpus_drops_onset_instead_of_raising():
+    """The regression. MDB-bass-synth and IDMT have no note-level truth, and this used
+    to call ``reference_notes()`` unconditionally -- so both raised
+    ``NotImplementedError`` from inside the scoring loop, and neither could be scored at
+    ``--level cues`` at all. Onset is now dropped on the same terms as the other two
+    channels, and everything the corpus *does* have is still scored."""
+    ch = aligned_pairs(_cues(with_voicing=True), _FrameOnlyItem())
+    assert ch.onset is None
+    assert ch.voicing is not None
+    assert ch.pitch is not None

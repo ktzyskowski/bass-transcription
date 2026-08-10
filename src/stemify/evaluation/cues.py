@@ -32,7 +32,7 @@ from typing import Any
 import numpy as np
 
 from stemify.core.frames import Frames
-from stemify.corpus.base import Dataset, EvalItem
+from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
 from stemify.core.encoders.base import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
@@ -48,15 +48,28 @@ def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
     Onset target is impulses on the frame grid at the reference onsets; voicing target
     is the reference contour's voiced mask resampled onto the frame grid; pitch pairs
     the encoder's own contour (resampled onto the reference grid, voicing-aware) with
-    the reference. A channel is dropped when the encoder does not produce it -- voicing
-    with no voicing head, pitch with no contour -- rather than scored against a
-    stand-in, so a missing channel is absent from the report instead of contributing a
-    number nothing produced."""
+    the reference. A channel is dropped when it cannot be produced -- voicing with no
+    voicing head, pitch with no contour -- rather than scored against a stand-in, so a
+    missing channel is absent from the report instead of contributing a number nothing
+    produced.
+
+    **Onset is dropped on the same terms, and it did not used to be.** The rule above
+    was applied to the two channels the *encoder* might not supply and not to the one
+    the *reference* might not: this asked every item for ``reference_notes()``
+    unconditionally, so scoring MDB-bass-synth or IDMT -- both frame-annotated, neither
+    note-native -- raised ``NotImplementedError`` from inside the loop. Both are
+    reachable from the eval CLI, so two of the four corpora could not be scored at all
+    at this level. ``NoteAnnotated`` now makes the difference visible, and a corpus
+    without note truth reports its voicing and pitch channels instead of failing.
+    """
     reference = item.reference()
-    onset_true = onset_targets(
-        np.array([n.onset for n in item.reference_notes()], dtype=float),
-        frames.frame_times,
-    )
+    onset = None
+    if isinstance(item, NoteAnnotated):
+        onset_true = onset_targets(
+            np.array([n.onset for n in item.reference_notes()], dtype=float),
+            frames.frame_times,
+        )
+        onset = (np.asarray(frames.onset), onset_true)
     voicing = None
     if frames.voicing is not None:
         voi_true = voicing_targets(
@@ -67,11 +80,7 @@ def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
     if frames.contour is not None:
         ref_hz, est_hz = align(reference, frames.contour)
         pitch = (est_hz, ref_hz)
-    return AlignedPairs(
-        onset=(np.asarray(frames.onset), onset_true),
-        voicing=voicing,
-        pitch=pitch,
-    )
+    return AlignedPairs(onset=onset, voicing=voicing, pitch=pitch)
 
 
 @dataclass(frozen=True)
@@ -129,7 +138,7 @@ class CuesEvaluation:
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset: Dataset[EvalItem],
         encoder: Encoder,
         transform: AudioTransform | None = None,
         progress: bool = True,
@@ -140,7 +149,7 @@ class CuesEvaluation:
         self.progress = progress
 
     def _channels(self, item: EvalItem) -> AlignedPairs:
-        path = self.transform.apply(item.audio())
+        path = self.transform.apply(item.sources().bass)
         cues = self.encoder.encode(Sources(bass=path))
         return aligned_pairs(cues, item)
 

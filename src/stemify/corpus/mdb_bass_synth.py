@@ -52,8 +52,8 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+from stemify.audio.sources import Sources
 from stemify.music.contour import Contour
-from stemify.corpus.base import Dataset, EvalItem
 
 # Annotation hop, per the dataset documentation. Not used for parsing -- the
 # CSV carries explicit timestamps -- but recorded because it sets the reference
@@ -69,7 +69,7 @@ MIX_DIR = "audio_mix"
 
 
 @dataclass(frozen=True)
-class Track(EvalItem):
+class Track:
     """One song: a bass stem, the full mix it came from, and their shared labels.
 
     ``source`` is fixed per item rather than passed to ``audio()``, so a dataset
@@ -91,14 +91,24 @@ class Track(EvalItem):
     def groups(self) -> dict[str, str]:
         return {"source": self.source}
 
-    def audio(self) -> Path:
+    def _audio(self) -> Path:
         """``stem`` isolates pitch tracking; ``mix`` additionally tests whether
-        the bass is findable inside an arrangement."""
+        the bass is findable inside an arrangement.
+
+        Private: the selection is this corpus's own business, and the contract is
+        ``sources()``. It raises rather than falling back because a run configured for
+        mixes that silently scored stems would report a number for an experiment
+        nobody ran.
+        """
         if self.source == "stem":
             return self.stem_path
         if self.mix_path is None:
             raise FileNotFoundError(f"{self.name}: no mix file found")
         return self.mix_path
+
+    def sources(self) -> Sources:
+        """The selected audio, plus the mixture where this corpus ships one."""
+        return Sources(bass=self._audio(), mix=self.mix_path)
 
     def reference(self) -> Contour:
         """Load the annotation as ``(times, freqs)``, 0 Hz where silent.
@@ -182,7 +192,7 @@ def index(root: str | Path) -> list[Track]:
     return tracks
 
 
-class MdbDataset(Dataset):
+class MdbDataset:
     """MDB-bass-synth, evaluated on either the isolated stem or the full mix.
 
     The same annotations describe both, which is what makes stem-vs-mix a
