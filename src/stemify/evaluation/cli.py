@@ -26,6 +26,7 @@ from typing import cast
 from pathlib import Path
 
 from stemify.corpus.base import Dataset, EvalItem, NoteAnnotated
+from stemify.persistence.store import DEFAULT_ROOT, Store
 from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
 from stemify.corpus.mdb_bass_synth import MdbDataset
@@ -209,6 +210,14 @@ def main() -> None:
         "note: discrete note events (precision/recall/F1), which needs a note-native "
         "dataset (slakh, idmt).",
     )
+    ap.add_argument(
+        "--cache-dir", type=Path, default=DEFAULT_ROOT,
+        help=(
+            "Root for derived artifacts -- separated audio, and any contour a "
+            f"baseline memoises. Default {DEFAULT_ROOT}, shared with training so a "
+            "corpus already separated for a run is not separated again to score it."
+        ),
+    )
     ap.add_argument("--json", type=Path, help="also write the report here")
     args = ap.parse_args()
 
@@ -219,6 +228,7 @@ def main() -> None:
         DemucsSeparator() if args.separate == "demucs" else Identity()
     )
     try:
+        store = Store(args.cache_dir)
         dataset = build_dataset(args)
         encoder = build_encoder(args)
         # Typed at the base: the two levels produce different reports, and everything
@@ -227,10 +237,11 @@ def main() -> None:
         if args.level == "note":
             transcriber = Transcriber(encoder, build_decoder(args))
             report = NoteEvaluation(
-                require_notes(dataset, args.dataset), transcriber, transform=transform
+                require_notes(dataset, args.dataset), transcriber,
+                transform=transform, store=store,
             ).run()
         else:
-            report = CuesEvaluation(dataset, encoder, transform=transform).run()
+            report = CuesEvaluation(dataset, encoder, transform=transform, store=store).run()
     except (FileNotFoundError, ValueError, NotImplementedError) as exc:
         raise SystemExit(str(exc)) from exc
 

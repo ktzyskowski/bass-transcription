@@ -55,10 +55,10 @@ def ensure_feature(
     construction. (Targets do not share that way -- see ``examples.ensure_targets``,
     which guards exactly that case.)
     """
-    resolved = transform.cache_path(Path(source))
+    resolved = transform.cache_path(store, source)
     path = feature_path(store, resolved)
     if not path.exists():
-        feats = extract_features(transform.apply(source))
+        feats = extract_features(transform.apply(store, source))
         CachedItem(resolved.stem, feats.values, {}, feats.frame_times).save(path)
     return path
 
@@ -80,7 +80,7 @@ def ensure_features(
     total, computed = len(sources), 0
     paths: list[Path] = []
     for i, source in enumerate(sources, start=1):
-        path = feature_path(store, transform.cache_path(Path(source)))
+        path = feature_path(store, transform.cache_path(store, source))
         hit = path.exists()
         paths.append(ensure_feature(store, transform, source))
         computed += not hit

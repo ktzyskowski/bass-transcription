@@ -72,7 +72,7 @@ def test_two_conditions_of_one_track_do_not_collide(tmp_path, audio, cqt_calls):
     separated version are the same *track* but different resolved files, so the key
     separates them and there is no subdirectory scheme left to maintain."""
     store = Store(tmp_path / "cache")
-    sep = _FakeSeparator(cache_dir=store.dir("transforms"))
+    sep = _FakeSeparator()
     assert ensure_feature(store, Identity(), audio) != ensure_feature(store, sep, audio)
     assert cqt_calls["n"] == 2
     assert len(list(store.dir("features").glob("*.npz"))) == 2
@@ -86,13 +86,13 @@ def test_a_hit_never_runs_the_transform(tmp_path, audio, cqt_calls):
     resumed run costs the same as a cold one.
     """
     store = Store(tmp_path / "cache")
-    ensure_feature(store, _FakeSeparator(cache_dir=store.dir("transforms")), audio)
+    ensure_feature(store, _FakeSeparator(), audio)
 
     class _Exploding(_FakeSeparator):
         def _run(self, source, dest):
             raise AssertionError("a cache hit must not run the transform")
 
-    ensure_feature(store, _Exploding(cache_dir=store.dir("transforms")), audio)
+    ensure_feature(store, _Exploding(), audio)
     assert cqt_calls["n"] == 1
 
 

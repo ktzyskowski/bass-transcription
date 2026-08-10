@@ -15,14 +15,15 @@ about the corpus rather than about the decoder.
 from pathlib import Path
 
 from stemify.audio.sources import Sources
-from stemify.audio.transforms import DEFAULT_CACHE, DemucsSeparator, Identity
+from stemify.audio.transforms import DemucsSeparator, Identity
+from stemify.persistence.store import Store
 
 
 def sources_from(
     audio: str | Path,
     *,
     separate: bool = True,
-    cache_dir: str | Path = DEFAULT_CACHE,
+    store: Store | None = None,
     device: str | None = None,
 ) -> Sources:
     """``Sources`` for a file, separating it first unless it is already a bass stem.
@@ -36,10 +37,11 @@ def sources_from(
     reads it. A bass-only input leaves it ``None``, which ``Sources`` documents as the
     isolated-upload case and a one-channel encoder never looks at.
     """
+    store = store or Store()
     path = Path(audio)
     if not path.exists():
         raise FileNotFoundError(f"no audio at {path}")
     if not separate:
-        return Sources(bass=Identity().apply(path))
-    stem = DemucsSeparator(cache_dir=cache_dir, device=device).apply(path)
+        return Sources(bass=Identity().apply(store, path))
+    stem = DemucsSeparator(device=device).apply(store, path)
     return Sources(bass=stem, mix=path)

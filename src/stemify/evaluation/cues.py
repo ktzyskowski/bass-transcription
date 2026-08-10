@@ -40,6 +40,7 @@ from stemify.core.metrics import MetricResult, AlignedPairs, score_cues
 from stemify.audio.sources import Sources
 from stemify.music.labels import onset_targets, voicing_targets
 from stemify.audio.transforms import AudioTransform, Identity
+from stemify.persistence.store import Store
 
 
 def aligned_pairs(frames: Frames, item: EvalItem) -> AlignedPairs:
@@ -141,15 +142,19 @@ class CuesEvaluation:
         dataset: Dataset[EvalItem],
         encoder: Encoder,
         transform: AudioTransform | None = None,
+        store: Store | None = None,
         progress: bool = True,
     ) -> None:
         self.dataset = dataset
         self.encoder = encoder
         self.transform = transform if transform is not None else Identity()
+        # Where a separation lands. Defaults to the standard root, which is what the
+        # transform used to hardcode for itself.
+        self.store = store or Store()
         self.progress = progress
 
     def _channels(self, item: EvalItem) -> AlignedPairs:
-        path = self.transform.apply(item.sources().bass)
+        path = self.transform.apply(self.store, item.sources().bass)
         cues = self.encoder.encode(Sources(bass=path))
         return aligned_pairs(cues, item)
 

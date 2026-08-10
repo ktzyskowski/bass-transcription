@@ -1,12 +1,22 @@
-"""Base AudioTransform caching: the atomic write-aside-and-rename path in
-``apply()``, exercised with a fake transform so no real (heavy) separator runs.
-This is the path that a missing ``import os`` silently broke -- every cache miss
-raised NameError on ``os.getpid()`` while cache hits sailed through untouched.
+"""``AudioTransform``: the atomic write-aside-and-rename in ``apply``, and where it lands.
+
+Exercised with a fake transform so no real separator runs. This is the path a missing
+``import os`` once silently broke -- every cache miss raised ``NameError`` on
+``os.getpid()`` while cache hits sailed through untouched.
+
+A transform takes the destination as a ``Store`` rather than owning a ``cache_dir``.
+That is not decoration: the conditions registry builds its separators at import time, so
+a transform that carried its own directory carried a *literal* one, and pointing
+``--cache-dir`` elsewhere moved the features and contours while the separated audio
+stayed behind.
 """
 
 from pathlib import Path
 
+import pytest
+
 from stemify.audio.transforms import AudioTransform, Identity
+from stemify.persistence.store import Store
 
 
 class _FakeTransform(AudioTransform):
@@ -16,8 +26,7 @@ class _FakeTransform(AudioTransform):
     def name(self) -> str:
         return "fake"
 
-    def __init__(self, cache_dir):
-        super().__init__(cache_dir)
+    def __init__(self) -> None:
         self.runs = 0
 
     def _run(self, source: Path, dest: Path) -> None:
@@ -25,78 +34,91 @@ class _FakeTransform(AudioTransform):
         dest.write_text(f"transformed:{Path(source).name}")
 
 
-def _source(tmp_path: Path) -> Path:
+@pytest.fixture
+def store(tmp_path):
+    return Store(tmp_path / "cache")
+
+
+@pytest.fixture
+def source(tmp_path):
     src = tmp_path / "in.wav"
     src.write_text("audio")
     return src
 
 
-def test_apply_computes_then_caches(tmp_path):
-    # First call runs the transform (the cache-miss path with os.getpid());
-    # second call is a pure cache hit and must not re-run.
-    t = _FakeTransform(tmp_path / "cache")
-    src = _source(tmp_path)
-
-    out = t.apply(src)
-    assert out.exists() and out.read_text() == "transformed:in.wav"
+def test_apply_computes_then_caches(store, source):
+    """First call takes the cache-miss path (the one with ``os.getpid()``); the second
+    is a pure hit and must not re-run -- a separation is minutes per track."""
+    t = _FakeTransform()
+    out = t.apply(store, source)
+    assert out.read_text() == "transformed:in.wav"
     assert t.runs == 1
 
-    again = t.apply(src)
-    assert again == out
-    assert t.runs == 1  # served from cache, not recomputed
+    assert t.apply(store, source) == out
+    assert t.runs == 1
 
 
-def test_apply_leaves_no_partial_files(tmp_path):
-    t = _FakeTransform(tmp_path / "cache")
-    t.apply(_source(tmp_path))
-    partials = list((tmp_path / "cache").rglob("*.partial"))
-    assert partials == []  # temp file renamed away, none left behind
+def test_the_output_lands_under_the_store(store, source):
+    """The whole point of the inversion. The caller's root decides where a separation
+    goes, so `--cache-dir` moves every artifact together instead of only two of three."""
+    out = _FakeTransform().apply(store, source)
+    assert out.parent == store.dir("transforms") / "fake"
 
 
-def test_failed_run_cleans_up_and_writes_no_cache(tmp_path):
+def test_two_stores_are_two_caches(tmp_path, source):
+    """Which is what could not be expressed before: the directory was fixed at
+    construction, and the registry constructs its separators at import time."""
+    t = _FakeTransform()
+    a = t.apply(Store(tmp_path / "a"), source)
+    b = t.apply(Store(tmp_path / "b"), source)
+    assert a != b
+    assert a.name == b.name  # same key, different roots
+    assert t.runs == 2
+
+
+def test_apply_leaves_no_partial_files(store, source):
+    _FakeTransform().apply(store, source)
+    assert list(store.root.rglob("*.partial")) == []
+
+
+def test_a_failed_run_writes_no_cache_entry(store, source):
+    """A truncated separation is a cache *hit* next run -- audio the model was never
+    trained on, silently. Neither the destination nor a partial may survive."""
+
     class _Boom(_FakeTransform):
-        def _run(self, source, dest):
-            dest.write_text("half")  # a truncated write...
-            raise RuntimeError("separator died")  # ...before completion
+        def _run(self, src, dest):
+            dest.write_text("half")
+            raise RuntimeError("separator died")
 
-    t = _Boom(tmp_path / "cache")
-    src = _source(tmp_path)
-    try:
-        t.apply(src)
-    except RuntimeError:
-        pass
-    # No poisoned cache entry, no leftover partial masquerading as a hit.
-    assert not t.cache_path(src).exists()
-    assert list((tmp_path / "cache").rglob("*.partial")) == []
+    t = _Boom()
+    with pytest.raises(RuntimeError, match="separator died"):
+        t.apply(store, source)
+    assert not t.cache_path(store, source).exists()
+    assert list(store.root.rglob("*.partial")) == []
 
 
-def test_identity_returns_source_untouched(tmp_path):
-    src = _source(tmp_path)
-    assert Identity().apply(src) == src
+def test_identity_reports_the_source_as_its_own_output(store, source):
+    """``cache_path`` doubles as the resolved-audio key every derived artifact is keyed
+    on, so Identity must report the *source*. The inherited digest path would name a
+    .flac that is never written, and every cached feature for an untransformed track
+    would then address a file that does not exist."""
+    identity = Identity()
+    assert identity.cache_path(store, source) == source
+    assert identity.apply(store, source) == source
 
 
-def test_identity_cache_path_is_the_source(tmp_path):
-    # cache_path doubles as the resolved-audio key every derived artifact is keyed on
-    # (stemify.core.cache), so Identity must report the *source*. The inherited digest path
-    # would name a .flac that is never written, and every cached feature for an
-    # untransformed track would then address a nonexistent file.
-    src = _source(tmp_path)
-    identity = Identity(cache_dir=tmp_path / "cache")
-    assert identity.cache_path(src) == src
-    assert identity.cache_path(src) == identity.apply(src)
+def test_cache_path_does_no_work(store, source):
+    """What `audio.cache` relies on to avoid separating a track just to discover its CQT
+    is already cached. Resolving the path must never reach ``_run``."""
 
-
-def test_cache_path_does_no_work(tmp_path):
-    # The property Store.ensure_features relies on to avoid separating a track just to
-    # discover its CQT is already cached: resolving the path must never call _run.
     class _Exploding(AudioTransform):
         @property
         def name(self):
             return "exploding"
 
-        def _run(self, source, dest):
+        def _run(self, src, dest):
             raise AssertionError("cache_path must not run the transform")
 
-    src = _source(tmp_path)
-    resolved = _Exploding(cache_dir=tmp_path / "cache").cache_path(src)
-    assert resolved.suffix == ".flac" and not resolved.exists()
+    resolved = _Exploding().cache_path(store, source)
+    assert resolved.suffix == ".flac"
+    assert not resolved.exists()

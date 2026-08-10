@@ -31,7 +31,7 @@ class Channel:
     role: str                    # a ``Sources`` field: "bass" (transcribed) or "mix"
     transform: AudioTransform
 
-    def audio(self, item: EvalItem) -> Path:
+    def audio(self, item: EvalItem, store: Store) -> Path:
         """The resolved audio file, running the transform if it is not yet cached.
 
         Use this when the file itself is needed (pyin wants something to listen to).
@@ -39,7 +39,7 @@ class Channel:
         ``transform.cache_path`` instead so that a cache *hit* never pays for a
         separation just to discover it was a hit.
         """
-        return Path(self.transform.apply(item.sources().role(self.role)))
+        return Path(self.transform.apply(store, item.sources().role(self.role)))
 
 
 @dataclass(frozen=True)

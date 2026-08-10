@@ -39,6 +39,7 @@ from stemify.core.metrics import (
 from stemify.music.notes import NoteEvent
 from stemify.transcription.transcriber import Transcriber
 from stemify.audio.transforms import AudioTransform, Identity
+from stemify.persistence.store import Store
 
 
 def _per_item_prf(
@@ -141,12 +142,16 @@ class NoteEvaluation:
         transcriber: Transcriber,
         metrics: Iterable[NoteMetric] = DEFAULT_NOTE_METRICS,
         transform: AudioTransform | None = None,
+        store: Store | None = None,
         progress: bool = True,
     ) -> None:
         self.dataset = dataset
         self.transcriber = transcriber
         self.metrics = list(metrics)
         self.transform = transform if transform is not None else Identity()
+        # Where a separation lands. Defaults to the standard root, which is what the
+        # transform used to hardcode for itself.
+        self.store = store or Store()
         self.progress = progress
 
     def _estimate_notes(self, item: EvalItem) -> list[NoteEvent]:
@@ -169,7 +174,7 @@ class NoteEvaluation:
         """
         sources = item.sources()
         return self.transcriber.transcribe(
-            replace(sources, bass=self.transform.apply(sources.bass))
+            replace(sources, bass=self.transform.apply(self.store, sources.bass))
         )
 
     def run(self) -> NoteReport:

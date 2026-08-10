@@ -111,8 +111,9 @@ def test_channels_reading_one_file_through_different_transforms_stay_distinct(tm
     mix = tmp_path / "mix.wav"
     mix.write_text("x")
     item = _Item("trk", mix, mix)
-    separated = Channel("bass", _FakeSeparator(tmp_path / "t")).audio(item)
-    raw = Channel("mix", Identity()).audio(item)
+    store = Store(tmp_path / "cache")
+    separated = Channel("bass", _FakeSeparator()).audio(item, store)
+    raw = Channel("mix", Identity()).audio(item, store)
     assert separated != raw
     assert raw == mix
 
@@ -122,7 +123,7 @@ def test_a_channel_whose_role_the_track_lacks_fails_loudly(tmp_path):
     bass.write_text("x")
     item = _Item("trk", bass, None)
     with pytest.raises(ValueError, match="no 'mix' audio"):
-        Channel("mix", Identity()).audio(item)
+        Channel("mix", Identity()).audio(item, Store(tmp_path / "cache"))
 
 
 def test_channel_paths_pairs_each_track_with_its_own_channels(tmp_path, monkeypatch):

@@ -70,3 +70,24 @@ def test_the_source_path_is_resolved_before_hashing():
     assert store.location("features", "s", "data/raw/x.wav") == store.location(
         "features", "s", absolute
     )
+
+
+def test_a_transform_location_matches_the_layout_that_wrote_the_cache():
+    """``<root>/transforms/<transform-name>/<stem>-<digest>.flac``.
+
+    A directory per transform, unlike the flat features/contours trees -- the digest
+    already separates them, so the subdirectory buys only browsability. It stays because
+    12 GB of separated audio is filed under it, and Demucs is minutes per track.
+
+    The digest is ``sha256(f"{name}\\0{resolved}")[:16]``, which is what ``content_key``
+    computes for the same two parts. That equality is why moving the destination from an
+    ``AudioTransform.cache_dir`` to a ``Store`` cost nothing: verified against the real
+    cache at the time, 110/110 separator paths landing on files already on disk.
+    """
+    from stemify.audio.transforms import DemucsSeparator
+
+    store, sep = Store(Path("/cache")), DemucsSeparator()
+    got = sep.cache_path(store, "/audio/mix.flac")
+    assert got == Path(
+        f"/cache/transforms/demucs-htdemucs-bass/mix-{content_key(sep.name, Path('/audio/mix.flac').resolve())}.flac"
+    )

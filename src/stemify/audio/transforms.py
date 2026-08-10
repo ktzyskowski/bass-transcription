@@ -24,24 +24,30 @@ saves, and the datasets here are immutable. The tradeoff: moving a dataset
 directory invalidates its cache.
 """
 
-import hashlib
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from stemify.persistence.store import Store, content_key
 from stemify.platform.atomic import atomic_write
 from stemify.platform.device import best_device
 
-DEFAULT_CACHE = Path("data/cache/transforms")
-
 
 class AudioTransform(ABC):
-    """A cached audio-to-audio operation."""
+    """A cached audio-to-audio operation.
 
-    def __init__(self, cache_dir: str | Path = DEFAULT_CACHE) -> None:
-        self.cache_dir = Path(cache_dir)
+    **It does not own a directory.** A transform's job is audio in, audio out; where
+    the result is kept is the caller's decision, and it arrives as a ``Store``. This
+    used to be a ``cache_dir`` constructor argument defaulting to a literal
+    ``data/cache/transforms``, which was the same category error one level down from
+    the ``Cache`` that once had a ``separator()`` factory -- and it had a consequence.
+    ``core.conditions`` builds its registry at import time with bare
+    ``DemucsSeparator()``, so every separation went to that literal path while
+    ``--cache-dir`` moved the features and contours somewhere else. The two agreed only
+    because ``DEFAULT_CACHE`` and ``DEFAULT_ROOT / "transforms"`` were the same string.
+    """
 
     @property
     @abstractmethod
@@ -59,27 +65,33 @@ class AudioTransform(ABC):
     def _run(self, source: Path, dest: Path) -> None:
         """Do the work, writing to ``dest``. Its parent already exists."""
 
-    def cache_path(self, source: Path) -> Path:
+    def cache_path(self, store: Store, source: str | Path) -> Path:
         """Where this transform's output for ``source`` lives -- a *pure* function
         that does no work.
 
         Load-bearing beyond naming a file: it is the resolved audio path every
-        downstream artifact is keyed on (``stemify.core.cache``), and callers need that
-        key before deciding whether to compute anything. Were it only obtainable
-        from ``apply``, asking "is the CQT for this track cached?" would separate
-        the track first -- minutes of Demucs per cache *hit*.
-        """
-        digest = hashlib.sha256(
-            f"{self.name}\0{Path(source).resolve()}".encode()
-        ).hexdigest()[:16]
-        # Source stem in the filename keeps the cache browsable by eye; the
-        # digest is what actually disambiguates.
-        return self.cache_dir / self.name / f"{Path(source).stem}-{digest}.flac"
+        downstream artifact is keyed on (``audio.cache``), and callers need that key
+        before deciding whether to compute anything. Were it only obtainable from
+        ``apply``, asking "is the CQT for this track cached?" would separate the track
+        first -- minutes of Demucs per cache *hit*.
 
-    def apply(self, source: str | Path) -> Path:
+        A directory per transform, unlike the flat ``features``/``contours`` trees. The
+        digest already separates them, so the subdirectory buys nothing but browsability
+        -- and 12 GB of separated audio is filed under it, so it stays.
+        """
+        source = Path(source)
+        return (
+            store.dir("transforms")
+            / self.name
+            # Source stem in the filename keeps the cache browsable by eye; the
+            # digest is what actually disambiguates.
+            / f"{source.stem}-{content_key(self.name, source.resolve())}.flac"
+        )
+
+    def apply(self, store: Store, source: str | Path) -> Path:
         """The transformed audio, computing it only if not already cached."""
         source = Path(source)
-        dest = self.cache_path(source)
+        dest = self.cache_path(store, source)
         if dest.exists():
             return dest
 
@@ -105,18 +117,19 @@ class Identity(AudioTransform):
     def _run(self, source: Path, dest: Path) -> None:  # pragma: no cover
         raise AssertionError("Identity.apply short-circuits; _run is unreachable")
 
-    def cache_path(self, source: Path) -> Path:
+    def cache_path(self, store: Store, source: str | Path) -> Path:
         """Identity's output *is* the source file, so that is where it "lives".
 
         Overridden because the inherited digest path would name a ``.flac`` that is
         never written -- harmless while only ``apply`` was used (it short-circuits),
         but wrong once this doubles as the resolved-audio key: a stem and its
         untransformed self would key to different phantom paths, and every cached
-        feature would address a file that does not exist."""
+        feature would address a file that does not exist. ``store`` is accepted and
+        ignored: nothing is stored, and the signature is the contract."""
         return Path(source)
 
-    def apply(self, source: str | Path) -> Path:
-        return self.cache_path(Path(source))
+    def apply(self, store: Store, source: str | Path) -> Path:
+        return self.cache_path(store, source)
 
 
 class DemucsSeparator(AudioTransform):
@@ -142,9 +155,7 @@ class DemucsSeparator(AudioTransform):
         model: str = "htdemucs",
         stem: str = "bass",
         device: str | None = None,
-        cache_dir: str | Path = DEFAULT_CACHE,
     ) -> None:
-        super().__init__(cache_dir)
         self.model = model
         self.stem = stem
         self._device = device

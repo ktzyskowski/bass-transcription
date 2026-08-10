@@ -238,7 +238,11 @@ class CheckpointValidator:
         for i, item in enumerate(dataset):
             # The contour describes channel 0: it is the audio being transcribed,
             # and the context channels are never pitch-tracked.
-            primary = condition.primary.audio(item)
+            # A transform needs somewhere to write even when features are not being
+            # cached: `store=None` means "hold the CQTs resident", not "separate to
+            # nowhere". Identity ignores it; a separator would not.
+            into = store or Store()
+            primary = condition.primary.audio(item, into)
             if store is not None:
                 # Keep only the paths + small frame_times/label resident; the feature
                 # tensors are loaded transiently per score (load_features), so the
@@ -255,7 +259,7 @@ class CheckpointValidator:
                 # No store: featurise each channel now and hold them resident. Only
                 # the small-set/test path takes this branch.
                 feats = stack_channels(
-                    [extract_features(c.audio(item)) for c in condition.channels]
+                    [extract_features(c.audio(item, into)) for c in condition.channels]
                 )
                 frame_times = feats.frame_times
                 features = feats.values
