@@ -26,13 +26,13 @@ from stemify.semicrf.neural import NeuralSpanScorer
 from stemify.semicrf.spans import SpanScorer
 from stemify.audio.features import HOP_LENGTH, SAMPLE_RATE
 from stemify.models.networks import TCN, tcn_receptive_field
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.fitting.base import (
     Loss, Recipe, config_field, config_int_list, config_str_list,
 )
 from stemify.core.conditions import CLEAN_BY_WIDTH, CONDITIONS, Condition
 from stemify.fitting.config import TrainConfig
-from stemify.models.assembly import build_cuenet
+from stemify.models.assembly import build_framenet
 from stemify.semicrf.fit import dataset as chunked_ds
 from stemify.semicrf.fit.dataset import ChunkBatch
 from stemify.semicrf.fit.loss import SemiCRFLoss
@@ -316,10 +316,10 @@ class SemiCRFRecipe(Recipe):
             "scorer": self.decoder.scorer.config.get("kind", "linear"),
         }
 
-    def build_model(self) -> CueNet:
+    def build_model(self) -> FrameNet:
         # Same encoder; only the objective differs. Assembled by `models`, so this
         # extension never reaches sideways into the frame objective to get it.
-        return build_cuenet(self.in_channels, self.harmonics, self.pitch)
+        return build_framenet(self.in_channels, self.harmonics, self.pitch)
 
     def build_loss(self) -> Loss[chunked_ds.ChunkBatch]:
         return SemiCRFLoss(

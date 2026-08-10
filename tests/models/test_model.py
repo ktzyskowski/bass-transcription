@@ -9,7 +9,7 @@ import torch
 from stemify.audio.features import N_BINS
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 
 B, T = 2, 20
 
@@ -32,7 +32,7 @@ def test_tcn_is_all_convolution():
 
 def test_single_head_tagger():
     net = TCN().eval()
-    model = CueNet(net, {"onset": onset_head(net.hidden)}).eval()
+    model = FrameNet(net, {"onset": onset_head(net.hidden)}).eval()
     out = model(_cqt_batch())
     assert set(out) == {"onset"}
     assert out["onset"].shape == (B, T, 1)
@@ -42,7 +42,7 @@ def test_multi_head_shares_one_backbone():
     net = TCN()
     heads = {"onset": onset_head(net.hidden), "voicing": voicing_head(net.hidden)}
     pitch = pitch_head()
-    model = CueNet(net, heads, frequency_heads={"pitch": pitch}).eval()
+    model = FrameNet(net, heads, frequency_heads={"pitch": pitch}).eval()
     out = model(_cqt_batch())
     assert out["onset"].shape == (B, T, 1)
     assert out["voicing"].shape == (B, T, 1)
@@ -108,14 +108,14 @@ def test_backbone_accepts_the_channel_count_it_was_built_for():
 
 def test_default_stays_single_channel():
     assert TCN().in_channels == 1
-    assert CueNet(TCN(), {}).in_channels == 1
+    assert FrameNet(TCN(), {}).in_channels == 1
 
 
 def test_tagger_reports_its_backbones_width():
     # Read off the backbone rather than stored, so it cannot drift from the conv
     # that actually has to accept the tensor.
     net = TCN(in_channels=2)
-    assert CueNet(net, {"onset": onset_head(net.hidden)}).in_channels == 2
+    assert FrameNet(net, {"onset": onset_head(net.hidden)}).in_channels == 2
 
 
 def test_a_wider_model_rejects_a_single_channel_batch():

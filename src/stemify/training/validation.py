@@ -41,7 +41,7 @@ from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, NoteAnnotated
@@ -352,7 +352,7 @@ def build_eval_fn(
     log_artifact: Callable[[Path, int], None] | None = None,
     build_decoder: Callable[[Mapping[str, Any]], Decoder] | None = None,
     *,
-    build_model: Callable[[], CueNet],
+    build_model: Callable[[], FrameNet],
 ) -> Callable[[Mapping[str, Any], int], Mapping[str, float]]:
     """An async ``eval_fn``: rebuild the model on CPU from the handed-in weights and
     score it through each cached validator (off the training device). Every metric is

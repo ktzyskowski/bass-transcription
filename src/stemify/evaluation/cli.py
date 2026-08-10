@@ -14,7 +14,7 @@ This module is only argument parsing. The work is:
     NoteEvaluation(dataset, Transcriber(encoder, decoder)).run() -> NoteReport  (--level note)
 
 Both levels score the same encoder -- ``pyin`` is the DSP floor (``ClassicalEncoder``),
-``learned`` a trained ``CueNet`` (``LearnedEncoder``, needs ``--checkpoint``).
+``learned`` a trained ``FrameNet`` (``LearnedEncoder``, needs ``--checkpoint``).
 Cues-level scores that encoder's per-frame evidence; note-level pairs it with a
 decoder and scores the notes. Adding a dataset means writing a ``Dataset`` subclass
 and one line in ``DATASETS``; the runners, metrics and reports need no changes.
@@ -38,7 +38,7 @@ from stemify.transcription.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
 from stemify.transcription.transcriber import Transcriber
-from stemify.training.checkpoint import Checkpoint, load_cuenet
+from stemify.training.checkpoint import Checkpoint, load_framenet
 from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
 ENCODERS = ("pyin", "learned")
@@ -53,7 +53,7 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
     """The encoder both levels score: the pyin DSP floor, or a trained model.
 
     ``--encoder pyin`` is ``ClassicalEncoder`` (spectral-flux onset + pyin pitch), the floor.
-    ``--encoder learned --checkpoint X`` loads a trained ``CueNet`` into a
+    ``--encoder learned --checkpoint X`` loads a trained ``FrameNet`` into a
     ``LearnedEncoder``. The learned encoder is CPU-pinned here -- eval is not the hot path.
     """
     if args.encoder == "pyin":
@@ -62,7 +62,7 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
         raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
     from stemify.models.learned_encoder import LearnedEncoder
 
-    return LearnedEncoder(load_cuenet(args.checkpoint), device="cpu")
+    return LearnedEncoder(load_framenet(args.checkpoint), device="cpu")
 
 
 def build_decoder(args: argparse.Namespace) -> Decoder:
@@ -162,7 +162,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--encoder", choices=ENCODERS, required=True,
-        help="pyin (DSP floor) or learned (a trained CueNet, with --checkpoint).",
+        help="pyin (DSP floor) or learned (a trained FrameNet, with --checkpoint).",
     )
     ap.add_argument(
         "--decoder", choices=DECODERS, default="heuristic",

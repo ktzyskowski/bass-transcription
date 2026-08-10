@@ -16,7 +16,7 @@ from pathlib import Path
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.core.metrics.note.base import matched_pairs
 from stemify.core.metrics.note.prf import prf_rates
 from stemify.core.conditions import CONDITIONS
@@ -45,7 +45,7 @@ def main() -> None:
           f"{'blind F1':>9} {'strict F1':>10} {'pitch gap':>10}")
     for name, tag in ARMS:
         condition = CONDITIONS[tag]
-        encoder = LearnedEncoder(load_cuenet(Path(f"data/checkpoints/{name}.pt")))
+        encoder = LearnedEncoder(load_framenet(Path(f"data/checkpoints/{name}.pt")))
         for split in args.splits.split(","):
             v = CheckpointValidator(
                 condition.dataset(ROOT, split, args.limit), condition, cache=Store("data/cache")

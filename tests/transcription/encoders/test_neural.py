@@ -17,8 +17,8 @@ from stemify.audio.features import SAMPLE_RATE, FrameFeatures
 from stemify.audio.sources import Sources
 
 
-class _FakeCueNet(nn.Module):
-    """Base for the doubles below: the parts of ``CueNet``'s interface that
+class _FakeFrameNet(nn.Module):
+    """Base for the doubles below: the parts of ``FrameNet``'s interface that
     ``LearnedEncoder`` reads besides ``forward``.
 
     Declared rather than left off. The encoder used to reach for these with
@@ -39,14 +39,14 @@ class _FakeCueNet(nn.Module):
 
         Zeros, because no double here has a backbone to produce a real representation --
         but the shape is honest, and returning it is what keeps a double from standing
-        in for only half of ``CueNet``. A scorer that pools the trunk will read zeros and
+        in for only half of ``FrameNet``. A scorer that pools the trunk will read zeros and
         learn nothing from them; that is a test writing its own inputs, not a silent
         production fallback."""
         out = self.forward(x)
         return out, torch.zeros(x.shape[0], x.shape[-1], self.HIDDEN)
 
 
-class _FakeOnsetModel(_FakeCueNet):
+class _FakeOnsetModel(_FakeFrameNet):
     """Onset logits that peak at given fractions of the input length; no voicing."""
 
     def __init__(self, peak_fracs):
@@ -61,7 +61,7 @@ class _FakeOnsetModel(_FakeCueNet):
         return {"onset": logits}
 
 
-class _FakeOnsetVoicingModel(_FakeCueNet):
+class _FakeOnsetVoicingModel(_FakeFrameNet):
     """Onset never fires; voicing is 'sounding' only on the first half of frames."""
 
     def forward(self, x):  # x: (1, 1, F, T)
@@ -123,7 +123,7 @@ def test_encode_from_audio_peaks_the_onset_curve(tmp_path):
 # --------------------------------------------------------------------------- #
 # mix-conditioned input: several stacked renderings of one track               #
 # --------------------------------------------------------------------------- #
-class _ChannelCountingModel(_FakeCueNet):
+class _ChannelCountingModel(_FakeFrameNet):
     """Records the channel count it was handed; never fires an onset."""
 
     def __init__(self, in_channels):
@@ -193,7 +193,7 @@ def test_a_mix_conditioned_model_needs_a_mix(tmp_path):
 # --------------------------------------------------------------------------- #
 # the learned contour: a model with a pitch head is its own pitch source       #
 # --------------------------------------------------------------------------- #
-class _FakePitchModel(_FakeCueNet):
+class _FakePitchModel(_FakeFrameNet):
     """Confidently predicts one MIDI pitch everywhere; voicing on the first half."""
 
     frequency_heads = {"pitch": object()}   # what has_pitch_head reads

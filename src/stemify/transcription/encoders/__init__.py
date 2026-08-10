@@ -2,7 +2,7 @@
 
 ``Encoder`` is the contract and ``ClassicalEncoder`` (pyin + spectral flux) is the DSP
 implementation. The learned one, ``LearnedEncoder``, is not here at all: it wraps a
-``CueNet``, so it lives in ``stemify.models`` with the network it holds.
+``FrameNet``, so it lives in ``stemify.models`` with the network it holds.
 
 That split used to be a discipline inside this ``__init__`` -- export the interface,
 leave the torch-bearing implementation to be imported explicitly, so the light DSP path

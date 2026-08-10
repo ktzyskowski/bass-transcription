@@ -26,7 +26,7 @@ from torch.utils.data import DataLoader
 
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.core.conditions import resolve
 from stemify.fitting.config import TrainConfig
 
@@ -324,13 +324,13 @@ class Recipe(ABC):
         return {}
 
     @abstractmethod
-    def build_model(self) -> CueNet:
+    def build_model(self) -> FrameNet:
         """The encoder. Shared shape across recipes -- what varies is the objective
         over its outputs, not the backbone.
 
-        ``CueNet`` rather than ``nn.Module`` because that is what the sentence
+        ``FrameNet`` rather than ``nn.Module`` because that is what the sentence
         above already claims, and what every consumer needs: ``LearnedEncoder`` takes a
-        ``CueNet``, so a weaker return type here bought no freedom and instead
+        ``FrameNet``, so a weaker return type here bought no freedom and instead
         put an unchecked assumption at each of its two call sites."""
 
     @abstractmethod

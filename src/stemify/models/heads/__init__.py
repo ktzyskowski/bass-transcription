@@ -11,7 +11,7 @@ consumes**:
     longer have (``_ConvFrontend`` flattens it away). So the pitch branch taps the
     front-end before that flatten and stays 2-D, ``(B, C, F, T) -> (B, T, F)``.
 
-That difference is not cosmetic: it is why ``CueNet`` holds ``pitch`` apart from
+That difference is not cosmetic: it is why ``FrameNet`` holds ``pitch`` apart from
 its ``heads`` ModuleDict rather than alongside the other two -- a dict of modules
 taking one argument shape cannot hold both without lying about it.
 

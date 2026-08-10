@@ -30,7 +30,7 @@ import torch
 from stemify.platform.atomic import atomic_write
 from stemify.transcription.decoders.base import Decoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.transcription.transcriber import Transcriber
 from stemify.fitting.base import Recipe
 from stemify.training.recipes import RECIPES
@@ -120,7 +120,7 @@ class Checkpoint:
 
     # --- reconstitution: the one question every caller asks -----------------------
 
-    def model(self) -> CueNet:
+    def model(self) -> FrameNet:
         """The trained encoder network. Strict: a checkpoint whose weights include a
         branch the rebuild left out would otherwise load silently and go on producing
         onset and voicing while quietly having no pitch head."""
@@ -146,15 +146,15 @@ class Checkpoint:
         return Transcriber(self.encoder(**kwargs), self.decoder())
 
 
-def load_cuenet(checkpoint: Path) -> CueNet:
-    """The trained ``CueNet`` a checkpoint file holds.
+def load_framenet(checkpoint: Path) -> FrameNet:
+    """The trained ``FrameNet`` a checkpoint file holds.
 
     Was ``evaluation.cli.load_tagger``: a library function living in a CLI module,
     which six scripts imported -- so reaching for a checkpoint loader meant importing
     argument parsing. It sits here instead, next to the ``Checkpoint`` it delegates to.
 
     Renamed with the class. It stopped returning a ``FrameTagger`` when that became
-    ``CueNet``, and it stopped rebuilding anything itself before that: it used to
+    ``FrameNet``, and it stopped rebuilding anything itself before that: it used to
     re-derive the architecture from ``heads`` and ``in_channels``, a second
     implementation of what the training recipe already knows. ``Checkpoint`` records
     the recipe, so the model comes back the way it was built rather than the way a

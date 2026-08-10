@@ -10,14 +10,14 @@ a fact about ``models``, so it lives here and neither recipe knows the other exi
 
 from collections.abc import Sequence
 
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.models.heads import onset_head, pitch_head, voicing_head
 from stemify.models.networks import TCN
 
 
-def build_cuenet(
+def build_framenet(
     in_channels: int, harmonics: Sequence[int] = (), pitch: bool = True
-) -> CueNet:
+) -> FrameNet:
     """The encoder every objective trains: a TCN backbone with onset/voicing heads,
     and a ``FrequencyHead`` when the run predicts pitch.
 
@@ -26,7 +26,7 @@ def build_cuenet(
     front-end channels.
     """
     backbone = TCN(in_channels=in_channels, harmonics=harmonics)
-    return CueNet(
+    return FrameNet(
         backbone,
         {
             "onset": onset_head(backbone.hidden),

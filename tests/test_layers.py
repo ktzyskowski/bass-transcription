@@ -39,7 +39,7 @@ ALLOWED = {
     "models": _BELOW | {"core"},
     # `fitting` holds what a training *strategy* implements -- Recipe, Loss, Batch,
     # TrainConfig. It sits above `models` because `Recipe.build_model()` returns a
-    # CueNet, which is precisely why it could not be merged with the inference
+    # FrameNet, which is precisely why it could not be merged with the inference
     # contracts in `transcription`: those sit *below* models, which implements them.
     "fitting": _BELOW | {"core", "models"},
     # An extension: it implements `fitting` and knows nothing of the framework that

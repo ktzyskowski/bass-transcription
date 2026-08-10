@@ -14,7 +14,7 @@ implementations that can disagree -- which is the property that makes substituti
 for the other meaningful.
 
 It lives here rather than beside ``PyinPitch`` in ``transcription.pitch`` because it holds a
-``CueNet``: the contract is core's, the implementation is this layer's. That is what
+``FrameNet``: the contract is core's, the implementation is this layer's. That is what
 lets the DSP path take a ``PitchEstimator`` without torch coming with it.
 """
 
@@ -27,17 +27,17 @@ from stemify.music.contour import Contour
 from stemify.platform.device import best_device
 from stemify.audio.features import extract_features
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.transcription.pitch.base import PitchEstimator
 
 class NeuralPitch(PitchEstimator):
-    """A ``CueNet``'s pitch head as an audio-in pitch source."""
+    """A ``FrameNet``'s pitch head as an audio-in pitch source."""
 
     name = "neural"
 
     def __init__(
         self,
-        model: CueNet,
+        model: FrameNet,
         device: str | None = None,
         voicing_threshold: float = CONTOUR_VOICING_THRESHOLD,
     ) -> None:

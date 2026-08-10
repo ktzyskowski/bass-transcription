@@ -294,7 +294,7 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         # therefore a real state rather than a fallback, and a scorer that needs the
         # trunk raises when it is missing -- at the scorer, which knows it needs it.
         features = batch.features.to(device)
-        # Asked for by *capability*, not by type. An `isinstance(model, CueNet)` here
+        # Asked for by *capability*, not by type. An `isinstance(model, FrameNet)` here
         # made the trunk unreachable for anything else -- including this loss's own
         # test doubles, so the one combination that needed covering (a neural scorer
         # under chunking) could not be written at all. Duck typing is safe because

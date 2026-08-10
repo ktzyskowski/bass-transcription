@@ -1,6 +1,6 @@
 """``LearnedEncoder``: trained backbone + heads as the cue producer.
 
-Runs a ``CueNet`` over a track's CQT to produce per-frame onset (and voicing,
+Runs a ``FrameNet`` over a track's CQT to produce per-frame onset (and voicing,
 when the model has that head) probabilities, pairs them with a pitch contour, and
 returns a ``Frames``. The model is fully convolutional over time, so the whole track
 goes through in one pass -- no windowing at inference.
@@ -23,7 +23,7 @@ it was reached -- which is what makes the two substitutable rather than merely s
 an A/B between the two is run.
 
 Lives here rather than beside ``ClassicalEncoder`` in ``transcription.encoders`` because it holds
-a ``CueNet``: ``Encoder`` is the contract, this is its neural implementation, and the
+a ``FrameNet``: ``Encoder`` is the contract, this is its neural implementation, and the
 split is what keeps the DSP path free of torch.
 """
 
@@ -38,21 +38,21 @@ from stemify.platform.device import best_device
 from stemify.transcription.encoders.base import Encoder
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.models.frames import frames_from_output, to_numpy
 from stemify.transcription.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources
 
 
 class LearnedEncoder(Encoder):
-    """Neural cue producer: a ``CueNet``'s onset/voicing probs, plus a contour
+    """Neural cue producer: a ``FrameNet``'s onset/voicing probs, plus a contour
     from its own pitch head when it has one and pyin when it does not."""
 
     name = "neural"
 
     def __init__(
         self,
-        model: CueNet,
+        model: FrameNet,
         device: str | None = None,
         pitch: PitchEstimator | None = None,
         use_pyin: bool = False,

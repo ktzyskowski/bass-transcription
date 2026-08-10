@@ -50,8 +50,8 @@ class _CountingBaseline:
                        confidence=np.full(5, 0.9))
 
 
-class _FakeCueNet(nn.Module):
-    """The parts of ``CueNet``'s interface ``LearnedEncoder`` reads besides ``forward``
+class _FakeFrameNet(nn.Module):
+    """The parts of ``FrameNet``'s interface ``LearnedEncoder`` reads besides ``forward``
     -- declared, because the encoder no longer defaults them when a double omits them."""
 
     in_channels = 1
@@ -66,14 +66,14 @@ class _FakeCueNet(nn.Module):
 
         Zeros, because no double here has a backbone to produce a real representation --
         but the shape is honest, and returning it is what keeps a double from standing
-        in for only half of ``CueNet``. A scorer that pools the trunk will read zeros and
+        in for only half of ``FrameNet``. A scorer that pools the trunk will read zeros and
         learn nothing from them; that is a test writing its own inputs, not a silent
         production fallback."""
         out = self.forward(x)
         return out, torch.zeros(x.shape[0], x.shape[-1], self.HIDDEN)
 
 
-class _FakeOnsetModel(_FakeCueNet):
+class _FakeOnsetModel(_FakeFrameNet):
     """Onset logits peaking at given frame indices."""
 
     def __init__(self, peak_frames):
@@ -130,7 +130,7 @@ def test_missing_onsets_lower_recall():
     assert few["note_recall"] < many["note_recall"]
 
 
-class _FakeVoicingModel(_FakeCueNet):
+class _FakeVoicingModel(_FakeFrameNet):
     """A voicing head that ranks voiced frames (first half) above the rest."""
 
     def forward(self, x):  # (1, 1, F, T)
@@ -173,7 +173,7 @@ def test_score_cues_no_voicing_channel_for_onset_only_model():
 # --------------------------------------------------------------------------- #
 # The report has to say which pitch source produced its numbers                #
 # --------------------------------------------------------------------------- #
-def _cuenet(pitch: bool):
+def _framenet(pitch: bool):
     """Built through the recipe, not by hand: the pitch head is a *frequency* head
     living in its own collection (it taps the front-end before the temporal stack, so
     the frequency axis still exists), and hand-assembly gets that wrong silently --
@@ -184,10 +184,10 @@ def _cuenet(pitch: bool):
 
 
 def test_the_encoder_reports_which_pitch_source_it_used():
-    assert LearnedEncoder(_cuenet(pitch=True), device="cpu").pitch_source == "learned"
-    assert LearnedEncoder(_cuenet(pitch=False), device="cpu").pitch_source == "pyin"
+    assert LearnedEncoder(_framenet(pitch=True), device="cpu").pitch_source == "learned"
+    assert LearnedEncoder(_framenet(pitch=False), device="cpu").pitch_source == "pyin"
     # ...and asking for pyin explicitly overrides a head that exists.
-    forced = LearnedEncoder(_cuenet(pitch=True), device="cpu", use_pyin=True)
+    forced = LearnedEncoder(_framenet(pitch=True), device="cpu", use_pyin=True)
     assert forced.pitch_source == "pyin"
 
 
@@ -200,9 +200,9 @@ def test_the_validation_report_records_the_pitch_source(tmp_path):
 
     def report_for(pitch: bool) -> dict:
         out = tmp_path / ("learned" if pitch else "pyin")
-        model = _cuenet(pitch)
+        model = _framenet(pitch)
         fn = build_eval_fn({}, report_dir=out, log_artifact=lambda p, e: None,
-                      build_model=lambda: _cuenet(pitch))
+                      build_model=lambda: _framenet(pitch))
         fn({"model": model.state_dict(), "loss": {}}, 0)
         return json.loads((out / "validation_epoch000.json").read_text())
 
@@ -210,7 +210,7 @@ def test_the_validation_report_records_the_pitch_source(tmp_path):
     assert report_for(False)["pitch_source"] == "pyin"
 
 
-class _FakePitchHeadModel(_FakeCueNet):
+class _FakePitchHeadModel(_FakeFrameNet):
     """Onset logits plus a ``pitch`` frequency head, i.e. the shape every current
     checkpoint has. Declaring ``frequency_heads`` is what makes ``pitch_source``
     report "learned" -- the encoder reads that, not the weights."""

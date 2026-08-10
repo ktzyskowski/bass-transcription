@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from stemify.models.heads import onset_head
 from stemify.models.networks import TCN
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.audio.features import N_BINS
 from stemify.training.callbacks import (
     AsyncValidationCallback,
@@ -45,7 +45,7 @@ def _loader(n=4, window=16):
 
 
 def _trainer(max_epochs=3):
-    model = CueNet(TCN(), {"onset": onset_head()})
+    model = FrameNet(TCN(), {"onset": onset_head()})
     return Trainer(model, FrameBCELoss(("onset",)),
                    TrainConfig(device="cpu",
                                max_epochs=max_epochs, patience=99))
@@ -217,10 +217,10 @@ def test_mlflow_callback_logs_artifact(tmp_path):
 
     uri = f"file://{tmp_path}/mlruns"
     cb = MLflowCallback(run_name="t", tracking_uri=uri)
-    ckpt = tmp_path / "cuenet.pt"
+    ckpt = tmp_path / "framenet.pt"
     ckpt.write_bytes(b"weights")
     cb.log_artifact(ckpt)
 
     client = MlflowClient(tracking_uri=uri)
     artifacts = [a.path for a in client.list_artifacts(cb._run_id)]
-    assert "cuenet.pt" in artifacts
+    assert "framenet.pt" in artifacts

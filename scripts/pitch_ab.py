@@ -28,7 +28,7 @@ from pathlib import Path
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.core.metrics.note.base import matched_pairs
 from stemify.core.metrics.note.prf import prf_rates
 from stemify.core.conditions import CONDITIONS, canonical
@@ -46,7 +46,7 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=40)
     args = p.parse_args()
 
-    model = load_cuenet(args.checkpoint)
+    model = load_framenet(args.checkpoint)
     decoder = GreedyDecoder()
     cache = Store("data/cache")
 

@@ -11,7 +11,7 @@ import torch
 
 from stemify.music.contour import Contour
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.audio.features import FrameFeatures
 from stemify.training.recipes import HEADS, FrameRecipe
 
@@ -38,7 +38,7 @@ def _encode(model, n_channels, n=24):
 
 def test_a_single_channel_checkpoint_round_trips(tmp_path):
     recipe = FrameRecipe(["clean"])
-    model = load_cuenet(_save(tmp_path, recipe, in_channels=1))
+    model = load_framenet(_save(tmp_path, recipe, in_channels=1))
     assert model.in_channels == 1
     assert _encode(model, 1).onset.shape == (24,)
 
@@ -46,7 +46,7 @@ def test_a_single_channel_checkpoint_round_trips(tmp_path):
 def test_a_bichannel_checkpoint_round_trips(tmp_path):
     # Without reading in_channels back this raises on the first conv's weights.
     recipe = FrameRecipe(["bichannel-separated"])
-    model = load_cuenet(_save(tmp_path, recipe, in_channels=2, conditions=["bichannel-separated"]))
+    model = load_framenet(_save(tmp_path, recipe, in_channels=2, conditions=["bichannel-separated"]))
     assert model.in_channels == 2
     assert _encode(model, 2).onset.shape == (24,)
 
@@ -54,5 +54,5 @@ def test_a_bichannel_checkpoint_round_trips(tmp_path):
 def test_a_checkpoint_predating_the_field_loads_as_single_channel(tmp_path):
     # Every checkpoint written before mix-conditioning existed was one channel, so
     # the absent field has an unambiguous meaning -- earlier models stay loadable.
-    model = load_cuenet(_save(tmp_path, FrameRecipe(["stem"])))
+    model = load_framenet(_save(tmp_path, FrameRecipe(["stem"])))
     assert model.in_channels == 1

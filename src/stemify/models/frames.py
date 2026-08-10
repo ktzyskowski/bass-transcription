@@ -1,4 +1,4 @@
-"""``CueNet``'s output dict -> ``Frames``: the one adapter both paths run through.
+"""``FrameNet``'s output dict -> ``Frames``: the one adapter both paths run through.
 
 Training and inference used to build their own intermediary -- ``TensorCues`` in the
 loss, ``Cues`` in ``LearnedEncoder`` -- from the same forward pass, with the squashing
@@ -39,7 +39,7 @@ def frames_from_output(
 ) -> list[Frames]:
     """A batched forward pass -> one ``Frames`` per row, still on the autograd graph.
 
-    ``out`` is ``{head: (B, T, k)}`` exactly as ``CueNet.forward`` returns it, and
+    ``out`` is ``{head: (B, T, k)}`` exactly as ``FrameNet.forward`` returns it, and
     ``hidden`` is ``(B, T, C)`` when the caller tapped the backbone. Heads named in
     ``PROBABILITY_HEADS`` are squashed here and nowhere else; the rest pass through raw.
 

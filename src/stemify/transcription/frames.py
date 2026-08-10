@@ -4,7 +4,7 @@ The note pipeline is ``audio -> Encoder -> Frames -> Decoder -> notes``. This is
 intermediary, and it carries two different kinds of thing:
 
   - ``heads`` -- the *semantic* per-frame outputs, keyed by head name: an onset curve,
-    a voicing curve, per-bin pitch logits. These are the same names ``CueNet`` emits
+    a voicing curve, per-bin pitch logits. These are the same names ``FrameNet`` emits
     and ``AUX_TERMS`` supervises, so one vocabulary spans network, loss and decoder,
     and a head that exists in one place cannot be spelled differently in another.
   - ``hidden`` -- the backbone's own per-frame representation, which every head is a

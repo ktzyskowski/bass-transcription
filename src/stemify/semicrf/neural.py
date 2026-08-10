@@ -218,7 +218,7 @@ class NeuralSpanScorer(SpanScorer):
             raise ValueError(
                 "NeuralSpanScorer pools the backbone's per-frame activations, and this "
                 "Evidence carries none. Encode through a model with a backbone "
-                "(CueNet.heads_and_hidden fills Frames.hidden), or score with "
+                "(FrameNet.heads_and_hidden fills Frames.hidden), or score with "
                 "LinearSpanScorer, whose features are all head outputs."
             )
         if ev.hidden.shape[-1] != self.trunk_dim:

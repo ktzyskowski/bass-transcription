@@ -48,7 +48,7 @@ class FrequencyHead(nn.Module):
     The peer of ``FrameHead``, named for the same thing it is: the granularity of what
     comes *out*. A ``FrameHead`` emits one value per frame; this emits one per frequency
     bin per frame. That difference is why the two tap the backbone at different points
-    and why ``CueNet`` keeps them in separate dicts.
+    and why ``FrameNet`` keeps them in separate dicts.
 
     Pitch is its only instance today. It is written as the general shape rather than as
     "the pitch branch" because nothing in it is about pitch -- a polyphonic pitch head,

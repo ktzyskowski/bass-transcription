@@ -17,7 +17,7 @@ from pathlib import Path
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.core.metrics.note.fragmentation import Fragmentation
 from stemify.core.metrics.note.prf import PRF
 from stemify.core.metrics.note.scoring import score_notes
@@ -31,7 +31,7 @@ IGNORE_PITCH = 1e6  # cents: any pitch matches, so matching is onset-only
 print(f"{'condition':12} {'F1':>8} {'F1 no-pitch':>12} {'gain':>8} {'pitch share':>12}")
 for tag, ckpt in [a.split("=") for a in sys.argv[1:]]:
     condition = CONDITIONS[tag]
-    model = load_cuenet(Path(ckpt))
+    model = load_framenet(Path(ckpt))
     validator = CheckpointValidator(
         condition.dataset(ROOT, "validation", 20), condition, cache=CACHE
     )

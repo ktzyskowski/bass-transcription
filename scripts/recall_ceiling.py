@@ -50,7 +50,7 @@ from stemify.transcription.decoders.greedy import (
     onset_times_from_probs,
 )
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.audio.features import BINS_PER_SEMITONE, midi_to_bin
 from stemify.core.metrics.note.base import ONSET_TOLERANCE_S, matched_pairs
 from stemify.music.notes import NoteEvent
@@ -239,7 +239,7 @@ def collect(tag: str, ckpt: Path, limit: int, threshold: float) -> list[RefNote]
     if missing:
         raise ValueError(f"no clean stem for {len(missing)} track(s): {missing[:5]}")
 
-    encoder = LearnedEncoder(load_cuenet(ckpt))
+    encoder = LearnedEncoder(load_framenet(ckpt))
     decoder = GreedyDecoder(onset_threshold=threshold)
 
     rows: list[RefNote] = []

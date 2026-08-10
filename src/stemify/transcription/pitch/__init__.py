@@ -2,7 +2,7 @@
 
 ``PitchEstimator`` is the interface and ``PyinPitch`` the DSP implementation. The
 learned one, ``NeuralPitch``, is not here: it is a trained pitch head wearing this
-contract, so it lives in ``stemify.models`` beside the ``CueNet`` it reads.
+contract, so it lives in ``stemify.models`` beside the ``FrameNet`` it reads.
 
 The contract staying here while the neural implementation sits a layer up is the point
 of both -- ``PitchEstimator`` is what lets ``ensure_contour`` and ``ClassicalEncoder`` accept

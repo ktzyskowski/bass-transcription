@@ -24,7 +24,7 @@ from pathlib import Path
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.training.checkpoint import load_cuenet
+from stemify.training.checkpoint import load_framenet
 from stemify.core.metrics.note.base import matched_pairs
 from stemify.core.metrics.note.fragmentation import Fragmentation
 from stemify.core.metrics.note.prf import prf_rates
@@ -79,7 +79,7 @@ class Bench:
         condition = CONDITIONS[canonical(tag)]
         dataset = condition.dataset(ROOT, split, limit)
         validator = CheckpointValidator(dataset, condition, cache=Store(CACHE_DIR))
-        encoder = LearnedEncoder(load_cuenet(ckpt))
+        encoder = LearnedEncoder(load_framenet(ckpt))
         self.cues = [
             encoder.encode_features(ex.contour, ex.load_features())
             for ex in validator.examples

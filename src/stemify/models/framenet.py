@@ -1,4 +1,4 @@
-"""``CueNet``: a backbone + named heads -> per-frame logits per head.
+"""``FrameNet``: a backbone + named heads -> per-frame logits per head.
 
 The trainable core a ``LearnedEncoder`` wraps. ``heads`` may hold one entry (train
 onset alone) or several (joint); the backbone is shared across whatever heads are
@@ -14,7 +14,7 @@ from stemify.models.heads import FrameHead
 from stemify.models.networks import TCN
 
 
-class CueNet(nn.Module):
+class FrameNet(nn.Module):
     """Backbone + named heads -> {head_name: (B, T, out_dim) logits}."""
 
     # ``TCN``, not ``nn.Module``. This used to accept any backbone exposing ``.hidden``

@@ -8,7 +8,7 @@ local attack shape onset detection keys on.
 
 There was also a ``GRU`` here, a BiGRU kept as an ablation baseline. It was removed
 rather than left standing: nothing built one, and it could not host the frequency
-head. ``CueNet`` taps ``frequency_and_frame`` for a ``FrequencyHead``, which only
+head. ``FrameNet`` taps ``frequency_and_frame`` for a ``FrequencyHead``, which only
 this backbone defines -- so a tagger built on the GRU with a pitch head raised
 ``AttributeError`` on its first forward pass, while the module docstring advertised the
 two as interchangeable. The path forward is a neural CRF, not a second backbone.

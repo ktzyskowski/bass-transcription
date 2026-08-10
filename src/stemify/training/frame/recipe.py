@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.transcription.decoders.greedy import GreedyDecoder
-from stemify.models.assembly import build_cuenet
-from stemify.models.cuenet import CueNet
+from stemify.models.assembly import build_framenet
+from stemify.models.framenet import FrameNet
 from stemify.fitting.base import (
     Loss,
     Recipe,
@@ -136,8 +136,8 @@ class FrameRecipe(Recipe):
             "harmonics": ",".join(str(h) for h in self.harmonics),
         }
 
-    def build_model(self) -> CueNet:
-        return build_cuenet(self.in_channels, self.harmonics, self.pitch)
+    def build_model(self) -> FrameNet:
+        return build_framenet(self.in_channels, self.harmonics, self.pitch)
 
     def build_loss(self) -> Loss[FrameBatch]:
         return FrameBCELoss(self.heads, self.pos_weight)

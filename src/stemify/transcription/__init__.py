@@ -22,7 +22,7 @@ every learned result is quoted against.
 **This sits below ``models``, and that is the load-bearing fact.** ``models`` implements
 these contracts (``LearnedEncoder``, ``NeuralPitch``) and reads this ``Frames``, so
 nothing here may know that torch exists. That is also why the *fitting* contracts are a
-different layer and not this one: ``Recipe.build_model()`` returns a ``CueNet``, so it
+different layer and not this one: ``Recipe.build_model()`` returns a ``FrameNet``, so it
 depends on ``models`` where these are depended *on* by it. One package holding both
 would import ``models`` while ``models`` imports it -- the cycle, relocated rather than
 removed.

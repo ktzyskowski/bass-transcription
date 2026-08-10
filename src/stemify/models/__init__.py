@@ -16,13 +16,13 @@ model in ``.eval()``, and ``stemify-transcribe`` needs them. Putting them in
 Why it is not part of ``core`` either: a contract should be satisfiable without the
 thing satisfying it. ``Encoder`` and ``PitchEstimator`` are core ABCs precisely so that
 ``ClassicalEncoder``/``PyinPitch`` (DSP, no torch) and ``LearnedEncoder``/``NeuralPitch``
-(a ``CueNet``) can both wear them without either knowing about the other.
+(a ``FrameNet``) can both wear them without either knowing about the other.
 
     core/       Encoder, PitchEstimator, Decoder, Frames, Contour -- the contracts
-    models/     TCN -> CueNet -> heads, plus LearnedEncoder and NeuralPitch
-    training/   fits a CueNet; imports this directly, never through an encoder
+    models/     TCN -> FrameNet -> heads, plus LearnedEncoder and NeuralPitch
+    training/   fits a FrameNet; imports this directly, never through an encoder
 
-``CueNet`` is the composition point -- a backbone plus named heads -- and it is what a
+``FrameNet`` is the composition point -- a backbone plus named heads -- and it is what a
 checkpoint stores. Everything is re-exported, since a caller wanting a network
 invariably wants a head and a wrapper too.
 """
@@ -38,14 +38,14 @@ from stemify.models.heads import (
     voicing_head,
 )
 from stemify.models.networks import TCN, tcn_receptive_field
-from stemify.models.cuenet import CueNet
+from stemify.models.framenet import FrameNet
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.neural_pitch import NeuralPitch
 
 __all__ = [
     "TCN",
     "FrameHead",
-    "CueNet",
+    "FrameNet",
     "FrequencyHead",
     "LearnedEncoder",
     "NeuralPitch",
