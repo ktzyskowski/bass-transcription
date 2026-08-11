@@ -26,7 +26,8 @@ scan that runs the length of the track. See ``docs/semi-crf.md`` and
 ``docs/gpu-throughput-plan.md``.
 """
 
-from typing import cast
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 import torch
 
@@ -101,13 +102,59 @@ def step_terms(
     return inner + unary, arg_prev
 
 
+@dataclass(frozen=True)
+class Capture:
+    """Where each row's track truly ends -- the ragged whole-track readout.
+
+    One object rather than the ``ends``/``captured`` pair it replaces. That pair was two
+    optional parameters that were only meaningful together (a map of step to rows, and a
+    list to write their alpha into), guarded by a runtime check that they were both
+    present or both absent. A single optional cannot be half-supplied, so the check has
+    nothing left to catch.
+
+    It also removes an **out-parameter**: ``captured`` was a caller-owned list the scan
+    mutated, so ``scan`` had a second, invisible output. It returns its captures now,
+    which is what makes the recurrence a function of its arguments.
+    """
+
+    ends: dict[int, list[int]]
+    """Step index -> the batch rows whose track ends at that step."""
+
+    @classmethod
+    def at_lengths(cls, lengths: Sequence[int]) -> "Capture":
+        """The capture implied by each row's true length, which is where it always
+        comes from -- a padded batch of ragged tracks."""
+        ends: dict[int, list[int]] = {}
+        for b, length in enumerate(lengths):
+            ends.setdefault(int(length), []).append(b)
+        return cls(ends)
+
+    def rows_ending_at(self, step: int) -> list[int]:
+        return self.ends.get(step, [])
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    """What a scan produced: the final alpha window, and any captured rows.
+
+    A single return type whether or not a ``Capture`` was asked for, so the recurrence
+    has one signature and no caller branches on what it got back. ``captured`` is empty
+    when nothing was captured.
+    """
+
+    window: torch.Tensor
+    captured: dict[int, torch.Tensor] = field(default_factory=dict)
+    """Row index -> that row's alpha at the step its track ended. A dict rather than a
+    list-with-holes: a row that was never captured is *absent*, which a caller can check
+    exhaustively, rather than ``None`` in a slot that also means "not yet written"."""
+
+
 def scan(
     scorer: SpanScorer,
     ev: Evidence,
     grid: Grid,
     window: torch.Tensor,
-    ends: dict[int, list[int]] | None = None,
-    captured: list[torch.Tensor | None] | None = None,
+    capture: Capture | None = None,
     start: int = 0,
     stop: int | None = None,
     *,
@@ -115,7 +162,7 @@ def scan(
     bias: torch.Tensor | None = None,
     perturb: torch.Tensor | None = None,
     witness: torch.Tensor | None = None,
-) -> torch.Tensor:
+) -> ScanResult:
     """The segmental recurrence from ``window``; returns the final alpha window.
 
     **The only loop over the recurrence.** ``semiring`` decides what the alternatives
@@ -124,9 +171,9 @@ def scan(
     ragged readout, the context trimming) is identical either way. Viterbi used to carry
     a second copy of this loop for the sake of one differing line.
 
-    ``ends`` maps a step index to the batch rows whose track truly ends there; those
-    rows' alpha are written into ``captured``. Only the whole-track path needs it -- a
-    uniform chunk reads its answer off the returned window.
+    ``capture`` names the step each row's track truly ends at; those rows' alpha are
+    returned in ``ScanResult.captured``. Only the whole-track path needs it -- a uniform
+    chunk reads its answer off the returned window.
 
     ``start`` skips that many leading frames: they are *left context*, present only so
     spans reaching back past a chunk boundary can read their cue values, and already
@@ -151,13 +198,8 @@ def scan(
     point at is an error rather than a silent no-op, because the traceback that follows
     would read zeros and return a plausible wrong segmentation.
     """
-    if (ends is None) != (captured is None):
-        raise ValueError(
-            "`ends` and `captured` are two halves of the ragged whole-track readout -- "
-            "where each row ends, and where its alpha is written -- so passing one "
-            "without the other asks for a capture with nowhere to go"
-        )
     B = ev.B
+    captured: dict[int, torch.Tensor] = {}
     stop = ev.T if stop is None else stop
     n_rows = scorer.labels.n_rows
     neg_col = ev.onset_logit.new_full((B, 1), semiring.zero)
@@ -194,11 +236,11 @@ def scan(
             best_prev = arg_prev.gather(1, arg_start.unsqueeze(1)).squeeze(1)
             witness[j] = arg_start * n_rows + best_prev
         new = torch.cat([val, neg_col], dim=1)                 # (B, n_rows)
-        if ends is not None and captured is not None:
-            for b in ends.get(j, ()):
+        if capture is not None:
+            for b in capture.rows_ending_at(j):
                 captured[b] = new[b]
         window = push(window, new)
-    return window
+    return ScanResult(window, captured)
 
 
 def log_partitions(
@@ -216,27 +258,26 @@ def log_partitions(
     # Each track is read out at its *own* length, which the rolling window cannot hold:
     # lengths differ by far more than dmax (16617 vs 23355 on a real batch). So capture
     # alpha[L][b] as j passes each track's L, instead of retaining all Tmax.
-    ends: dict[int, list[int]] = {}
-    for b, length in enumerate(ev.lengths):
-        ends.setdefault(length, []).append(b)
-    captured: list[torch.Tensor | None] = [None] * ev.B
-    for b in ends.get(0, ()):                          # an empty track ends at START
+    capture = Capture.at_lengths(ev.lengths)
+    captured = dict(scan(scorer, ev, grid, window, capture, perturb=perturb).captured)
+    # An empty track ends at START, before the scan's first step, so no step can capture
+    # it. Filled from the seeded window instead -- the same alpha the scan would have
+    # read had it run for zero steps.
+    for b in capture.rows_ending_at(0):
         captured[b] = window[b, -1]
-
-    scan(scorer, ev, grid, window, ends, captured, perturb=perturb)
     # Every row is written: `ends` is keyed by `ev.lengths`, no length exceeds `ev.T`
     # (Tmax *is* the max), and the scan visits every j in [1, T]. Checked rather than
     # cast, because a row left unwritten means a track whose length the evidence and
     # the scan disagree about -- and `torch.stack` would report that as a bare TypeError
     # about NoneType, several frames from the cause.
-    missing = [b for b, a in enumerate(captured) if a is None]
+    missing = [b for b in range(ev.B) if b not in captured]
     if missing:
         raise RuntimeError(
             f"rows {missing} were never captured: their lengths "
             f"{[ev.lengths[b] for b in missing]} lie outside the scanned range "
             f"[1, {ev.T}]"
         )
-    alphas = cast(list[torch.Tensor], captured)
+    alphas = [captured[b] for b in range(ev.B)]
     return torch.logsumexp(torch.stack(alphas)[:, : scorer.labels.n_labels], dim=1)
 
 
@@ -293,5 +334,5 @@ def chunk_log_partition(
         initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows)
         if carry is None else carry
     )
-    window = scan(scorer, ev, grid, window, start=context, stop=Tmax - right)
+    window = scan(scorer, ev, grid, window, start=context, stop=Tmax - right).window
     return torch.logsumexp(window[:, -1, : scorer.labels.n_labels], dim=1), window

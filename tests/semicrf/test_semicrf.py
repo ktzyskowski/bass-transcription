@@ -347,7 +347,7 @@ def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
     window = scan(
         dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax, rows),
         stop=T, semiring=MAX_PLUS,
-    )
+    ).window
     got = float(window[0, -1, : dec.scorer.labels.n_labels].max().detach())
     assert abs(got - best) < 1e-4, f"max-plus scan says {got}, enumeration says {best}"
 

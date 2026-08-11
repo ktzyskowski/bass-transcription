@@ -256,16 +256,41 @@ class Evidence:
 
 
 
-def _track_tensors(
-    cues: Frames, stride: int, device: torch.device
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    np.ndarray,
-    tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None,
-    torch.Tensor | None,
-]:
+@dataclass(frozen=True)
+class _PitchCumsums:
+    """One track's four pitch prefix sums. Present together or not at all -- they come
+    from the same logits in one pass, so a partial set is not a state that exists."""
+
+    path: torch.Tensor
+    entropy: torch.Tensor
+    pitch: torch.Tensor
+    logprob: torch.Tensor
+
+
+@dataclass(frozen=True)
+class _TrackTensors:
+    """One track's per-frame tensors, before padding into a batch.
+
+    Named fields rather than the six-tuple this was, which the padding loop indexed as
+    ``t[0]`` through ``t[5]`` and tested for presence as ``t[4] is not None``. The
+    fields carry no coordinate ambiguity -- they are all on the strided grid -- but
+    positional access across sixty lines is its own way to read the wrong one.
+    """
+
+    onset_logit: torch.Tensor
+    voiced_c: torch.Tensor
+    rest_c: torch.Tensor
+    frame_times: np.ndarray
+    pitch: _PitchCumsums | None
+    hidden: torch.Tensor | None
+
+    @property
+    def length(self) -> int:
+        """DP frames in this track -- what the batch pads up to ``Tmax``."""
+        return int(self.onset_logit.shape[0])
+
+
+def _track_tensors(cues: Frames, stride: int, device: torch.device) -> _TrackTensors:
     """One track's per-frame tensors, pitch cumsums included when it has a pitch head."""
     frame_times = np.ascontiguousarray(cues.frame_times[::stride])
     # Stride first, place second: the slice is cheap on the source device and only the
@@ -282,12 +307,12 @@ def _track_tensors(
     if logits is not None:
         strided = on_device(logits, device)[::stride]
         n_semitones = strided.shape[-1] // BINS_PER_SEMITONE
-        pitch = (
+        pitch = _PitchCumsums(
             *pitch_cumsums(strided),
             pitch_logprob_cumsum(strided, n_semitones),
         )
     hidden = None if cues.hidden is None else on_device(cues.hidden, device)[::stride]
-    return onset_logit, Vc, Uc, frame_times, pitch, hidden
+    return _TrackTensors(onset_logit, Vc, Uc, frame_times, pitch, hidden)
 
 
 def build_evidence(
@@ -314,66 +339,130 @@ def build_evidence(
     device = frames_device(batch[0]) if device is None else torch.device(device)
 
     built = [_track_tensors(c, stride, device) for c in batch]
-    lengths = [int(t[0].shape[0]) for t in built]
-    B, Tmax = len(built), max(lengths)
-
-    onset = built[0][0].new_zeros(B, Tmax)
-    Vc = onset.new_zeros(B, Tmax + 1)
-    Uc = onset.new_zeros(B, Tmax + 1)
-    # Bind the first track's pitch cumsums rather than re-indexing `built`: the
-    # buffers below exist exactly when this is non-None, and writing that as one
-    # name is what makes the coupling visible instead of implied by two `has_pitch`
-    # reads several lines apart.
-    first_pitch = built[0][4]
-    if first_pitch is not None and any(t[4] is None for t in built):
-        raise ValueError(
-            "batch mixes tracks with and without pitch logits; every track in a batch "
-            "must come from the same model, or the span features silently read zeros "
-            "for some rows and real evidence for others"
-        )
-    # The trunk pads *flat* like the cumsums rather than with zeros: a scorer builds
-    # its own prefix sums over a learned projection of this, and a projection has a
-    # bias, so zero frames past a track's end would still accrue mass into every
-    # prefix. Repeating the last real frame keeps the padded tail bounded by
-    # something the encoder actually produced.
-    Hd = None
-    if built[0][5] is not None:
-        if any(t[5] is None for t in built):
-            raise ValueError(
-                "batch mixes tracks with and without backbone activations; a scorer "
-                "that pools the trunk would read a learned projection of real "
-                "features for some rows and of padding for others"
-            )
-        Hd = onset.new_zeros(B, Tmax, built[0][5].shape[-1])
-    Pc = Hc = Dc = Lc = None
-    if first_pitch is not None:
-        K = first_pitch[2].shape[-1]
-        Pc = onset.new_zeros(B, Tmax + 1)
-        Hc = onset.new_zeros(B, Tmax + 1)
-        Dc = onset.new_zeros(B, Tmax + 1, K)
-        Lc = onset.new_zeros(B, Tmax + 1, first_pitch[3].shape[-1])
-
-    for b, (o, v, u, _, pitch, hd) in enumerate(built):
-        t = lengths[b]
-        onset[b, :t] = o
-        Vc[b, : t + 1], Vc[b, t + 1 :] = v, v[-1]  # flat past the end
-        Uc[b, : t + 1], Uc[b, t + 1 :] = u, u[-1]
-        if Hd is not None and hd is not None:
-            Hd[b, :t], Hd[b, t:] = hd, hd[-1]
-        if pitch is None or Pc is None or Hc is None or Dc is None or Lc is None:
-            continue
-        pc, hc, dc, lc = pitch
-        Pc[b, : t + 1], Pc[b, t + 1 :] = pc, pc[-1]
-        Hc[b, : t + 1], Hc[b, t + 1 :] = hc, hc[-1]
-        Dc[b, : t + 1], Dc[b, t + 1 :] = dc, dc[-1]
-        Lc[b, : t + 1], Lc[b, t + 1 :] = lc, lc[-1]
+    _require_one_model(built)
+    padded = _pad(built)
 
     # A batch of contours only when every track has one: a partial list would silently
     # give some decoded notes a pyin pitch and others none.
     maybe = [c.contour for c in batch]
     contours = None if any(c is None for c in maybe) else cast(list[Contour], maybe)
     return Evidence(
-        onset_logit=onset, voiced_c=Vc, rest_c=Uc, lengths=lengths,
-        frame_times=[t[3] for t in built], contours=contours,
-        path_c=Pc, entropy_c=Hc, pitch_c=Dc, pitch_logprob_c=Lc, hidden=Hd,
+        onset_logit=padded.onset_logit,
+        voiced_c=padded.voiced_c,
+        rest_c=padded.rest_c,
+        lengths=[t.length for t in built],
+        frame_times=[t.frame_times for t in built],
+        contours=contours,
+        path_c=padded.path_c,
+        entropy_c=padded.entropy_c,
+        pitch_c=padded.pitch_c,
+        pitch_logprob_c=padded.pitch_logprob_c,
+        hidden=padded.hidden,
     )
+
+
+def _require_one_model(built: list[_TrackTensors]) -> None:
+    """Every track in a batch must come from the same model.
+
+    Raised here, once, rather than guarded at each scatter site: a batch that mixes
+    these produces a wrong number rather than a crash, so the check has to be the thing
+    that stops it.
+    """
+    if len({t.pitch is not None for t in built}) > 1:
+        raise ValueError(
+            "batch mixes tracks with and without pitch logits; every track in a batch "
+            "must come from the same model, or the span features silently read zeros "
+            "for some rows and real evidence for others"
+        )
+    if len({t.hidden is not None for t in built}) > 1:
+        raise ValueError(
+            "batch mixes tracks with and without backbone activations; a scorer that "
+            "pools the trunk would read a learned projection of real features for some "
+            "rows and of padding for others"
+        )
+
+
+@dataclass(frozen=True)
+class _Padded:
+    """The ``(B, Tmax, ...)`` buffers a batch of tracks scatters into.
+
+    A dataclass rather than the ``dict[str, Tensor | None]`` this first was: splatting
+    such a dict into ``Evidence(**padded)`` erases every argument's type at the call,
+    which is the failure mode this codebase already names elsewhere -- a field renamed
+    on one side and silently unfilled on the other.
+    """
+
+    onset_logit: torch.Tensor
+    voiced_c: torch.Tensor
+    rest_c: torch.Tensor
+    path_c: torch.Tensor | None = None
+    entropy_c: torch.Tensor | None = None
+    pitch_c: torch.Tensor | None = None
+    pitch_logprob_c: torch.Tensor | None = None
+    hidden: torch.Tensor | None = None
+
+
+def _pad(built: list[_TrackTensors]) -> _Padded:
+    """Scatter per-track tensors into ``(B, Tmax, ...)`` buffers.
+
+    Grad-preserving: the buffers are allocated off the first track and written into, so
+    autograd reaches the per-track tensors through the scatter.
+
+    **Padded flat, not with zeros.** Every buffer here but ``onset_logit`` is a prefix
+    sum, and a span's feature is a *difference* of two of them -- so a zero tail would
+    make every span reaching past a track's end read a discontinuity rather than
+    nothing. Repeating the last real value keeps those differences zero. ``hidden``
+    pads the same way for a subtler reason: a scorer builds its own prefix sums over a
+    learned projection of it, and a projection has a bias, so zero frames past the end
+    would still accrue mass into every prefix.
+    """
+    lengths = [t.length for t in built]
+    B, Tmax = len(built), max(lengths)
+    ref = built[0].onset_logit
+    first = built[0]
+
+    onset = ref.new_zeros(B, Tmax)
+    voiced_c = ref.new_zeros(B, Tmax + 1)
+    rest_c = ref.new_zeros(B, Tmax + 1)
+    hidden = (
+        None if first.hidden is None
+        else ref.new_zeros(B, Tmax, first.hidden.shape[-1])
+    )
+    path_c = entropy_c = pitch_c = logprob_c = None
+    if first.pitch is not None:
+        path_c = ref.new_zeros(B, Tmax + 1)
+        entropy_c = ref.new_zeros(B, Tmax + 1)
+        pitch_c = ref.new_zeros(B, Tmax + 1, first.pitch.pitch.shape[-1])
+        logprob_c = ref.new_zeros(B, Tmax + 1, first.pitch.logprob.shape[-1])
+
+    for b, track in enumerate(built):
+        t = track.length
+        onset[b, :t] = track.onset_logit
+        _flat_pad(voiced_c, b, t, track.voiced_c)
+        _flat_pad(rest_c, b, t, track.rest_c)
+        if hidden is not None and track.hidden is not None:
+            hidden[b, :t], hidden[b, t:] = track.hidden, track.hidden[-1]
+        if track.pitch is not None:
+            _flat_pad(path_c, b, t, track.pitch.path)
+            _flat_pad(entropy_c, b, t, track.pitch.entropy)
+            _flat_pad(pitch_c, b, t, track.pitch.pitch)
+            _flat_pad(logprob_c, b, t, track.pitch.logprob)
+
+    return _Padded(
+        onset_logit=onset, voiced_c=voiced_c, rest_c=rest_c,
+        path_c=path_c, entropy_c=entropy_c, pitch_c=pitch_c,
+        pitch_logprob_c=logprob_c, hidden=hidden,
+    )
+
+
+def _flat_pad(
+    buffer: torch.Tensor | None, row: int, length: int, values: torch.Tensor
+) -> None:
+    """Write one track's prefix sums into ``buffer[row]``, repeating the last value.
+
+    A prefix sum has ``length + 1`` entries -- one per boundary, not one per frame --
+    which is why the slice ends at ``length + 1`` and the flat tail begins there.
+    """
+    assert buffer is not None            # allocated together with the field it holds
+    buffer[row, : length + 1] = values
+    buffer[row, length + 1 :] = values[-1]

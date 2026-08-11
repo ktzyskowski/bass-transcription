@@ -60,9 +60,10 @@ def viterbi(
         (T + 1, ev.B, scorer.labels.n_labels), dtype=torch.long
     )
     window = scan(
-        scorer, ev, grid, initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows),
+        scorer, ev, grid,
+        initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows),
         stop=T, semiring=MAX_PLUS, bias=bias, witness=back,
-    )
+    ).window
 
     last = window[:, -1]
     label = int(last[0, : scorer.labels.n_labels].argmax())

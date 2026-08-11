@@ -9,6 +9,7 @@ import numpy as np
 
 from stemify.semicrf.constants import GAP_REST_S
 from stemify.semicrf.labelset import BINARY, LabelSet
+from stemify.semicrf.segmentation import TrackSegmentation
 from stemify.music.notes import NoteEvent
 
 
@@ -17,7 +18,7 @@ def gold_segments(
     ref: list[NoteEvent],
     dmax: int,
     labels: LabelSet = BINARY,
-) -> list[tuple[int, int, int]]:
+) -> TrackSegmentation:
     """Tile ``[0, T)`` into ``(label, i, j)`` gold segments from reference notes.
 
     Each note is a ``note`` span (clipped to ``dmax``); the space between notes is a
@@ -70,4 +71,4 @@ def gold_segments(
         cur = j
     if cur < T:
         add_rest(cur, T)
-    return segs
+    return TrackSegmentation(segs)

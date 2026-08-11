@@ -21,10 +21,11 @@ from collections.abc import Sequence
 import torch
 
 from stemify.semicrf.evidence import Evidence
+from stemify.semicrf.segmentation import Segmentation
 from stemify.semicrf.spans import Grid, SpanScorer
 
 # One segment: (label, start frame, end frame), end exclusive.
-Segmentation = list[tuple[int, int, int]]
+
 
 
 def _prev_labels(
@@ -51,7 +52,7 @@ def _prev_labels(
 def segmentation_scores(
     scorer: SpanScorer,
     ev: Evidence,
-    per_track: list[Segmentation],
+    per_track: Sequence[Segmentation],
     grid: Grid,
     prev_labels: Sequence[int] | None = None,
 ) -> torch.Tensor:

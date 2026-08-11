@@ -36,6 +36,11 @@ nothing measurable, and the DP stays raw tensors where it is launch-bound.
 
 from dataclasses import dataclass
 
+from stemify.semicrf.segmentation import (
+    LocalSegmentation,
+    TrackSegmentation,
+)
+
 
 @dataclass(frozen=True)
 class ChunkGeometry:
@@ -134,6 +139,17 @@ class ChunkFrame:
     def to_track(self, local_dp_frame: int) -> int:
         """The inverse of ``localise``."""
         return local_dp_frame + self.origin
+
+    def localise_all(self, gold: TrackSegmentation) -> LocalSegmentation:
+        """A gold tiling in track DP frames, rebased into this window's own.
+
+        **The one crossing between the two frames**, which is what makes the tags worth
+        having: every other function takes one or the other and mypy refuses the mix.
+        Labels ride through untouched -- only the indices are in a coordinate system.
+        """
+        return LocalSegmentation(
+            [(label, self.localise(i), self.localise(j)) for label, i, j in gold]
+        )
 
     def cqt_window(self) -> tuple[int, int]:
         """``(start, width)`` in CQT frames -- the slice to read features from.

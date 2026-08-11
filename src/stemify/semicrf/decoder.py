@@ -35,6 +35,7 @@ from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.score import segmentation_scores
 from stemify.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
+from stemify.semicrf.segmentation import Segmentation
 from stemify.semicrf.marginals import segment_confidence, span_marginals
 from stemify.semicrf.viterbi import viterbi
 from stemify.music.notes import NoteEvent
@@ -116,7 +117,7 @@ class SemiCRFDecoder(Decoder, nn.Module):
     def nll_chunk(
         self,
         frames_list: Sequence[Frames],
-        golds: list[list[tuple[int, int, int]]],
+        golds: Sequence[Segmentation],
         carry: torch.Tensor | None,
         context: int,
         right: int = 0,

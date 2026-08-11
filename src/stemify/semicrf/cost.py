@@ -39,7 +39,9 @@ from collections.abc import Sequence
 
 import torch
 
-Segmentation = Sequence[tuple[int, int, int]]
+from stemify.semicrf.segmentation import Segmentation
+
+
 
 
 def boundary_cost(

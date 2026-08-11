@@ -31,14 +31,14 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from stemify.audio.features import SILENCE_DB
 from stemify.semicrf.fit.geometry import ChunkGeometry
+from stemify.semicrf.segmentation import LocalSegmentation, TrackSegmentation
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.tracks import (
     TrainItem, channel_window, target_windows,
 )
 
-# Segmentation of one chunk in *window-local* DP indices: (label, start, end).
-Segmentation = list[tuple[int, int, int]]
+
 
 
 @dataclass
@@ -56,7 +56,7 @@ class Chunk:
 
     features: np.ndarray       # (C, n_bins, window CQT frames)
     frame_times: np.ndarray    # (window CQT frames,) absolute seconds
-    gold: Segmentation         # window-local DP indices, ends inside this chunk
+    gold: LocalSegmentation    # this window's own DP indices; ends inside the chunk
     y: dict[str, np.ndarray]   # {head: (window CQT frames,)}, NaN where off the track
     stream: int                # which stream row this continues
     reset: bool                # the carry starts fresh here: a track's or a segment's
@@ -74,7 +74,7 @@ class ChunkBatch:
 
     features: torch.Tensor          # (B, C, n_bins, window)
     y: dict[str, torch.Tensor]      # {head: (B, window)}, on the feature grid
-    golds: list[Segmentation]
+    golds: list[LocalSegmentation]
     frame_times: list[np.ndarray]
     geometry: ChunkGeometry         # how the dataset cut the track; see `fit.geometry`
     streams: list[int]
@@ -169,7 +169,7 @@ class _Track:
 
     def __getitem__(
         self, c: int
-    ) -> tuple[np.ndarray, np.ndarray, Segmentation, dict[str, np.ndarray], int]:
+    ) -> tuple[np.ndarray, np.ndarray, LocalSegmentation, dict[str, np.ndarray], int]:
         lo, hi = c * self._chunk, (c + 1) * self._chunk
         # Origin is negative on a track's first chunk: the window begins before the
         # track does and is zero-padded there.
@@ -189,14 +189,7 @@ class _Track:
         keep = [k for k, (_, _, j) in enumerate(self._gold) if lo < j <= hi]
         # Track DP frames become this window's own here -- the one coordinate change
         # in the pipeline, and the seam both recorded bugs in this area came through.
-        gold = [
-            (
-                self._gold[k][0],
-                frame.localise(self._gold[k][1]),
-                frame.localise(self._gold[k][2]),
-            )
-            for k in keep
-        ]
+        gold = frame.localise_all(TrackSegmentation([self._gold[k] for k in keep]))
         # What the *previous* chunk ended on. Gold tiles the track contiguously, so the
         # segment before this chunk's first is simply the one before it in that tiling
         # -- and on a track's first chunk there is none, which is the only place START
