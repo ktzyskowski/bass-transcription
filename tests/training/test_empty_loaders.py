@@ -33,6 +33,8 @@ from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.tracks import TrainItem
 from stemify.training.trainer import Trainer
 
+from spanscorer import CueScorer
+
 N_BINS, HOP_S = 12, 0.0116
 N_CQT = 600
 
@@ -146,7 +148,7 @@ def test_the_semicrf_loss_reaches_the_trainer_guard_too(tmp_path):
 
     items = [_item(tmp_path, "only")]
     trainer = Trainer(
-        _Tagger(), SemiCRFLoss(SemiCRFDecoder(stride=3)), TrainConfig(device="cpu")
+        _Tagger(), SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3)), TrainConfig(device="cpu")
     )
     with pytest.raises(ValueError, match="cannot fill"):
         trainer.fit(_chunks(items, batch_size=2))

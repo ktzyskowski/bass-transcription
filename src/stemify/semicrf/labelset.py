@@ -24,7 +24,7 @@ rather than square.
 
 **Pitches come first, and that ordering is load-bearing.** At one pitch the alphabet is
 ``{note: 0, rest: 1, START: 2}`` -- bit-for-bit the integers ``constants.NOTE/REST/START``
-already hold. ``LinearSpanScorer.trans`` is *indexed by those integers* and rides in the
+already hold. A scorer's transition table is *indexed by those integers* and rides in the
 state dict, so any other ordering would load every existing checkpoint with its
 transition rows permuted: no error, no shape mismatch, just a different model. Putting
 rest first reads more naturally and is not worth that.

@@ -56,15 +56,15 @@ def expected_notes(decoder, cues) -> tuple[float, int]:
     Summed out of the span marginals rather than differentiated against a *named*
     parameter. It used to read ``d log Z / d b_note``, which is the same number only
     while a scorer happens to carry a scalar that adds one to every note span --
-    ``LinearSpanScorer`` does, a neural one does not. By linearity of expectation
+    a hand-built one might, a neural one does not. By linearity of expectation
     ``E[count] = sum over spans of P(span)``, so summing the marginals over the pitch
     labels asks the distribution directly and works for any scorer.
     """
-    ev, grid = decoder._prepare([cues])
+    ev, dmax = decoder._prepare([cues])
     labels = decoder.scorer.labels
-    marginal = span_marginals(decoder.scorer, ev, grid)   # (1, T+1, dmax, n_labels)
+    marginal = span_marginals(decoder.scorer, ev, dmax)   # (1, T+1, dmax, n_labels)
     expected = float(marginal[..., : labels.n_pitches].sum())
-    segs = viterbi(decoder.scorer, ev, grid)
+    segs = viterbi(decoder.scorer, ev, dmax)
     return expected, sum(1 for label, _, _ in segs if labels.is_note(label))
 
 
@@ -75,10 +75,10 @@ def solve_bias(decoder, cues, target: float, lo: float = -2.0, hi: float = 3.0,
     Bisection is valid because the count is monotone in the bias -- ``score(y) + b*k(y)``
     has increasing differences in ``(b, k)``, pinned by a test in ``test_semicrf``.
     """
-    ev, grid = decoder._prepare([cues])
+    ev, dmax = decoder._prepare([cues])
     labels = decoder.scorer.labels
     count = lambda b: sum(
-        1 for label, _, _ in viterbi(decoder.scorer, ev, grid, note_bias=b)
+        1 for label, _, _ in viterbi(decoder.scorer, ev, dmax, note_bias=b)
         if labels.is_note(label)
     )
     for _ in range(iters):

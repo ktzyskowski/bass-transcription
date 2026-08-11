@@ -25,10 +25,10 @@ import torch
 
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import log_partitions
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 
 
-def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor:
+def span_marginals(scorer: SpanScorer, ev: Evidence, dmax: int) -> torch.Tensor:
     """``(B, T+1, dmax, n_labels)``: ``P(span | x)`` for every candidate span and label.
 
     Indexed the way the scan enumerates rather than by ``(i, j)``: entry ``[b, j, d, L]``
@@ -44,11 +44,11 @@ def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
     # raises on the first `term + perturb[:, j]`, taking the confidence decode and
     # the expected-note-count diagnostic with it.
     eps = torch.zeros(
-        (ev.B, ev.T + 1, grid.dmax, scorer.labels.n_labels),
+        (ev.B, ev.T + 1, dmax, scorer.labels.n_labels),
         dtype=ev.onset_logit.dtype, device=ev.device, requires_grad=True,
     )
     with torch.enable_grad():
-        logz = log_partitions(scorer, ev, grid, perturb=eps).sum()
+        logz = log_partitions(scorer, ev, dmax, perturb=eps).sum()
         (marginal,) = torch.autograd.grad(logz, [eps])
     return marginal
 
@@ -56,7 +56,7 @@ def span_marginals(scorer: SpanScorer, ev: Evidence, grid: Grid) -> torch.Tensor
 def segment_confidence(
     marginal: torch.Tensor,
     segs: Sequence[tuple[int, int, int]],
-    grid: Grid,
+    dmax: int,
     row: int = 0,
 ) -> dict[tuple[int, int, int], float]:
     """``P(span | x)`` for each decoded segment, keyed by ``(label, i, j)``.
@@ -76,6 +76,6 @@ def segment_confidence(
     estimate of it, and the number worth acting on is which notes sit at the bottom.
     """
     return {
-        (label, i, j): float(marginal[row, j, min(max(i - j + grid.dmax, 0), grid.dmax - 1), label])
+        (label, i, j): float(marginal[row, j, min(max(i - j + dmax, 0), dmax - 1), label])
         for label, i, j in segs
     }

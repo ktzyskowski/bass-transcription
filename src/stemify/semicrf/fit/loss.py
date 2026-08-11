@@ -77,11 +77,11 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         ``voicing`` (and ``onset``, available but not declared by default) -- the NLL
         *can* supervise it, but only competitively. The objective is discriminative
         over segmentations, so a feature earns gradient in proportion to how much it
-        helps rank gold above the alternatives, and ``LinearSpanScorer`` weights every
-        feature with a learned scalar. Voicing is largely redundant given onset
-        evidence, the duration prior and the transition table -- its unique
-        contribution is spotting rests, which are rare -- so ``w_v``/``w_u`` can shrink
-        toward zero and the head is left orphaned. Measured: voicing AUROC **0.516**
+        helps rank gold above the alternatives, and every one reaches the score
+        through a learned weight. Voicing is largely redundant given onset evidence,
+        the duration prior and the transition table -- its unique contribution is
+        spotting rests, which are rare -- so that weight can shrink toward zero and
+        the head is left orphaned. Measured: voicing AUROC **0.516**
         (chance) under the structured objective alone, against **0.984** for the same
         head under frame BCE. Nothing here forces voicing to *be* voicing; the
         auxiliary term does.
@@ -272,9 +272,9 @@ class SemiCRFLoss(Loss[ChunkBatch]):
                 f"streams {missing} continue a track but have no carry; the loader "
                 "must emit a stream's chunks in order, with reset on the first"
             )
-        dmax = self.decoder.scorer.grid(
+        dmax = self.decoder.scorer.dmax_for(
             batch.frame_times[0][:: self.decoder.stride]
-        ).dmax
+        )
         fresh = self._fresh(batch, device, dmax)
         windows, prev = [], []
         for b, (stream, reset) in enumerate(
@@ -293,8 +293,8 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         self, model: nn.Module, batch: ChunkBatch, device: torch.device
     ) -> tuple[torch.Tensor, dict[str, float]]:
         # The trunk comes along when the model has one to give. A scorer that pools
-        # learned per-frame features reads it; the log-linear scorer does not, and the
-        # test doubles here are bare head stacks with no backbone at all. `None` is
+        # learned per-frame features reads it; the test doubles here are bare head
+        # stacks with no backbone at all. `None` is
         # therefore a real state rather than a fallback, and a scorer that needs the
         # trunk raises when it is missing -- at the scorer, which knows it needs it.
         features = batch.features.to(device)

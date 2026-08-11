@@ -116,16 +116,6 @@ def main() -> None:
                          "0.9999 at init to -0.02 after sixty steps, i.e. it becomes an "
                          "ascent direction. Sets --accumulate-steps, since the single "
                          "backward has to land on a segment boundary. 4 is ~18s")
-    ap.add_argument("--scorer", default="linear", choices=("linear", "neural"),
-                    help="objective semicrf only: what a span is worth. 'linear' is "
-                         "the classical log-linear form -- ~15 scalars against "
-                         "hand-built features, over a {note, rest} alphabet. "
-                         "'neural' learns a per-frame projection of the backbone, "
-                         "pools it over each span by position-weighted moments, and "
-                         "scores an alphabet that names every semitone the pitch "
-                         "head can resolve. Needs --pitch: a pitch label is scored "
-                         "against that head's own per-semitone log-probability, and "
-                         "without it every pitch label scores alike")
     ap.add_argument("--init-from", type=Path,
                     help="warm-start the encoder from a checkpoint's state_dict "
                          "(objective parameters are not restored)")
@@ -250,11 +240,6 @@ def main() -> None:
     if args.objective == "frame":
         strategy_kwargs["pos_weight"] = _parse_pos_weight(args.pos_weight)
         strategy_kwargs["stem_dropout"] = args.stem_dropout
-        if args.scorer != "linear":
-            raise SystemExit(
-                "--scorer applies to --objective semicrf, not 'frame'. The frame "
-                "objective has no span potentials to parameterise."
-            )
         if args.segment_chunks:
             raise SystemExit(
                 "--segment-chunks applies to --objective semicrf, not 'frame'. It "
@@ -312,7 +297,6 @@ def main() -> None:
             strategy_kwargs["voicing_weight"] = args.voicing_weight
         if args.onset_weight is not None:
             strategy_kwargs["onset_weight"] = args.onset_weight
-        strategy_kwargs["scorer"] = args.scorer
         strategy_kwargs["segment_chunks"] = args.segment_chunks
     recipe = RECIPES[args.objective](args.sources.split(","), **strategy_kwargs)
     # Derived, not asked for twice. The undetached carry means one backward per

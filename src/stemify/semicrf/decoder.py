@@ -29,12 +29,12 @@ from torch import nn
 
 from stemify.transcription.frames import Frames
 from stemify.transcription.decoder import Decoder
-from stemify.semicrf.constants import DMAX_S, DUR_EDGES_S, STRIDE
+from stemify.semicrf.constants import STRIDE
 from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.score import segmentation_scores
-from stemify.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.segmentation import Segmentation
 from stemify.semicrf.marginals import segment_confidence, span_marginals
 from stemify.semicrf.viterbi import viterbi
@@ -54,22 +54,15 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
     # Declared, not assigned: a submodule assigned in ``__init__`` is otherwise read
     # back through ``nn.Module.__getattr__``, whose return type is ``Tensor | Module``.
-    # Callers reading the scorer's *geometry* (``dmax_s``, ``dur_edges``) then get a
+    # Callers reading the scorer's *geometry* (``dmax_s``, its alphabet) then get a
     # union that has neither, which is what made ``SemiCRFRecipe`` rebuild a decoder
     # from values the checker could not tell apart from a tensor.
     scorer: SpanScorer
 
-    def __init__(
-        self,
-        *,
-        stride: int = STRIDE,
-        dmax_s: float = DMAX_S,
-        dur_edges_s: np.ndarray = DUR_EDGES_S,
-        scorer: SpanScorer | None = None,
-    ) -> None:
+    def __init__(self, scorer: SpanScorer, *, stride: int = STRIDE) -> None:
         nn.Module.__init__(self)
         self.stride = stride
-        self.scorer = scorer or LinearSpanScorer(dmax_s, dur_edges_s)
+        self.scorer = scorer
 
     @property
     def device(self) -> torch.device:
@@ -81,15 +74,13 @@ class SemiCRFDecoder(Decoder, nn.Module):
         evidence."""
         return next(self.scorer.parameters()).device
 
-    def _prepare(
-        self, frames_list: Sequence[Frames]
-    ) -> tuple[Evidence, Grid]:
-        """Evidence for a batch, and the ``Grid`` its tracks share.
+    def _prepare(self, frames_list: Sequence[Frames]) -> tuple[Evidence, int]:
+        """Evidence for a batch, and the ``dmax`` in frames its tracks share.
 
-        All tracks come off one feature hop, so the grid is derived once from the first
-        rather than per track."""
+        All tracks come off one feature hop, so the segment cap is derived once from the
+        first rather than per track."""
         ev = build_evidence(frames_list, self.stride, self.device)
-        return ev, self.scorer.grid(ev.frame_times[0])
+        return ev, self.scorer.dmax_for(ev.frame_times[0])
 
     def nll(self, frames: Frames, notes: list[NoteEvent]) -> torch.Tensor:
         """``log Z - score(gold)`` for one track -- the batch of one."""
@@ -105,13 +96,13 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
         Both halves read the *same* padded batch: gold indices never reach past a
         track's true length, so the flat padding beyond it is never gathered."""
-        ev, grid = self._prepare(frames_list)
+        ev, dmax = self._prepare(frames_list)
         golds = [
-            gold_segments(ft, n, grid.dmax, self.scorer.labels)
+            gold_segments(ft, n, dmax, self.scorer.labels)
             for ft, n in zip(ev.frame_times, notes_list, strict=True)
         ]
-        return log_partitions(self.scorer, ev, grid) - segmentation_scores(
-            self.scorer, ev, golds, grid
+        return log_partitions(self.scorer, ev, dmax) - segmentation_scores(
+            self.scorer, ev, golds, dmax
         )
 
     def nll_chunk(
@@ -140,9 +131,9 @@ class SemiCRFDecoder(Decoder, nn.Module):
         only of a track's first chunk: ``log Z`` applies the real carried transition, so
         assuming ``START`` here makes the two halves of the NLL score different
         quantities."""
-        ev, grid = self._prepare(frames_list)
-        A, window = chunk_log_partition(self.scorer, ev, grid, carry, context, right)
-        gold = segmentation_scores(self.scorer, ev, golds, grid, prevs)
+        ev, dmax = self._prepare(frames_list)
+        A, window = chunk_log_partition(self.scorer, ev, dmax, carry, context, right)
+        gold = segmentation_scores(self.scorer, ev, golds, dmax, prevs)
         return A, gold, window
 
     def decode(
@@ -162,12 +153,12 @@ class SemiCRFDecoder(Decoder, nn.Module):
         is what said the collapse was a readout and not a worse model. Deliberately a
         call-site argument that nothing persists -- the pipeline decodes uncorrected,
         so no result can silently acquire a constant fitted to somebody's val set."""
-        ev, grid = self._prepare([frames])
+        ev, dmax = self._prepare([frames])
         if ev.lengths[0] == 0:
             return []
-        segs = viterbi(self.scorer, ev, grid, note_bias)
+        segs = viterbi(self.scorer, ev, dmax, note_bias)
         confidence = (
-            segment_confidence(span_marginals(self.scorer, ev, grid), segs, grid)
+            segment_confidence(span_marginals(self.scorer, ev, dmax), segs, dmax)
             if with_confidence else None
         )
         return self._segs_to_notes(segs, ev, confidence)

@@ -33,11 +33,11 @@ import torch
 
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.semiring import LOG, Semiring
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.window import initial_window, push
 
 
-def candidate_starts(grid: Grid, j: int, device: torch.device) -> torch.Tensor:
+def candidate_starts(dmax: int, j: int, device: torch.device) -> torch.Tensor:
     """``(dmax,)`` candidate start frames for a span ending at ``j``, oldest first.
 
     Clamped at 0 so the ramp steps never index out of bounds; those positions pair with
@@ -45,13 +45,13 @@ def candidate_starts(grid: Grid, j: int, device: torch.device) -> torch.Tensor:
     mapping to turn a backpointer's window offset back into a frame index -- deriving
     it twice is how an off-by-one becomes a decode that is wrong only near track
     starts."""
-    return (torch.arange(-grid.dmax, 0, device=device) + j).clamp(min=0)
+    return (torch.arange(-dmax, 0, device=device) + j).clamp(min=0)
 
 
 def step_terms(
     scorer: SpanScorer,
     ev: Evidence,
-    grid: Grid,
+    dmax: int,
     window: torch.Tensor,
     j: int,
     semiring: Semiring = LOG,
@@ -86,9 +86,9 @@ def step_terms(
     """
     B = window.shape[0]
     device = ev.device
-    starts = candidate_starts(grid, j, device)                              # (dmax,)
+    starts = candidate_starts(dmax, j, device)                              # (dmax,)
     rows = torch.arange(B, device=device).unsqueeze(1)                      # (B, 1)
-    unary = scorer.unary(ev, grid, rows, starts.unsqueeze(0), j)     # (B, dmax, n_labels)
+    unary = scorer.unary(ev, dmax, rows, starts.unsqueeze(0), j)     # (B, dmax, n_labels)
     trans = scorer.transitions()                                    # (n_rows, n_labels)
     if not witness:
         return semiring.contract(window, trans) + unary, None
@@ -152,7 +152,7 @@ class ScanResult:
 def scan(
     scorer: SpanScorer,
     ev: Evidence,
-    grid: Grid,
+    dmax: int,
     window: torch.Tensor,
     capture: Capture | None = None,
     start: int = 0,
@@ -205,7 +205,7 @@ def scan(
     neg_col = ev.onset_logit.new_full((B, 1), semiring.zero)
     for j in range(start + 1, stop + 1):
         term, arg_prev = step_terms(
-            scorer, ev, grid, window, j, semiring, witness=witness is not None
+            scorer, ev, dmax, window, j, semiring, witness=witness is not None
         )
         if bias is not None:
             term = term + bias
@@ -246,20 +246,20 @@ def scan(
 def log_partitions(
     scorer: SpanScorer,
     ev: Evidence,
-    grid: Grid,
+    dmax: int,
     perturb: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """``log Z`` per track ``(B,)`` for a padded batch of ragged whole tracks.
 
     ``perturb`` rides through to ``scan``; see ``marginals`` for what differentiating
     with respect to it buys."""
-    window = initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows)
+    window = initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows)
 
     # Each track is read out at its *own* length, which the rolling window cannot hold:
     # lengths differ by far more than dmax (16617 vs 23355 on a real batch). So capture
     # alpha[L][b] as j passes each track's L, instead of retaining all Tmax.
     capture = Capture.at_lengths(ev.lengths)
-    captured = dict(scan(scorer, ev, grid, window, capture, perturb=perturb).captured)
+    captured = dict(scan(scorer, ev, dmax, window, capture, perturb=perturb).captured)
     # An empty track ends at START, before the scan's first step, so no step can capture
     # it. Filled from the seeded window instead -- the same alpha the scan would have
     # read had it run for zero steps.
@@ -284,7 +284,7 @@ def log_partitions(
 def chunk_log_partition(
     scorer: SpanScorer,
     ev: Evidence,
-    grid: Grid,
+    dmax: int,
     carry: torch.Tensor | None = None,
     context: int = 0,
     right: int = 0,
@@ -331,8 +331,8 @@ def chunk_log_partition(
             "the chunk needs at least one frame of its own to scan"
         )
     window = (
-        initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows)
+        initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows)
         if carry is None else carry
     )
-    window = scan(scorer, ev, grid, window, start=context, stop=Tmax - right).window
+    window = scan(scorer, ev, dmax, window, start=context, stop=Tmax - right).window
     return torch.logsumexp(window[:, -1, : scorer.labels.n_labels], dim=1), window

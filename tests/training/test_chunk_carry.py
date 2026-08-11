@@ -43,6 +43,8 @@ from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 
+from spanscorer import CueScorer
+
 N_BINS, HOP_S, STRIDE = 12, 0.0116, 3
 CHUNK, DMAX = 10, 30
 N_DP = CHUNK * 6                    # an exact number of chunks: no ragged tail dropped
@@ -110,8 +112,8 @@ def _whole_track_nll(model, cache, items, feats) -> float:
     the track -- what the removed whole-track loss computed, with none of its padding.
     """
     times = np.arange(N_CQT) * HOP_S
-    decoder = SemiCRFDecoder(stride=STRIDE)
-    dmax = decoder.scorer.grid(times[::STRIDE]).dmax
+    decoder = SemiCRFDecoder(CueScorer(), stride=STRIDE)
+    dmax = decoder.scorer.dmax_for(times[::STRIDE])
     chunk = Chunk(
         features=feats[None],                       # (1, n_bins, T)
         frame_times=times,
@@ -137,7 +139,7 @@ def _chunked_nll(model, cache, items, right: int) -> float:
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=right,
     )
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE))
     total, divisors = 0.0, []
     with torch.no_grad():
         for batch in dataset:
@@ -181,7 +183,7 @@ def test_a_second_epoch_gives_the_same_losses(track):
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE))
 
     def one_pass():
         with torch.no_grad():
@@ -203,7 +205,7 @@ def test_continuing_a_stream_without_a_carry_is_rejected(track):
         chunk_frames=CHUNK, dmax=DMAX,
         stride=STRIDE, batch_size=1, right_context=0,
     )
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE))
     batches = list(dataset)
     assert batches[1].resets == [False], "the fixture must have a continuing chunk"
     with pytest.raises(KeyError, match="no carry"):

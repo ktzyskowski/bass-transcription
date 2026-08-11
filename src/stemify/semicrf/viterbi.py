@@ -15,13 +15,13 @@ import torch
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import candidate_starts, scan
 from stemify.semicrf.semiring import MAX_PLUS
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.window import initial_window
 
 
 @torch.no_grad()
 def viterbi(
-    scorer: SpanScorer, ev: Evidence, grid: Grid, note_bias: float = 0.0
+    scorer: SpanScorer, ev: Evidence, dmax: int, note_bias: float = 0.0
 ) -> list[tuple[int, int, int]]:
     """The single highest-scoring segmentation of track 0 of ``ev``.
 
@@ -60,8 +60,8 @@ def viterbi(
         (T + 1, ev.B, scorer.labels.n_labels), dtype=torch.long
     )
     window = scan(
-        scorer, ev, grid,
-        initial_window(ev.onset_logit, ev.B, grid.dmax, scorer.labels.n_rows),
+        scorer, ev, dmax,
+        initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows),
         stop=T, semiring=MAX_PLUS, bias=bias, witness=back,
     ).window
 
@@ -77,7 +77,7 @@ def viterbi(
         # rather than through a second copy of that arithmetic.
         flat = int(cpu_back[j, label])
         n_rows = scorer.labels.n_rows
-        i = int(candidate_starts(grid, j, cpu)[flat // n_rows])
+        i = int(candidate_starts(dmax, j, cpu)[flat // n_rows])
         prev = flat % n_rows
         segs.append((label, i, j))
         j, label = i, prev

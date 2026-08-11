@@ -22,7 +22,7 @@ import torch
 
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.segmentation import Segmentation
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 
 # One segment: (label, start frame, end frame), end exclusive.
 
@@ -53,7 +53,7 @@ def segmentation_scores(
     scorer: SpanScorer,
     ev: Evidence,
     per_track: Sequence[Segmentation],
-    grid: Grid,
+    dmax: int,
     prev_labels: Sequence[int] | None = None,
 ) -> torch.Tensor:
     """``(B,)`` unnormalised scores for a batch's segmentations, in one vectorised pass.
@@ -97,7 +97,7 @@ def segmentation_scores(
             "is one predecessor per batch row, not one per segment"
         )
 
-    both = scorer.unary(ev, grid, b, i, j)                       # (S, 2)
+    both = scorer.unary(ev, dmax, b, i, j)                       # (S, 2)
     unary = both.gather(-1, lab.unsqueeze(-1)).squeeze(-1)       # (S,)
     prev = _prev_labels(lab, first, b, seeds)
     terms = unary + scorer.transitions()[prev, lab]
@@ -105,7 +105,7 @@ def segmentation_scores(
 
 
 def segmentation_score(
-    scorer: SpanScorer, ev: Evidence, segs: Segmentation, grid: Grid
+    scorer: SpanScorer, ev: Evidence, segs: Segmentation, dmax: int
 ) -> torch.Tensor:
     """Unnormalised score of one track's segmentation -- the batch of one."""
-    return segmentation_scores(scorer, ev, [segs], grid)[0]
+    return segmentation_scores(scorer, ev, [segs], dmax)[0]

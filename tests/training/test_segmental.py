@@ -25,6 +25,8 @@ from stemify.semicrf.fit.dataset import Chunk, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer
 
+from spanscorer import CueScorer
+
 DT = 0.0116
 T = 240
 TIMES = np.arange(T) * DT
@@ -56,7 +58,7 @@ def _chunk(spans, pitches_hz, stream: int) -> Chunk:
         freqs[(TIMES >= a) & (TIMES < b)] = hz
     notes = [NoteEvent(onset=a, offset=b, midi_pitch=45.0) for a, b in spans]
     # dmax from the decoder's own grid, so the gold and the scan agree on the bound.
-    dmax = SemiCRFDecoder(stride=STRIDE).scorer.grid(TIMES[::STRIDE]).dmax
+    dmax = SemiCRFDecoder(CueScorer(), stride=STRIDE).scorer.dmax_for(TIMES[::STRIDE])
     return Chunk(
         # (1, n_bins, T): the channel axis is always present, single-channel or not.
         features=feats[None],
@@ -80,7 +82,7 @@ def _batch():
 
 
 def test_compute_returns_finite_loss_and_total_metric():
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE))
     total, metrics = loss.compute(_LinearHeads(), _batch(), torch.device("cpu"))
     assert torch.isfinite(total) and total.requires_grad
     assert metrics["total"] == metrics["nll"]
@@ -88,14 +90,14 @@ def test_compute_returns_finite_loss_and_total_metric():
 
 
 def test_parameters_expose_the_decoder_potentials():
-    decoder = SemiCRFDecoder(stride=STRIDE)
+    decoder = SemiCRFDecoder(CueScorer(), stride=STRIDE)
     loss = SemiCRFLoss(decoder)
     assert set(loss.parameters()) == set(decoder.parameters())
 
 
 def test_trainer_with_semicrf_loss_reduces_nll():
     model = _LinearHeads()
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE))
     config = TrainConfig(device="cpu", max_epochs=15, learning_rate=0.05, patience=99)
     # A plain list of batches is a valid loader -- the Trainer just iterates it.
     loader = [_batch() for _ in range(2)]
@@ -103,14 +105,14 @@ def test_trainer_with_semicrf_loss_reduces_nll():
     assert history.train_loss[-1] < history.train_loss[0]
 
 
-def test_decoder_from_names_a_retired_potential():
-    # A checkpoint trained before the pyin interior-jump feature was removed carries
-    # `scorer.w_pitch`. Refusing it is right -- those potentials were fitted against a
-    # scorer that no longer exists -- but the reason has to survive into the message,
-    # or it reads as a corrupt file rather than a superseded one.
+def test_a_checkpoint_of_a_retired_scorer_is_refused_by_name():
+    # A checkpoint trained against the log-linear scorer records `kind: "linear"`, and
+    # one older still records no scorer at all. Both describe a model that no longer
+    # exists. Refusing them is right; the reason has to survive into the message, or
+    # they read as corrupt files rather than superseded ones.
     from stemify.semicrf.fit.recipe import SemiCRFRecipe
 
-    recipe = SemiCRFRecipe(["clean"])
-    state = {"loss": dict(SemiCRFDecoder().state_dict()) | {"scorer.w_pitch": 0.0}}
-    with pytest.raises(ValueError, match="retired potential"):
-        recipe.decoder_from(state)
+    with pytest.raises(ValueError, match="unknown scorer kind 'linear'"):
+        SemiCRFRecipe.from_config({"decoder": {"scorer": {"kind": "linear"}}})
+    with pytest.raises(ValueError, match="records no scorer"):
+        SemiCRFRecipe.from_config({"decoder": {"stride": 3, "dmax_s": 4.0}})

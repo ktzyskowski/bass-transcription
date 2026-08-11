@@ -1,7 +1,7 @@
 """``Loss.scalars``: the objective's learned potentials, on their own axes.
 
-The semi-CRF trades segmentation *granularity* through a handful of numbers -- a
-per-segment bias, a duration-bucket profile, a transition table -- and none of them
+The semi-CRF trades segmentation *granularity* through learned potentials -- a
+duration embedding, a transition prior, the gate on the pitch head -- and none of them
 appear in the loss breakdown. A run whose decode goes from roughly the right note count
 to two thirds of it, while every loss term and every cue metric improves, is explained
 by those numbers and by nothing else that is logged. Before this they existed only
@@ -33,48 +33,43 @@ def _loss():
 # --------------------------------------------------------------------------- #
 def test_every_learned_potential_is_named():
     """Including the ones that decide granularity. A subset would be worse than
-    nothing: reading `w_on` alone and concluding "evidence weights are stable" says
-    nothing about the duration prior that actually moved."""
+    nothing: reading the evidence projection alone and concluding "the model is stable"
+    says nothing about the transition table that actually moved."""
     scalars = _loss().scalars()
-    for potential in ("w_on", "w_v", "w_u", "w_path", "w_spread", "b_note", "b_rest"):
-        assert f"scorer/{potential}" in scalars, potential
+    # A one-element potential lands on its own axis, under its own name.
+    assert "scorer/rest_logprob" in scalars
     # Vector-valued potentials expand per element, or the profile that flips is
     # averaged into a single number that barely moves.
-    assert {"scorer/dur/0", "scorer/dur/1"} <= set(scalars)
-    assert {"scorer/trans/0", "scorer/init/0"} <= set(scalars)
+    assert {"scorer/class_trans/0", "scorer/class_trans/5"} <= set(scalars)
+    assert "scorer/alpha/bias" in scalars
+    # Anything wider is summarised rather than dropped -- 49 label biases would
+    # otherwise be 49 axes nobody reads.
+    assert {"scorer/label_bias/mean", "scorer/label_bias/std"} <= set(scalars)
 
 
-def test_buffers_are_not_reported_as_learned():
-    """`dur_edges_s` rides in the state dict and never changes. On an axis beside the
-    weights it reads as a potential that is holding still, which is a claim about
-    training rather than about a constant."""
-    assert not [k for k in _loss().scalars() if "dur_edges" in k]
-
-
-def test_the_duration_profile_is_reported_bucket_by_bucket():
-    """The failure this exists for: a prior favouring short spans flipping to favour
-    long ones. That is a change of *sign pattern* across buckets, invisible in any
-    summary of them."""
+def test_a_small_potential_is_reported_element_by_element():
+    """The failure this exists for: a transition prior favouring note->note flipping to
+    favour note->rest. That is a change of *sign pattern* across entries, invisible in
+    any summary of them."""
     objective = _loss()
+    profile = [-0.24, 0.23, 0.27, 0.29, -0.29, -0.46]
     with torch.no_grad():
-        objective.decoder.scorer.dur.copy_(
-            torch.tensor([-0.24, 0.23, 0.27, 0.29, -0.29, -0.46, -0.49, -0.44])
+        objective.decoder.scorer.class_trans.copy_(
+            torch.tensor(profile).reshape(3, 2)
         )
     scalars = objective.scalars()
-    profile = [scalars[f"scorer/dur/{i}"] for i in range(8)]
-    assert profile == pytest.approx(
-        [-0.24, 0.23, 0.27, 0.29, -0.29, -0.46, -0.49, -0.44], abs=1e-6
-    )
+    got = [scalars[f"scorer/class_trans/{i}"] for i in range(6)]
+    assert got == pytest.approx(profile, abs=1e-6)
 
 
 def test_values_follow_the_live_parameters():
     """Read through to the tensors, not a copy taken at construction -- otherwise every
     epoch reports the initialisation and the series is flat by construction."""
     objective = _loss()
-    before = objective.scalars()["scorer/b_note"]
+    before = objective.scalars()["scorer/rest_logprob"]
     with torch.no_grad():
-        objective.decoder.scorer.b_note += 1.5
-    assert objective.scalars()["scorer/b_note"] == pytest.approx(before + 1.5)
+        objective.decoder.scorer.rest_logprob += 1.5
+    assert objective.scalars()["scorer/rest_logprob"] == pytest.approx(before + 1.5)
 
 
 def test_a_wide_potential_is_summarised_rather_than_dropped():

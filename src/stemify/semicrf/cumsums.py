@@ -35,9 +35,9 @@ def voiced_logcumsum(
     to CPU while a head-fed run put them on the accelerator.
 
     With *neither*, raise. Voiced/unvoiced is the one thing the segmental scan cannot
-    proceed without -- ``rest_mass`` and ``voiced_mass`` are what separate a note from
-    a silence -- so defaulting to "everything is voiced" would return a plausible
-    number for a model that was never given the question."""
+    proceed without -- it is what separates a note from a silence -- so defaulting to
+    "everything is voiced" would return a plausible number for a model that was never
+    given the question."""
     if voicing is not None:
         v = on_device(voicing, device).float().clamp(1e-6, 1 - 1e-6)
         vlp, ulp = torch.log(v), torch.log1p(-v)
@@ -62,11 +62,10 @@ def pitch_logprob_cumsum(
 ) -> torch.Tensor:
     """Per-bin pitch logits ``(T, K)`` -> ``(T+1, n_pitches)`` cumsum of semitone log-probs.
 
-    **The potential that lets the CRF supervise pitch value at all.** With a
-    ``{note, rest}`` alphabet the span features are all pitch-*invariant* -- how far the
-    distribution moved, how much its frames disagree -- so nothing in the structured
-    objective says which pitch is right. A span labelled ``note@p`` can read the head's
-    own log-probability of ``p`` across the span, and then ``d NLL / d(pitch head)`` is a
+    **The potential that lets the CRF supervise pitch value at all.** Under a
+    ``{note, rest}`` alphabet nothing in the structured objective says which pitch is
+    right -- the label names none. A span labelled ``note@p`` can read the head's own
+    log-probability of ``p`` across the span, and then ``d NLL / d(pitch head)`` is a
     segment-level pitch signal instead of nothing.
 
     Bins are pooled to semitones by ``logsumexp``, which is the marginal "the pitch lies
@@ -82,9 +81,8 @@ def pitch_logprob_cumsum(
     Cumulative because a span reads it as ``(C[j] - C[i]) / (j - i)`` -- the **mean**
     log-probability, so a geometric mean of the frame posteriors. That is the right
     aggregate here and the arithmetic mean is not: one frame confidently disagreeing
-    should veto a span's pitch, which is exactly what a geometric mean does and what
-    ``pitch_mean``'s arithmetic mixture deliberately does not (it preserves both modes of
-    a straddle, because ``pitch_spread`` needs them).
+    should veto a span's pitch, which is what a geometric mean does and a mixture
+    deliberately does not.
     """
     need = n_pitches * bins_per_semitone
     if logits.shape[-1] + 1 < need:
@@ -108,40 +106,3 @@ def pitch_logprob_cumsum(
         blocks.reshape(lp.shape[0], n_pitches, bins_per_semitone), dim=-1
     )                                                         # (T, n_pitches)
     return torch.cat([pooled.new_zeros(1, n_pitches), torch.cumsum(pooled, 0)])
-
-
-def pitch_cumsums(
-    logits: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Per-bin pitch logits ``(T, K)`` -> ``(path_c, entropy_c, pitch_c)`` prefix sums.
-
-    Every quantity here has to be additive over frames, because a span reads it as an
-    O(1) difference and there are O(T * dmax) spans. That is the constraint, and it is
-    why the two features are shaped as they are rather than as some arbitrary function
-    of the span's frames.
-
-    ``path`` uses the Bhattacharyya coefficient rather than a dot product: ``BC`` is 1
-    for any two *identical* distributions however diffuse, while ``<p, q>`` falls with
-    spread, so a dot product would report a quiet passage the head is unsure about as
-    constant pitch movement. The first frame has no predecessor and contributes 0."""
-    p = torch.softmax(logits, dim=-1)
-    # Clamped for the *gradient*, not the value. d(sqrt p)/dp = 1/(2 sqrt p) is
-    # unbounded as p -> 0, and a softmax over this many bins underflows to exactly 0
-    # in float32 once the head is confident (a logit spread past ~104 does it), so
-    # the backward pass hits 1/0 -> inf and then 0 * inf -> NaN while the forward
-    # stays perfectly finite. Clamping pins the derivative of the underflowed tail at
-    # zero, where it belongs: those bins carry no probability and should not steer
-    # anything. Without it the failure is not merely the eventual NaN -- the whole
-    # region below ~1e-20 contributes gradients of order 1e10 that swamp the shared
-    # trunk, and they grow as the head sharpens, so the pitch branch is punished for
-    # becoming confident and is driven back toward uniform.
-    sq = p.clamp_min(1e-9).sqrt()
-    bc = (sq[1:] * sq[:-1]).sum(-1)                       # (T-1,)
-    path = torch.cat([bc.new_zeros(1), 1.0 - bc])         # (T,)
-    entropy = -(p.clamp_min(1e-9) * p.clamp_min(1e-9).log()).sum(-1)   # (T,)
-    zero_row = p.new_zeros(1, p.shape[-1])
-    return (
-        torch.cat([path.new_zeros(1), torch.cumsum(path, 0)]),
-        torch.cat([entropy.new_zeros(1), torch.cumsum(entropy, 0)]),
-        torch.cat([zero_row, torch.cumsum(p, 0)]),
-    )

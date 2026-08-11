@@ -104,20 +104,23 @@ class SemiCRFRecipe(Recipe):
         self,
         conditions: Sequence[str] | None = None,
         decoder: SemiCRFDecoder | None = None,
-        pitch: bool = False,
+        pitch: bool = True,
         pitch_weight: float = PITCH_WEIGHT,
         voicing_weight: float = VOICING_WEIGHT,
         onset_weight: float = ONSET_WEIGHT,
         pos_weight: Mapping[str, float] | None = None,
-        scorer: str = "linear",
         harmonics: Sequence[int] | None = None,
         segment_chunks: int = 0,
     ) -> None:
-        """``pitch`` adds the ``FrequencyHead``, whose per-bin logits the span
-        features read. This recipe used to *refuse* the argument, on the reasoning
-        that the DP scored onset and voicing only and a pitch branch would train a
-        head no potential read. That stopped being true when the scorer gained its
-        path and spread features -- both are functions of the head's distribution.
+        """``pitch`` adds the ``FrequencyHead``, and the scorer requires it: its labels
+        name semitones and each is scored against that head's own per-semitone
+        log-probability. **It therefore defaults to on**, unlike the frame recipe's --
+        it is the only value that builds, and a parameter kept only to be rejected
+        would be one every caller has to remember to set. Passing ``False`` still
+        raises by name, which is what a ``--pitch``-less command line needs to hear.
+        This recipe once *refused* the argument outright, back when the DP scored onset
+        and voicing only and a pitch branch would have trained a head no potential
+        read.
 
         ``segment_chunks`` cuts each track into independent chains of that many chunks
         and carries alpha *undetached* within one, which is what makes the gradient the
@@ -139,11 +142,10 @@ class SemiCRFRecipe(Recipe):
         # made "semi-CRF" and "HCQT" mutually exclusive for no reason either one
         # could state.
         self.harmonics = tuple(harmonics or (1,))
-        # An explicit decoder wins: `from_config` rebuilds one whole, and a caller
-        # passing both would otherwise get the string's scorer silently.
+        # An explicit decoder wins: `from_config` rebuilds one whole, weights and all,
+        # while the branch below builds a fresh scorer sized to this recipe's backbone.
         self.decoder = decoder or SemiCRFDecoder(
-            scorer=None if scorer == "linear"
-            else self._neural_scorer(scorer, pitch, self.harmonics, self.in_channels)
+            self._neural_scorer(pitch, self.harmonics, self.in_channels)
         )
         self.pitch = pitch
         self.pitch_weight = pitch_weight
@@ -154,7 +156,7 @@ class SemiCRFRecipe(Recipe):
 
     @staticmethod
     def _neural_scorer(
-        kind: str, pitch: bool, harmonics: Sequence[int], in_channels: int
+        pitch: bool, harmonics: Sequence[int], in_channels: int
     ) -> SpanScorer:
         """A ``NeuralSpanScorer`` sized to the backbone this recipe will build.
 
@@ -164,16 +166,14 @@ class SemiCRFRecipe(Recipe):
         harmonic stacking crops the axis, for one -- has to reach the scorer or the
         two disagree about how many semitones exist.
         """
-        if kind != "neural":
-            raise ValueError(f"unknown scorer {kind!r}; have 'linear' and 'neural'")
         if not pitch:
             raise ValueError(
-                "--scorer neural needs --pitch. Its alphabet names semitones and "
-                "every pitch label is scored against the pitch head's own "
-                "per-semitone log-probability; without that head there is no "
-                "pitch-valued evidence at all, and the 73 labels would score "
+                "the semi-CRF objective needs --pitch. Its scorer's alphabet names "
+                "semitones and every pitch label is scored against the pitch head's "
+                "own per-semitone log-probability; without that head there is no "
+                "pitch-valued evidence at all, and every pitch label would score "
                 "identically -- log Z spread over every relabelling of one "
-                "segmentation, which is strictly worse than {note, rest}."
+                "segmentation."
             )
         # A throwaway backbone, discarded after two reads. Cheaper than the drift:
         # both numbers are the model's, and a constant repeated here would be wrong
@@ -184,9 +184,9 @@ class SemiCRFRecipe(Recipe):
         return NeuralSpanScorer(
             labels=LabelSet.from_bins(backbone.frontend.n_bins),
             trunk_dim=backbone.hidden,
-            # `_geometry` derives the same dmax from the scorer's own `grid`, and
-            # this scorer's `grid` raises when the two disagree -- so a mistake here
-            # surfaces at the first batch rather than as a mis-sized table.
+            # `_geometry` derives the same dmax from the scorer's own `dmax_for`,
+            # which raises when the two disagree -- so a mistake here surfaces at the
+            # first batch rather than as a mis-sized table.
             dmax_frames=round(DMAX_S / (HOP_LENGTH / SAMPLE_RATE * STRIDE)),
         )
 
@@ -233,23 +233,17 @@ class SemiCRFRecipe(Recipe):
                 f"recipe config field 'decoder' should be a mapping of geometry, got "
                 f"{type(geometry).__name__}"
             )
-        # The constructor's own defaults, read from the constants rather than off a
-        # throwaway ``SemiCRFDecoder()`` built only to be measured. Same values, one
-        # fewer object -- and it no longer assumes the default decoder's scorer is the
-        # linear one just to recover a number that never depended on the scorer.
-        # A checkpoint predating `SpanScorer.config` records the linear scorer's
-        # duration edges directly under `decoder`. Reading that shape as a linear
-        # config keeps those checkpoints loadable, and is why `kind` defaults.
         scorer_config = geometry.get("scorer")
         if not isinstance(scorer_config, Mapping):
-            scorer_config = {
-                "kind": "linear",
-                "dmax_s": config_field(geometry, "dmax_s", float, DMAX_S),
-                "dur_edges_s": geometry.get("dur_edges_s"),
-            }
+            raise ValueError(
+                "checkpoint records no scorer under 'decoder': it predates "
+                "`SpanScorer.config`, which means it was trained with the retired "
+                "log-linear scorer. Its weights describe a model that no longer "
+                "exists -- retrain, or score it with the revision that produced it."
+            )
         decoder = SemiCRFDecoder(
+            build_scorer(scorer_config),
             stride=config_field(geometry, "stride", int, STRIDE),
-            scorer=build_scorer(scorer_config),
         )
         return cls(
             conditions=config_str_list(config, "conditions"),
@@ -280,8 +274,8 @@ class SemiCRFRecipe(Recipe):
 
         The mechanism is that the NLL is discriminative over *segmentations*, so a
         feature earns gradient only in proportion to how much it helps rank gold above
-        the alternatives, and ``LinearSpanScorer`` gives every one a learned scalar that
-        can shrink toward zero. Nothing asks a head to be *calibrated*, only to be
+        the alternatives, and the scorer gives every one a learned weight that can
+        shrink toward zero. Nothing asks a head to be *calibrated*, only to be
         useful for ranking -- and a head can be a useful feature channel while being a
         poor detector of the thing it is named for.
 
@@ -313,7 +307,7 @@ class SemiCRFRecipe(Recipe):
             # `scorer` says what the potentials are. A run recorded without them is one
             # nobody can later tell apart from the arm it was meant to beat.
             "segment_chunks": self.segment_chunks,
-            "scorer": self.decoder.scorer.config.get("kind", "linear"),
+            "scorer": self.decoder.scorer.config["kind"],
         }
 
     def build_model(self) -> FrameNet:
@@ -346,7 +340,7 @@ class SemiCRFRecipe(Recipe):
     def _geometry(self) -> tuple[int, int]:
         """``(dmax, right_context)`` in DP frames.
 
-        ``dmax`` comes from the decoder's own ``grid`` over a synthetic two-frame
+        ``dmax`` comes from the scorer's own ``dmax_for`` over a synthetic two-frame
         stretch of the DP hop, rather than being recomputed here, so the dataset's
         left context and the scan's candidate-start span cannot drift apart.
 
@@ -356,7 +350,7 @@ class SemiCRFRecipe(Recipe):
         ``forward.chunk_log_partition``'s ``right``.
         """
         dp_hop = HOP_LENGTH / SAMPLE_RATE * self.decoder.stride
-        dmax = self.decoder.scorer.grid(np.arange(2) * dp_hop).dmax
+        dmax = self.decoder.scorer.dmax_for(np.arange(2) * dp_hop)
         half = tcn_receptive_field() // 2
         right = -(-half // self.decoder.stride)     # ceil, into DP frames
         return dmax, right
@@ -439,20 +433,14 @@ class SemiCRFRecipe(Recipe):
 
     def decoder_from(self, state: Mapping[str, Any]) -> Decoder:
         decoder = SemiCRFDecoder(
+            build_scorer(self.decoder.scorer.config),
             stride=self.decoder.stride,
-            scorer=build_scorer(self.decoder.scorer.config),
         )
-        # A checkpoint from before the pyin span features were removed carries
-        # `scorer.w_pitch`. Loading it strictly fails, which is right -- the scorer it
-        # was trained against no longer exists, so those potentials describe a
-        # different model -- but the bare key error does not say that.
-        retired = sorted(k for k in state["loss"] if k.endswith("w_pitch"))
-        if retired:
-            raise ValueError(
-                f"checkpoint carries retired potential(s) {retired}: it was trained "
-                "with the pyin interior-jump span feature, which the scorer no longer "
-                "has. Its weights are not comparable to a current run -- retrain, or "
-                "score it with the revision that produced it."
-            )
+        # No name-based check for retired potentials here. A checkpoint trained
+        # against the log-linear scorer is refused *by identity* one step earlier --
+        # `from_config` raises when it records no scorer at all, and `build_scorer`
+        # raises on a `kind` no longer in the registry. Both name the reason. Matching
+        # on parameter names instead would catch the same checkpoints by coincidence
+        # and reject any future scorer that happened to reuse one.
         decoder.load_state_dict(state["loss"])
         return decoder

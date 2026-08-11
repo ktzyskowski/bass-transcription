@@ -1,10 +1,10 @@
 """``NeuralSpanScorer``: a learned segment potential over the backbone's own features.
 
-The same contract as ``LinearSpanScorer`` and a different body. ``LinearSpanScorer`` is
-``w . f(span)`` over five hand-built features -- onset evidence at the start, voiced mass
-across it, how far the pitch distribution travelled, how much its frames disagree, a
-duration bucket. Each is a fixed function someone chose, and the model's whole freedom is
-one scalar per feature.
+The classical alternative is ``w . f(span)`` over hand-built features -- onset evidence
+at the start, voiced mass across it, how far the pitch distribution travelled, a duration
+bucket. Each is a fixed function someone chose, and the model's whole freedom is one
+scalar per feature. That form was the arm this replaced, and its retirement is why the
+comparisons below are stated against ``w . f`` rather than against a class in the tree.
 
 Here the per-frame function is learned and the readout is a network::
 
@@ -13,7 +13,7 @@ Here the per-frame function is learned and the readout is a network::
     f(a, b) = MLP(moments(a,b) || phi at the edges || e_dur[b - a])    T * dmax
     s(a,b,y)= <f(a,b), e_y> + bias_y + alpha(a,b) * logprob_y(a,b)     one matmul
 
-Four things it can express that no setting of the linear scorer's weights can:
+Four things it can express that no setting of ``w``'s weights can:
 
 **Interaction.** ``w . f`` is linear in its features, so "high pitch spread is only
 damning on a *short* span" is not a statement it can make at any weights.
@@ -22,14 +22,14 @@ damning on a *short* span" is not a statement it can make at any weights.
 blind to permutation. ``moments`` carries where in the span its energy sits, which is
 what separates one note's attack-and-decay from two notes butted together.
 
-**Interior onset evidence.** ``onset_at(i)`` reads the span's first frame and nothing
+**Interior onset evidence.** An endpoint read takes the span's first frame and nothing
 else, so "there is a strong onset in the *middle* of this span" -- the single best
 signal for rejecting a merged double-note -- had no feature at all. It arrives here as
 ``M_0`` of the onset channel, and its position as ``M_1``.
 
 **A span-dependent weight on the pitch head.** ``alpha(a, b)`` lets the model distrust
-the head across a transient and trust it across a sustain; ``w_path``/``w_spread`` are
-single global scalars that weight pitch evidence identically everywhere.
+the head across a transient and trust it across a sustain, where a single global scalar
+would weight pitch evidence identically everywhere.
 
 The label enters bilinearly and not as an MLP input. That is not a style choice: at 49
 labels and ~600k spans a track, ``g(a, b, y)`` evaluated per label is 29M MLP calls,
@@ -56,7 +56,7 @@ from stemify.semicrf.constants import DMAX_S
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.moments import moment_cumsums, span_moments
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 
 # How many span-end positions to score in one batched MLP call. Bounds the peak
 # activation footprint without changing the result: the table is built in slices along
@@ -83,10 +83,10 @@ class NeuralSpanScorer(SpanScorer):
         """``trunk_dim`` is the backbone's hidden width, which the evidence must match.
 
         ``dmax_frames`` sizes the duration embedding, and it is in *frames* because the
-        embedding is indexed by ``b - a``. That pins this scorer to one grid resolution,
-        unlike ``LinearSpanScorer``, whose duration edges are in seconds and so survive a
-        change of hop. ``grid`` checks rather than adapts: a hop that derives a different
-        ``dmax`` would silently index a table fitted against another one.
+        embedding is indexed by ``b - a``. That pins this scorer to one grid resolution:
+        a scorer whose duration parameter were in seconds would survive a change of hop,
+        and this one cannot. ``dmax_for`` therefore checks rather than adapts -- a hop
+        deriving a different ``dmax`` would silently index a table fitted against another.
         """
         super().__init__()
         self.labels = labels
@@ -182,8 +182,8 @@ class NeuralSpanScorer(SpanScorer):
             dmax_frames=int(config["dmax_frames"]),
         )
 
-    def grid(self, frame_times: np.ndarray) -> Grid:
-        """``dmax`` for a frame hop, checked against the duration table's width."""
+    def dmax_for(self, frame_times: np.ndarray) -> int:
+        """``dmax`` in frames for a hop, checked against the duration table's width."""
         hop = float(np.median(np.diff(frame_times))) if frame_times.size > 1 else 0.01
         dmax = max(1, round(self.dmax_s / hop))
         if dmax != self.dmax_frames:
@@ -193,9 +193,7 @@ class NeuralSpanScorer(SpanScorer):
                 f"{dmax}. The embedding is indexed by (b - a) in frames, so decoding on a "
                 "different grid than it was fitted on would read another span's row."
             )
-        # An empty bucket map: this scorer has no duration *buckets*, it embeds `b - a`
-        # directly. `Grid` still carries the field for `LinearSpanScorer`'s sake.
-        return Grid(dmax, torch.zeros(dmax + 1, dtype=torch.long))
+        return dmax
 
     def transitions(self) -> torch.Tensor:
         n, rest = self.labels.n_pitches, self.labels.REST
@@ -218,8 +216,7 @@ class NeuralSpanScorer(SpanScorer):
             raise ValueError(
                 "NeuralSpanScorer pools the backbone's per-frame activations, and this "
                 "Evidence carries none. Encode through a model with a backbone "
-                "(FrameNet.heads_and_hidden fills Frames.hidden), or score with "
-                "LinearSpanScorer, whose features are all head outputs."
+                "(FrameNet.heads_and_hidden fills Frames.hidden)."
             )
         if ev.hidden.shape[-1] != self.trunk_dim:
             raise ValueError(
@@ -274,7 +271,7 @@ class NeuralSpanScorer(SpanScorer):
         gate = torch.nn.functional.softplus(self.alpha(f))        # (..., 1)
         return scores + gate * torch.cat([logprob, rest], dim=-1)
 
-    def precompute(self, ev: Evidence, grid: Grid) -> torch.Tensor:
+    def precompute(self, ev: Evidence, dmax: int) -> torch.Tensor:
         """``(B, T+1, dmax, n_labels)`` -- every span's unary, in one pass.
 
         Built here rather than per scan step because the DP is launch-bound: calling an
@@ -289,13 +286,13 @@ class NeuralSpanScorer(SpanScorer):
         phi = self._frame_features(ev)
         cumsums = moment_cumsums(phi, self.order)
         dev = phi.device
-        offsets = torch.arange(grid.dmax, device=dev)             # b - a - 1
+        offsets = torch.arange(dmax, device=dev)                  # b - a - 1
         rows = torch.arange(ev.B, device=dev)[:, None, None]
         # `j = 0` is zeroed rather than computed. No span ends at frame 0 -- the scan
         # runs `j` from 1 and gold spans are half-open -- and the empty span it would
         # describe divides by its own zero length in `mean_pitch_logprob`. Keeping the
         # row makes `j` index the table directly, with no offset to get wrong.
-        blocks = [phi.new_zeros(ev.B, 1, grid.dmax, self.labels.n_labels)]
+        blocks = [phi.new_zeros(ev.B, 1, dmax, self.labels.n_labels)]
         for lo in range(1, ev.T + 1, J_BLOCK):
             ends = torch.arange(lo, min(lo + J_BLOCK, ev.T + 1), device=dev)
             j = ends[None, :, None]                               # (1, J, 1)
@@ -309,7 +306,7 @@ class NeuralSpanScorer(SpanScorer):
     def unary(
         self,
         ev: Evidence,
-        grid: Grid,
+        dmax: int,
         b: torch.Tensor | int,
         i: torch.Tensor | int,
         j: torch.Tensor | int,
@@ -322,7 +319,7 @@ class NeuralSpanScorer(SpanScorer):
         exactly one batch, so there is no invalidation rule to get wrong.
         """
         if ev.span_scores is None:
-            ev.span_scores = self.precompute(ev, grid)
+            ev.span_scores = self.precompute(ev, dmax)
         # `j - i - 1` is the span's length minus one, which is the axis the table is
         # built along. `candidate_starts` clamps `i` at 0, so for `j <= dmax` several
         # candidates collapse onto start 0 and land at `j - 1`, still inside the axis.

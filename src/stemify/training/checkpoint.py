@@ -102,9 +102,22 @@ class Checkpoint:
         today's defaults, which is correct only because nothing has varied them; a run
         that did would be silently mis-scored, and that is exactly why ``VERSION`` 2
         records it.
+
+        **A v1 semi-CRF checkpoint is refused outright**, and the geometry is why: every
+        one of them was trained against the log-linear span scorer, which is retired.
+        There is no defaulting out of that -- the potentials name a model that no longer
+        exists, and rebuilding "a semi-CRF" around them would restore a decoder whose
+        weights were fitted for different features. v1 *frame* checkpoints still load.
         """
         objective_state = raw.get("loss_state") or {}
-        name = "semicrf" if objective_state else "frame"
+        if objective_state:
+            raise ValueError(
+                f"{path} is a version-1 semi-CRF checkpoint. Its potentials were "
+                "fitted against the log-linear span scorer, which no longer exists, "
+                "and v1 recorded no scorer configuration to rebuild anything else "
+                "from -- retrain, or score it with the revision that produced it."
+            )
+        name = "frame"
         config: dict[str, object] = {
             "conditions": list(raw.get("conditions", ["clean"])),
             "pitch": "pitch" in raw.get("heads", []),

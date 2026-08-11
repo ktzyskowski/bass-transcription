@@ -65,9 +65,9 @@ def test_harmonic_stacking_narrows_the_alphabet():
 
 
 def test_binary_reproduces_the_original_integers_not_just_the_width():
-    # The property that protects every existing semi-CRF checkpoint. `LinearSpanScorer.
-    # trans` is indexed by these integers and rides in the state dict, so an alphabet
-    # that merely had the right *width* but ordered rest first would load every saved
+    # The property that protects every existing semi-CRF checkpoint. A scorer's
+    # transition table is indexed by these integers and rides in the state dict, so
+    # an alphabet with the right *width* but rest ordered first would load every saved
     # model with its transition rows permuted -- no error, no shape mismatch, a
     # different model. Pitches must come first.
     assert BINARY.label_of(0) == NOTE == 0

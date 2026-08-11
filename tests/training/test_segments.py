@@ -48,6 +48,8 @@ from test_chunk_carry import (  # noqa: F401  (fixtures)
 )
 from test_chunked import _FakeDataset
 
+from spanscorer import CueScorer
+
 SEGMENT = 2          # chunks per chain; the fixture's track is six, so three chains
 CPU = torch.device("cpu")
 NEURAL_T, NEURAL_DMAX, NEURAL_DT, TRUNK, BINS = 8, 4, 0.032, 5, 12
@@ -189,16 +191,16 @@ def test_each_row_is_scored_against_its_own_predecessor(neural):
     scorer, frames, segs = neural
     prevs = [1, 3]
     ev = build_evidence(frames, stride=1)
-    batched = segmentation_scores(scorer, ev, segs, scorer.grid(ev.frame_times[0]), prevs)
+    batched = segmentation_scores(scorer, ev, segs, scorer.dmax_for(ev.frame_times[0]), prevs)
     alone = []
     for k in (0, 1):
         one = build_evidence([frames[k]], stride=1)
         alone.append(segmentation_scores(
-            scorer, one, [segs[k]], scorer.grid(one.frame_times[0]), [prevs[k]]
+            scorer, one, [segs[k]], scorer.dmax_for(one.frame_times[0]), [prevs[k]]
         )[0])
     assert torch.allclose(batched, torch.stack(alone), atol=1e-5)
     swapped = segmentation_scores(
-        scorer, ev, segs, scorer.grid(ev.frame_times[0]), prevs[::-1]
+        scorer, ev, segs, scorer.dmax_for(ev.frame_times[0]), prevs[::-1]
     )
     assert not torch.allclose(batched, swapped, atol=1e-6), (
         "swapping the rows' predecessors changed nothing, so the argument is being "
@@ -211,11 +213,11 @@ def test_omitting_the_predecessors_is_exactly_START(neural):
     caller that scores a whole segmentation silently changed meaning."""
     scorer, frames, segs = neural
     ev = build_evidence(frames, stride=1)
-    grid = scorer.grid(ev.frame_times[0])
+    dmax = scorer.dmax_for(ev.frame_times[0])
     start = [scorer.labels.START] * len(segs)
     assert torch.allclose(
-        segmentation_scores(scorer, ev, segs, grid),
-        segmentation_scores(scorer, ev, segs, grid, start), atol=1e-6,
+        segmentation_scores(scorer, ev, segs, dmax),
+        segmentation_scores(scorer, ev, segs, dmax, start), atol=1e-6,
     )
 
 
@@ -244,7 +246,7 @@ def test_a_chain_starts_where_its_gold_does_not_where_the_chunk_does(track):  # 
     still falls, it is just normalising over a different set of tilings than it scores.
     """
     items, cache, _ = track
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE), detach_carry=False)
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE), detach_carry=False)
     batches = [b for b in _dataset(items, cache, SEGMENT) if b.resets[0]]
     assert len(batches) > 1, "the fixture must have a mid-track segment boundary"
     for batch in batches:
@@ -270,7 +272,7 @@ def test_the_nll_of_a_segmented_pass_is_a_surprisal(track):  # noqa: F811
     potential is small and a missing term moves ``log Z`` by too little to cross zero.
     """
     items, cache, _ = track
-    decoder = SemiCRFDecoder(stride=STRIDE)
+    decoder = SemiCRFDecoder(CueScorer(), stride=STRIDE)
     torch.manual_seed(3)
     with torch.no_grad():
         for p in decoder.parameters():
@@ -299,7 +301,7 @@ def test_the_loop_trains_a_whole_epoch_of_undetached_segments(track):  # noqa: F
     """
     items, cache, _ = track
     model = _Pointwise()
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE), detach_carry=False)
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE), detach_carry=False)
     before = [p.detach().clone() for p in loss.parameters()]
     trainer = Trainer(model, loss, TrainConfig(
         learning_rate=1e-2, max_grad_norm=None, device="cpu",
@@ -325,7 +327,7 @@ def test_the_loop_survives_streams_rolling_onto_new_tracks(tmp_path):
     unequal length over two streams is the smallest fixture that can tell them apart.
     """
     model = _Pointwise()
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=STRIDE), detach_carry=False)
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE), detach_carry=False)
     trainer = Trainer(model, loss, TrainConfig(
         learning_rate=1e-3, max_grad_norm=None, device="cpu",
         accumulate_steps=SEGMENT,
@@ -340,7 +342,7 @@ def _segment_gradient(items, cache, *, detach_carry: bool) -> list[torch.Tensor]
     """One chain's gradient, taken by hand so no optimiser step can clear it."""
     torch.manual_seed(11)
     model = _Pointwise()
-    decoder = SemiCRFDecoder(stride=STRIDE)
+    decoder = SemiCRFDecoder(CueScorer(), stride=STRIDE)
     loss = SemiCRFLoss(decoder, detach_carry=detach_carry)
     params = list(decoder.parameters())
     total = torch.zeros(())

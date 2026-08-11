@@ -10,7 +10,7 @@ actually has to hold: the contraction is a 6x5, the packed backpointer's radix i
 rather than 3, and `arg_prev` must be gathered at the winning *start* rather than reduced
 on its own. Every one of those is a change that leaves shapes valid and answers wrong.
 
-The scorer is a table of random potentials rather than `LinearSpanScorer`: what is under
+The scorer is a table of random potentials rather than a real one: what is under
 test is the recurrence's handling of an alphabet, not any particular parameterisation,
 and a table makes every (span, label) score independent so nothing can accidentally
 agree.
@@ -28,7 +28,7 @@ from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import log_partitions
 from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.score import segmentation_score
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.viterbi import viterbi
 
 T, DMAX, DT = 6, 3, 0.032
@@ -51,14 +51,14 @@ class _TableScorer(SpanScorer):
         self.u = nn.Parameter(torch.randn(T + 1, T + 1, labels.n_labels, generator=g))
         self.t = nn.Parameter(torch.randn(labels.n_rows, labels.n_labels, generator=g))
 
-    def unary(self, ev, grid, b, i, j):          # type: ignore[no-untyped-def]
+    def unary(self, ev, dmax, b, i, j):          # type: ignore[no-untyped-def]
         return self.u[i, j]
 
     def transitions(self) -> torch.Tensor:
         return self.t
 
-    def grid(self, frame_times: np.ndarray) -> Grid:
-        return Grid(DMAX, torch.zeros(DMAX + 1, dtype=torch.long))
+    def dmax_for(self, frame_times: np.ndarray) -> int:
+        return DMAX
 
 
 def _evidence() -> Evidence:
@@ -88,10 +88,10 @@ def _all_segmentations(labels: LabelSet):
 def setup():
     scorer = _TableScorer(LABELS)
     ev = _evidence()
-    grid = scorer.grid(ev.frame_times[0])
+    dmax = scorer.dmax_for(ev.frame_times[0])
     segs = list(_all_segmentations(LABELS))
-    scored = torch.stack([segmentation_score(scorer, ev, s, grid) for s in segs])
-    return scorer, ev, grid, segs, scored
+    scored = torch.stack([segmentation_score(scorer, ev, s, dmax) for s in segs])
+    return scorer, ev, dmax, segs, scored
 
 
 def test_the_enumeration_is_big_enough_to_be_a_test(setup):
@@ -102,8 +102,8 @@ def test_the_enumeration_is_big_enough_to_be_a_test(setup):
 
 
 def test_log_partition_equals_brute_force_at_five_labels(setup):
-    scorer, ev, grid, _, scored = setup
-    got = log_partitions(scorer, ev, grid)[0]
+    scorer, ev, dmax, _, scored = setup
+    got = log_partitions(scorer, ev, dmax)[0]
     brute = torch.logsumexp(scored, dim=0)
     assert torch.allclose(got, brute, atol=1e-4), (
         f"log Z {got.item()} != brute force {brute.item()}"
@@ -111,14 +111,14 @@ def test_log_partition_equals_brute_force_at_five_labels(setup):
 
 
 def test_viterbi_returns_the_best_segmentation_at_five_labels(setup):
-    scorer, ev, grid, segs, scored = setup
+    scorer, ev, dmax, segs, scored = setup
     best = segs[int(scored.argmax())]
-    got = viterbi(scorer, ev, grid)
+    got = viterbi(scorer, ev, dmax)
     # The path, not just its score. A backpointer whose radix or gather is wrong still
     # produces a *scoring* path -- it is the identity of the segmentation that catches it.
     assert got == best, f"viterbi returned {got}, enumeration says {best}"
     assert torch.allclose(
-        segmentation_score(scorer, ev, got, grid), scored.max(), atol=1e-4
+        segmentation_score(scorer, ev, got, dmax), scored.max(), atol=1e-4
     )
 
 
@@ -132,7 +132,7 @@ def test_every_label_is_reachable_by_the_traceback():
         scorer = _TableScorer(LABELS, seed=7)
         with torch.no_grad():
             scorer.u[:, :, label] += 20.0        # dominate every span at this label
-        got = viterbi(scorer, ev, scorer.grid(ev.frame_times[0]))
+        got = viterbi(scorer, ev, scorer.dmax_for(ev.frame_times[0]))
         seen.update(lab for lab, _, _ in got)
     assert seen == set(range(LABELS.n_labels)), (
         f"labels {sorted(set(range(LABELS.n_labels)) - seen)} were never decoded"
@@ -140,11 +140,11 @@ def test_every_label_is_reachable_by_the_traceback():
 
 
 def test_the_alphabet_width_reaches_every_shape(setup):
-    scorer, ev, grid, _, _ = setup
+    scorer, ev, dmax, _, _ = setup
     # The shapes the width has to flow through, pinned so a future change that hardcodes
     # 2 or 3 again fails here rather than in a training run.
     assert scorer.transitions().shape == (LABELS.n_rows, LABELS.n_labels) == (6, 5)
-    assert scorer.unary(ev, grid, 0, torch.arange(DMAX), T).shape[-1] == LABELS.n_labels
+    assert scorer.unary(ev, dmax, 0, torch.arange(DMAX), T).shape[-1] == LABELS.n_labels
     assert len(set(itertools.chain.from_iterable(
-        [(lab,) for lab, _, _ in viterbi(scorer, ev, grid)]
+        [(lab,) for lab, _, _ in viterbi(scorer, ev, dmax)]
     ))) >= 1

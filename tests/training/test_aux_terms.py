@@ -21,9 +21,11 @@ from stemify.semicrf.fit.terms import (
 )
 from stemify.semicrf import SemiCRFDecoder
 
+from spanscorer import CueScorer
+
 
 def _loss(**kwargs):
-    return SemiCRFLoss(SemiCRFDecoder(), **kwargs)
+    return SemiCRFLoss(SemiCRFDecoder(CueScorer()), **kwargs)
 
 
 # --------------------------------------------------------------------------- #

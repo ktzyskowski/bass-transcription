@@ -1,11 +1,12 @@
 """The whole DP must stay differentiable under degenerate and saturated evidence.
 
-The companion to ``test_pitch_cumsums_gradients``, which pins one function. This drives
-the real ``nll_chunk`` and asserts on the *gradient reaching the encoder logits*, which
-is the only place the failure that cost two training runs was observable: a softmax bin
-underflowing to 0.0 made ``sqrt``'s derivative infinite, and every forward value stayed
-finite while the gradient became NaN. A test asserting on returned values could not
-have caught it, and neither could any guard watching the loss.
+This drives the real ``nll_chunk`` and asserts on the *gradient reaching the encoder
+logits*, which is the only place the failure that cost two training runs was
+observable: a softmax bin underflowing to 0.0 made ``sqrt``'s derivative infinite, and
+every forward value stayed finite while the gradient became NaN. A test asserting on
+returned values could not have caught it, and neither could any guard watching the
+loss. The ``sqrt`` went with the span feature that needed it; what generalises, and is
+why this file outlived it, is that a *value* assertion cannot catch this class at all.
 
 The cases are the states a *trained* encoder reaches, which is the point -- an
 untrained one is diffuse and safe, so a suite that only ever runs at initialisation
@@ -28,6 +29,8 @@ from stemify.semicrf.window import initial_window
 from stemify.audio.features import N_BINS
 from stemify.music.notes import NoteEvent
 
+from spanscorer import CueScorer
+
 DT, T = 0.0116, 240
 TIMES = np.arange(T) * DT
 NOTES = [
@@ -49,15 +52,15 @@ def _backward(
     )
     cues = frames_from_logits(TIMES, onset=onset, voicing=voicing, pitch=pitch)
 
-    decoder = SemiCRFDecoder(stride=3)
+    decoder = SemiCRFDecoder(CueScorer(), stride=3)
     with torch.no_grad():
         for p in decoder.scorer.parameters():
             p.normal_(0, 0.5)
 
-    _, grid = decoder._prepare([cues])
-    gold = gold_segments(TIMES[:: decoder.stride], NOTES if notes else [], grid.dmax)
+    _, dmax = decoder._prepare([cues])
+    gold = gold_segments(TIMES[:: decoder.stride], NOTES if notes else [], dmax)
     rows = decoder.scorer.labels.n_rows
-    carry = initial_window(torch.zeros(grid.dmax, rows), 1, grid.dmax, rows)
+    carry = initial_window(torch.zeros(dmax, rows), 1, dmax, rows)
     A, gold_score, _ = decoder.nll_chunk([cues], [gold], carry, 0, 0)
 
     loss = (A - gold_score).mean()

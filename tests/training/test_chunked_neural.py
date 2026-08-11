@@ -2,7 +2,7 @@
 
 ``test_chunk_carry`` verifies the strongest invariant in the suite -- summing the
 per-chunk telescoping losses reproduces one uninterrupted scan of the whole track -- but
-only for ``LinearSpanScorer``. ``NeuralSpanScorer`` has never been run under chunking at
+only for a hand-built scorer. ``NeuralSpanScorer`` has never been run under chunking at
 all: every test of it is a single batch, whole-sequence, no carry. That matters because
 its potentials are built from *prefix sums over absolute frame index*, and under chunking
 the origin is the window's start rather than the track's. The moments are translation-
@@ -44,6 +44,8 @@ from test_chunk_carry import (  # noqa: F401  (fixtures)
     CHUNK, DMAX, HOP_S, N_BINS, N_CQT, STRIDE, _Item, track,
 )
 from stemify.semicrf.fit.tracks import train_items
+
+from spanscorer import CueScorer
 
 DP_HOP = HOP_S * STRIDE
 DMAX_S = DMAX * DP_HOP                       # so `grid` derives exactly DMAX frames
@@ -88,7 +90,7 @@ class _PointwiseTrunk(nn.Module):
 
 def _decoder(transitions: bool = False) -> SemiCRFDecoder:
     # Seeded, because the two sides of the comparison build their own decoder and
-    # this scorer -- unlike `LinearSpanScorer`, whose parameters are deterministic
+    # this scorer -- unlike a hand-built one, whose parameters are deterministic
     # constants -- is randomly initialised. Without this the test compares two
     # different models and reports the difference as a broken invariant.
     torch.manual_seed(1234)
@@ -196,7 +198,7 @@ def _dataset(items, cache):
     )
 
 
-@pytest.mark.parametrize("scorer", ["linear", "neural"])
+@pytest.mark.parametrize("scorer", ["cue", "neural"])
 def test_a_validation_pass_between_epochs_leaves_training_unchanged(
     track, tmp_path, scorer  # noqa: F811
 ):
@@ -208,16 +210,16 @@ def test_a_validation_pass_between_epochs_leaves_training_unchanged(
     supposed to make that harmless -- this is the test that says whether it does.
 
     Run for both scorers because a difference between them localises the fault: shared
-    means the carry plumbing, neural-only means the new potentials.
+    means the carry plumbing, neural-only means its own potentials.
     """
     items, cache, _ = track
     model = _PointwiseTrunk()
     train_ds = _dataset(items, cache)
     val_ds = _dataset(_second_track(tmp_path, cache), cache)
     decoder = (
-        SemiCRFDecoder(stride=STRIDE) if scorer == "linear" else _decoder()
+        SemiCRFDecoder(CueScorer(), stride=STRIDE) if scorer == "cue" else _decoder()
     )
-    if scorer == "linear":
+    if scorer == "cue":
         # The binary alphabet's gold, matching the decoder's own labels.
         train_ds.labels = val_ds.labels = decoder.scorer.labels
     loss = SemiCRFLoss(decoder)

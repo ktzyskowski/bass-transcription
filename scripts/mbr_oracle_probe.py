@@ -53,7 +53,7 @@ from stemify.semicrf.constants import NEG, NOTE, START
 from stemify.semicrf.evidence import Evidence
 from stemify.semicrf.forward import candidate_starts, log_partitions, step_terms
 from stemify.semicrf.marginals import span_marginals
-from stemify.semicrf.spans import Grid, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.window import initial_window, push
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.metrics.note import count_matches, prf_rates
@@ -70,7 +70,7 @@ Segs = list[tuple[int, int, int]]
 
 
 def forward_retaining(
-    scorer: SpanScorer, ev: Evidence, grid: Grid
+    scorer: SpanScorer, ev: Evidence, dmax: int
 ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
     """The forward scan, keeping every step's alpha *and* its term tensor.
 
@@ -85,12 +85,12 @@ def forward_retaining(
     Correctness is checked against ``log_partitions`` by the caller rather than argued
     -- the two must agree to float tolerance or this is scanning a different model.
     """
-    window = initial_window(ev.onset_logit, 1, grid.dmax, scorer.labels.n_rows)
+    window = initial_window(ev.onset_logit, 1, dmax, scorer.labels.n_rows)
     alphas = [window[:, -1, :]]                                        # alpha at j = 0
-    terms: list[torch.Tensor] = [ev.onset_logit.new_zeros(1, grid.dmax, 3, 2)]  # j=0 unused
+    terms: list[torch.Tensor] = [ev.onset_logit.new_zeros(1, dmax, 3, 2)]  # j=0 unused
     neg_col = ev.onset_logit.new_full((1, 1), NEG)
     for j in range(1, ev.T + 1):
-        term, _ = step_terms(scorer, ev, grid, window, j)          # (1, dmax, n_labels)
+        term, _ = step_terms(scorer, ev, dmax, window, j)          # (1, dmax, n_labels)
         terms.append(term)
         val = torch.logsumexp(term.reshape(1, -1, 2), dim=1)           # (1, 2)
         new = torch.cat([val, neg_col], dim=1)                         # (1, 3)
@@ -102,7 +102,7 @@ def forward_retaining(
 def sample_segmentation(
     alphas: list[torch.Tensor],
     terms: list[torch.Tensor],
-    grid: Grid,
+    dmax: int,
     T: int,
     device: torch.device,
     gen: torch.Generator,
@@ -128,7 +128,7 @@ def sample_segmentation(
         weights = terms[j][0, :, :, label].reshape(-1)          # (dmax * 3,) over (d, prev)
         draw = int(torch.multinomial(torch.softmax(weights, dim=0), 1, generator=gen))
         d, prev = divmod(draw, 3)
-        i = int(candidate_starts(grid, j, device)[d])
+        i = int(candidate_starts(dmax, j, device)[d])
         if prev == START and i != 0:
             raise RuntimeError(
                 f"drew START as the predecessor of a span beginning at frame {i}, but "
@@ -213,12 +213,12 @@ def probe(
             # deliberately: the point of the probe is to compare decision rules over the
             # *identical* evidence and pitch readout, so re-deriving either here would
             # measure the re-derivation too.
-            ev, grid = decoder._prepare([cue])
+            ev, dmax = decoder._prepare([cue])
             t0 = time.perf_counter()
             with torch.no_grad():
-                alphas, terms = forward_retaining(decoder.scorer, ev, grid)
+                alphas, terms = forward_retaining(decoder.scorer, ev, dmax)
                 mine = float(torch.logsumexp(alphas[ev.T][0, :2], dim=0))
-                theirs = float(log_partitions(decoder.scorer, ev, grid)[0])
+                theirs = float(log_partitions(decoder.scorer, ev, dmax)[0])
             if abs(mine - theirs) > 1e-2 * max(1.0, abs(theirs)):
                 raise RuntimeError(
                     f"retained-alpha scan says log Z = {mine}, the library's scan says "
@@ -226,16 +226,16 @@ def probe(
                 )
 
             drawn = [
-                sample_segmentation(alphas, terms, grid, ev.T, ev.device, gen)
+                sample_segmentation(alphas, terms, dmax, ev.T, ev.device, gen)
                 for _ in range(samples)
             ]
             for segs in drawn:
-                check_tiling(segs, ev.T, grid.dmax)
+                check_tiling(segs, ev.T, dmax)
             # FFBS is right only if the draws reproduce a quantity computed a completely
             # different way. The expected note count comes from the marginals, which are
             # verified against brute-force enumeration, so agreement here ties the
             # sampler to something already known to be correct.
-            expected = float(span_marginals(decoder.scorer, ev, grid)[0, :, :, NOTE].sum())
+            expected = float(span_marginals(decoder.scorer, ev, dmax)[0, :, :, NOTE].sum())
             drawn_mean = sum(sum(1 for lab, _, _ in s if lab == NOTE) for s in drawn) / samples
             drift.append(drawn_mean / expected if expected else float("nan"))
 

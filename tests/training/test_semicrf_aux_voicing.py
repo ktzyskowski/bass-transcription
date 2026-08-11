@@ -2,7 +2,7 @@
 
 The structured NLL supervises voicing only *competitively*. It is discriminative over
 segmentations, so a feature earns gradient in proportion to how much it helps rank gold
-above the alternatives, and ``LinearSpanScorer`` gives every feature a learned scalar.
+above the alternatives, and every feature reaches the score through a learned weight.
 Voicing is largely redundant given onset evidence, the duration prior and the transition
 table -- its unique contribution is spotting rests, which are rare -- so ``w_v``/``w_u``
 can shrink toward zero and leave the head with no signal at all.
@@ -29,6 +29,8 @@ from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.fit.tracks import TrainItem
 from stemify.audio.features import N_BINS
+
+from spanscorer import CueScorer
 
 HOP_S, N_CQT = 0.0116, 4000
 TIMES = np.arange(N_CQT) * HOP_S
@@ -67,8 +69,8 @@ def _model():
 # --------------------------------------------------------------------------- #
 def test_the_voicing_term_is_reported_and_changes_the_total(batch):
     model, dev = _model(), torch.device("cpu")
-    off = SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("pitch",))
-    on = SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("pitch", "voicing"))
+    off = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("pitch",))
+    on = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("pitch", "voicing"))
     _, m_off = off.compute(model, batch, dev)
     _, m_on = on.compute(model, batch, dev)
     assert "voicing" not in m_off
@@ -80,10 +82,10 @@ def test_each_head_carries_its_own_weight(batch):
     """One shared coefficient would mean whichever head was tuned last: pitch is a
     categorical CE over 216 bins on voiced frames, voicing is BCE over every frame."""
     model, dev = _model(), torch.device("cpu")
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("pitch", "voicing"),
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("pitch", "voicing"),
                        aux_weights={"pitch": 1.0, "voicing": 3.0})
     _, m = loss.compute(model, batch, dev)
-    base = SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("pitch", "voicing"))
+    base = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("pitch", "voicing"))
     _, b = base.compute(model, batch, dev)
     # The reported term is the unweighted loss; only the total scales.
     assert m["voicing"] == pytest.approx(b["voicing"], rel=1e-5)
@@ -112,13 +114,13 @@ def test_both_binary_heads_are_supervised_by_default():
 
 def test_a_weight_for_an_undeclared_head_is_refused():
     with pytest.raises(ValueError, match="not in aux_heads"):
-        SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("pitch",),
+        SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("pitch",),
                     aux_weights={"voicing": 1.0})
 
 
 def test_an_unsupported_head_is_still_refused():
     with pytest.raises(NotImplementedError, match="no auxiliary term"):
-        SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("tablature",))
+        SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("tablature",))
 
 
 # --------------------------------------------------------------------------- #
@@ -156,7 +158,7 @@ def test_the_term_scores_only_the_frames_the_nll_scores(batch):
     would stop holding -- and it would supervise the margins twice, since one chunk's
     context is the previous chunk's scored region."""
     model, dev = _model(), torch.device("cpu")
-    loss = SemiCRFLoss(SemiCRFDecoder(stride=3), aux_heads=("voicing",))
+    loss = SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=3), aux_heads=("voicing",))
     out = model(batch.features)
     lo, hi = loss.scored_slice(batch, out["voicing"].shape[1])
     expected = frame_bce(out["voicing"][:, lo:hi], batch.y["voicing"][:, lo:hi])

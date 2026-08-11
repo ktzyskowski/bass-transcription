@@ -24,6 +24,8 @@ from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 
+from spanscorer import CueScorer
+
 DT = 0.0116
 T = 240
 TIMES = np.arange(T) * DT
@@ -77,7 +79,7 @@ def _chunk(spans, stream: int, *, midi: float | None = 45.0) -> Chunk:
         if midi is not None:
             y_pitch[voiced] = midi
     notes = [NoteEvent(onset=a, offset=b, midi_pitch=45.0) for a, b in spans]
-    dmax = SemiCRFDecoder(stride=STRIDE).scorer.grid(TIMES[::STRIDE]).dmax
+    dmax = SemiCRFDecoder(CueScorer(), stride=STRIDE).scorer.dmax_for(TIMES[::STRIDE])
     return Chunk(
         features=feats[None],
         frame_times=TIMES,
@@ -98,7 +100,7 @@ def _batch(context: int = 0, right: int = 0, **kw):
 
 
 def _loss(**kw) -> SemiCRFLoss:
-    return SemiCRFLoss(SemiCRFDecoder(stride=STRIDE), **kw)
+    return SemiCRFLoss(SemiCRFDecoder(CueScorer(), stride=STRIDE), **kw)
 
 
 def test_without_aux_heads_the_total_is_just_the_nll():

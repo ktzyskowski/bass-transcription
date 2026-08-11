@@ -9,7 +9,7 @@ shape still matches, every score is still some real span's score, and the DP hap
 returns the best segmentation under a permuted potential.
 
 Three access patterns read that one table and must agree: the scan's ``(B, 1) x
-(1, dmax)`` grid of candidates, the gold scorer's scattered ``(S,)`` triples, and a
+(1, dmax)`` dmax of candidates, the gold scorer's scattered ``(S,)`` triples, and a
 single span addressed by three ints. Enumeration pins all of them at once, because the
 brute-force score goes through the gold path while ``log Z`` goes through the scan.
 """
@@ -80,23 +80,23 @@ def _all_segmentations():
 @pytest.fixture(scope="module")
 def setup():
     scorer, ev = _scorer(), _evidence()
-    grid = scorer.grid(ev.frame_times[0])
+    dmax = scorer.dmax_for(ev.frame_times[0])
     segs = list(_all_segmentations())
-    scored = torch.stack([segmentation_score(scorer, ev, s, grid) for s in segs])
-    return scorer, ev, grid, segs, scored
+    scored = torch.stack([segmentation_score(scorer, ev, s, dmax) for s in segs])
+    return scorer, ev, dmax, segs, scored
 
 
 def test_log_partition_equals_brute_force(setup):
-    scorer, ev, grid, _, scored = setup
-    got = log_partitions(scorer, ev, grid)[0]
+    scorer, ev, dmax, _, scored = setup
+    got = log_partitions(scorer, ev, dmax)[0]
     assert torch.allclose(got, torch.logsumexp(scored, dim=0), atol=1e-4), (
         f"log Z {got.item()} != brute force {torch.logsumexp(scored, 0).item()}"
     )
 
 
 def test_viterbi_returns_the_enumerated_best(setup):
-    scorer, ev, grid, segs, scored = setup
-    got = viterbi(scorer, ev, grid)
+    scorer, ev, dmax, segs, scored = setup
+    got = viterbi(scorer, ev, dmax)
     assert got == segs[int(scored.argmax())]
 
 
@@ -107,16 +107,16 @@ def test_the_scan_and_the_gold_scorer_read_the_same_table(setup):
     with three ``(S,)`` tensors. Both index ``span_scores[b, j, j - i - 1]``, and a
     transposed or off-by-one gather is only visible where the two disagree.
     """
-    scorer, ev, grid, _, _ = setup
+    scorer, ev, dmax, _, _ = setup
     j = 5
     starts = torch.arange(j - DMAX, j).clamp(min=0)
-    grid_style = scorer.unary(ev, grid, torch.zeros(1, 1, dtype=torch.long),
+    grid_style = scorer.unary(ev, dmax, torch.zeros(1, 1, dtype=torch.long),
                               starts.unsqueeze(0), j)                    # (1, dmax, L)
-    flat_style = scorer.unary(ev, grid, torch.zeros(DMAX, dtype=torch.long),
+    flat_style = scorer.unary(ev, dmax, torch.zeros(DMAX, dtype=torch.long),
                               starts, torch.full((DMAX,), j))            # (dmax, L)
     assert torch.allclose(grid_style[0], flat_style, atol=1e-6)
     for k, i in enumerate(starts.tolist()):
-        one = scorer.unary(ev, grid, 0, i, j)                            # (L,)
+        one = scorer.unary(ev, dmax, 0, i, j)                            # (L,)
         assert torch.allclose(one, flat_style[k], atol=1e-6), f"start {i}"
 
 
@@ -124,10 +124,10 @@ def test_slicing_the_precompute_does_not_change_it(monkeypatch, setup):
     """``J_BLOCK`` bounds memory, not the answer. Spans are independent, so the blocks
     concatenate -- unless a block's local ``j`` leaks in where the global one belongs,
     which is exactly the bug this shape invites."""
-    scorer, ev, grid, _, _ = setup
-    whole = scorer.precompute(ev, grid)
+    scorer, ev, dmax, _, _ = setup
+    whole = scorer.precompute(ev, dmax)
     monkeypatch.setattr(neural, "J_BLOCK", 2)
-    assert torch.allclose(whole, scorer.precompute(ev, grid), atol=1e-6)
+    assert torch.allclose(whole, scorer.precompute(ev, dmax), atol=1e-6)
 
 
 def test_every_parameter_gets_gradient():
@@ -138,7 +138,7 @@ def test_every_parameter_gets_gradient():
         LABELS, trunk_dim=TRUNK, frame_dim=4, span_dim=6, dur_dim=3,
         dmax_s=DMAX * DT, dmax_frames=DMAX,
     ), _evidence()
-    log_partitions(scorer, ev, scorer.grid(ev.frame_times[0])).sum().backward()
+    log_partitions(scorer, ev, scorer.dmax_for(ev.frame_times[0])).sum().backward()
     dead = [n for n, p in scorer.named_parameters()
             if p.grad is None or not torch.any(p.grad != 0)]
     assert not dead, f"no gradient reaches {dead}"
@@ -178,13 +178,13 @@ def test_a_trunkless_evidence_is_refused():
     ev = build_evidence([frames], stride=1)
     scorer = _scorer()
     with pytest.raises(ValueError, match="carries none"):
-        log_partitions(scorer, ev, scorer.grid(ev.frame_times[0]))
+        log_partitions(scorer, ev, scorer.dmax_for(ev.frame_times[0]))
 
 
 def test_a_hop_the_duration_table_was_not_fitted_for_is_refused():
     scorer = _scorer()
     with pytest.raises(ValueError, match="duration embedding is sized"):
-        scorer.grid(np.arange(T) * (DT / 2))
+        scorer.dmax_for(np.arange(T) * (DT / 2))
 
 
 def test_span_marginals_match_brute_force(setup):
@@ -197,13 +197,13 @@ def test_span_marginals_match_brute_force(setup):
     """
     from stemify.semicrf.marginals import span_marginals
 
-    scorer, ev, grid, segs, scored = setup
+    scorer, ev, dmax, segs, scored = setup
     posterior = torch.softmax(scored, dim=0)
     brute = torch.zeros(1, T + 1, DMAX, LABELS.n_labels)
     for p, seg in zip(posterior, segs, strict=True):
         for label, i, j in seg:
             brute[0, j, i - j + DMAX, label] += p
-    got = span_marginals(scorer, ev, grid)
+    got = span_marginals(scorer, ev, dmax)
     assert got.shape == brute.shape
     assert torch.allclose(got, brute, atol=1e-4), (
         f"max |diff| {(got - brute).abs().max().item()}"
@@ -219,11 +219,11 @@ def test_expected_note_count_equals_the_enumerated_expectation(setup):
     """
     from stemify.semicrf.marginals import span_marginals
 
-    scorer, ev, grid, segs, scored = setup
+    scorer, ev, dmax, segs, scored = setup
     posterior = torch.softmax(scored, dim=0)
     brute = sum(
         float(p) * sum(1 for lab, _, _ in seg if LABELS.is_note(lab))
         for p, seg in zip(posterior, segs, strict=True)
     )
-    got = float(span_marginals(scorer, ev, grid)[..., : LABELS.n_pitches].sum())
+    got = float(span_marginals(scorer, ev, dmax)[..., : LABELS.n_pitches].sum())
     assert got == pytest.approx(brute, abs=1e-3), f"{got} != {brute}"

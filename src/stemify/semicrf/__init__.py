@@ -21,8 +21,8 @@ package composes:
     change when a span *feature* is added or retired.
   - ``evidence`` -- ``Evidence`` and ``build_evidence``: the per-frame tensors the scan
     reads, always batched, plus the span accessors that own the index conventions.
-  - ``spans`` -- ``SpanScorer`` (what a span is worth) and ``Grid``. The *only* place a
-    potential is written down; ``LinearSpanScorer`` is the classical log-linear form.
+  - ``spans`` -- ``SpanScorer``: what a span is worth, and the *only* place a potential
+    is written down. ``neural`` is the one implementation in the tree.
   - ``window`` -- the rolling ``alpha`` buffer every scan slides over.
   - ``semiring`` -- ``LOG`` and ``MAX_PLUS``: *how* a step's alternatives combine, and
     the only thing separating training's answer from decoding's.
@@ -48,10 +48,10 @@ implementing a new potential, and ``Semiring`` for anyone implementing a new red
 """
 
 from stemify.semicrf.decoder import SemiCRFDecoder
+from stemify.semicrf.neural import NeuralSpanScorer
 from stemify.semicrf.semiring import LOG, MAX_PLUS, Semiring
-from stemify.semicrf.spans import Grid, LinearSpanScorer, SpanScorer
+from stemify.semicrf.spans import SpanScorer
 
 __all__ = [
-    "LOG", "MAX_PLUS", "Grid", "LinearSpanScorer", "SemiCRFDecoder", "Semiring",
-    "SpanScorer",
+    "LOG", "MAX_PLUS", "NeuralSpanScorer", "SemiCRFDecoder", "Semiring", "SpanScorer",
 ]

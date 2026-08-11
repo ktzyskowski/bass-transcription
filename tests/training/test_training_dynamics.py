@@ -25,11 +25,11 @@ truncated bottoms out at 99 and climbs to 311,807 over 200 steps, while the exac
 gradient from the same seed descends monotonically to 13.7 with its norm decaying to
 0.05.
 
-**The linear scorer is bitten too, and survives it.** Same comparison, same fixture:
-truncated bottoms at 96.5 and drifts back to 120; exact reaches 80.6 and is still
-falling. Twenty scalars over hand-crafted features cannot sharpen enough for the
-omitted term to dominate, so the bias reads as a plateau rather than a divergence. That
-is why this went unnoticed for as long as every scorer was log-linear.
+**The retired log-linear scorer was bitten too, and survived it.** Same comparison,
+same fixture: truncated bottomed at 96.5 and drifted back to 120; exact reached 80.6 and
+was still falling. Twenty scalars over hand-crafted features cannot sharpen enough for
+the omitted term to dominate, so the bias read as a plateau rather than a divergence.
+That is why this went unnoticed for as long as that was the only scorer.
 
 The value being *bit-identical* is what made it invisible. Every number a run logs is
 correct; only the direction it steps in is wrong.

@@ -89,6 +89,15 @@ The name: *semi-Markov* because the Markov (memoryless) transitions happen betwe
 
 ## The model
 
+> **Retired, 2026-08-11.** The log-linear scorer this section describes is no longer in
+> the tree. It was the arm every neural result was quoted against, and both live
+> checkpoints are neural, so it was cut along with the machinery only it read — the
+> `path_c`/`entropy_c`/`pitch_c` cumsums, the five span accessors over them, and the
+> duration-bucket map. The shipped scorer is `semicrf/neural.py`; the *recurrence*
+> below is unchanged, which is the property the `SpanScorer` seam exists to have. This
+> section is kept because the ablations in `docs/experiments.md` are measured against
+> it, and because the pitch discussion further down is what motivated its successor.
+
 **Output:** a partition of the CQT frame grid into segments, each labeled `note` or
 `rest`; `note→note` allowed (back-to-back re-articulation), `rest→rest` collapses.
 

@@ -18,6 +18,8 @@ from stemify.music.notes import NoteEvent
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 
+from spanscorer import CueScorer
+
 BINS = 144
 LABELS = LabelSet.from_bins(BINS)          # MIDI 27..74
 DT, T = 0.0348, 200
@@ -100,4 +102,4 @@ def test_a_binary_alphabet_still_needs_a_contour():
         rest_c=torch.zeros(1, T + 1), lengths=[T], frame_times=[FT], contours=None,
     )
     with pytest.raises(ValueError, match="does not name them"):
-        SemiCRFDecoder()._segs_to_notes([(0, 0, 10)], ev)
+        SemiCRFDecoder(CueScorer())._segs_to_notes([(0, 0, 10)], ev)

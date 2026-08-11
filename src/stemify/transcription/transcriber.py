@@ -9,7 +9,7 @@ transcribe through the exact same object and cannot drift.
 It is deliberately not an ABC: composition is the only behaviour, and the two
 swappable parts are the ``Encoder`` and ``Decoder`` it holds. The interesting
 combinations are just different pairs -- ``Transcriber(LearnedEncoder(ckpt),
-GreedyDecoder())`` against ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder())`` --
+GreedyDecoder())`` against ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder(...))`` --
 not different ``Transcriber`` subclasses.
 """
 

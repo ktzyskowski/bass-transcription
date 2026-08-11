@@ -20,22 +20,27 @@ import torch
 
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
-from stemify.semicrf import SemiCRFDecoder
 from stemify.music.notes import NoteEvent
 from stemify.training.checkpoint import VERSION, Checkpoint
 from stemify.training.frame.recipe import FrameRecipe
 from stemify.semicrf.fit.recipe import SemiCRFRecipe
 
+
 DT = 0.0116
 
 
 def _trained_potentials() -> dict[str, torch.Tensor]:
-    """Potentials visibly off their defaults, so a lost restore cannot pass."""
-    decoder = SemiCRFDecoder()
+    """Potentials visibly off their defaults, so a lost restore cannot pass.
+
+    Taken off a recipe's *own* decoder rather than a hand-built one: the state dict has
+    to match the scorer the recipe rebuilds, and a stand-in would be testing that two
+    fixtures agree rather than that a checkpoint round-trips."""
+    decoder = SemiCRFRecipe(["clean"]).decoder
     with torch.no_grad():
-        decoder.scorer.w_on.fill_(0.31)
-        decoder.scorer.b_note.fill_(-0.77)
-        decoder.scorer.dur.copy_(torch.linspace(-1.0, 1.0, decoder.scorer.dur.numel()))
+        decoder.scorer.label_bias.fill_(0.31)
+        decoder.scorer.rest_logprob.fill_(-0.77)
+        dur = decoder.scorer.dur.weight
+        dur.copy_(torch.linspace(-1.0, 1.0, dur.numel()).reshape(dur.shape))
     return {k: v.detach().clone() for k, v in decoder.state_dict().items()}
 
 
@@ -65,7 +70,7 @@ def test_the_decoder_comes_back_trained_not_default(tmp_path):
     # fresh decoder has and the opposite of what this objective exists to learn.
     path = tmp_path / "ck.pt"
     _semicrf_checkpoint().save(path)
-    dur = Checkpoint.load(path).decoder().scorer.dur
+    dur = Checkpoint.load(path).decoder().scorer.dur.weight
     assert not torch.allclose(dur, torch.zeros_like(dur))
 
 
@@ -80,17 +85,16 @@ def test_frame_checkpoint_scores_through_the_heuristic(tmp_path):
     assert back.recipe.heads == ["onset", "voicing", "pitch"]
 
 
-def test_a_version_1_checkpoint_loads_and_says_what_it_inferred(tmp_path, caplog):
+def test_a_version_1_frame_checkpoint_loads_and_says_what_it_inferred(tmp_path, caplog):
     # Files written before this type existed carry derived facts and no recipe. They
     # must still load -- but every guess has to be visible, because a wrong one is
     # exactly the silent mis-scoring this type was introduced to end.
-    recipe = SemiCRFRecipe(["clean"])
+    recipe = FrameRecipe(["clean"], pitch=True)
     path = tmp_path / "v1.pt"
     torch.save(
         {
             "state_dict": recipe.build_model().state_dict(),
-            "loss_state": _trained_potentials(),
-            "heads": ["onset", "voicing"],
+            "heads": ["onset", "voicing", "pitch"],
             "in_channels": 1,
             "conditions": ["clean"],
         },
@@ -98,10 +102,22 @@ def test_a_version_1_checkpoint_loads_and_says_what_it_inferred(tmp_path, caplog
     )
     with caplog.at_level(logging.WARNING):
         back = Checkpoint.load(path)
-    assert back.recipe.name == "semicrf"          # inferred from having potentials
+    assert back.recipe.name == "frame"          # inferred from having no potentials
     assert "version-1" in caplog.text and "inferring" in caplog.text
-    dur = back.decoder().scorer.dur
-    assert not torch.allclose(dur, torch.zeros_like(dur))
+    assert back.recipe.heads == ["onset", "voicing", "pitch"]
+
+
+def test_a_version_1_semicrf_checkpoint_is_refused_by_name(tmp_path):
+    # The one v1 file that cannot be recovered. Its potentials were fitted against the
+    # retired log-linear scorer, and v1 recorded no scorer configuration to rebuild
+    # anything else from -- so there is no default to fall back to, only a wrong one.
+    path = tmp_path / "v1-semicrf.pt"
+    torch.save(
+        {"state_dict": {}, "heads": ["onset"], "loss_state": {"scorer.w_on": 0.3}},
+        path,
+    )
+    with pytest.raises(ValueError, match="version-1 semi-CRF checkpoint"):
+        Checkpoint.load(path)
 
 
 def test_saved_file_records_its_version(tmp_path):
@@ -110,16 +126,26 @@ def test_saved_file_records_its_version(tmp_path):
     assert torch.load(path, map_location="cpu", weights_only=False)["version"] == VERSION
 
 
-def _cues(n: int = 120) -> Frames:
+def _cues(recipe: SemiCRFRecipe, n: int = 120) -> Frames:
+    """Everything the scorer reads, at the widths this recipe's backbone produces.
+
+    Synthetic rather than encoded from audio: what is under test is that the *same*
+    cues decode the same way through two decoders, so the cues only have to be fixed
+    and correctly shaped. They do have to carry the trunk and the pitch axis -- the
+    scorer pools one and scores its labels against the other, and a bare head stack
+    would be refused before any of this could be compared."""
     ft = np.arange(n) * DT
     rng = np.random.default_rng(0)
+    backbone = recipe.build_model().backbone
     return Frames(
         heads={
             "onset": rng.random(n).astype(np.float32),
             "voicing": np.full(n, 0.9, dtype=np.float32),
+            "pitch": rng.standard_normal((n, backbone.frontend.n_bins), dtype=np.float32),
         },
         frame_times=ft,
         contour=Contour(times=ft, freqs=np.full(n, 110.0, dtype=np.float32)),
+        hidden=rng.standard_normal((n, backbone.hidden), dtype=np.float32),
     )
 
 
@@ -134,7 +160,7 @@ def test_a_reloaded_checkpoint_decodes_identically_to_the_one_in_memory(tmp_path
     # this type was written for would have tripped it, and neither had a unit test that
     # could, because each half worked in isolation.
     checkpoint = _semicrf_checkpoint()
-    cues = _cues()
+    cues = _cues(checkpoint.recipe)
 
     before = _notes(checkpoint.decoder(), cues)
     path = tmp_path / "ck.pt"

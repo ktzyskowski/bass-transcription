@@ -23,11 +23,12 @@ from stemify.transcription.frames import Frames
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.evidence import build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
-from stemify.semicrf.spans import Grid
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.semicrf.fit.geometry import ChunkGeometry
+
+from spanscorer import CueScorer
 from stemify.semicrf.fit.dataset import ChunkDataset, collate
 from stemify.semicrf.fit.tracks import channel_window, train_items
 
@@ -256,8 +257,7 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
     # reproduce the whole-track log Z. This is what ties the chunking to the objective.
     n_cqt, chunk, dmax = 900, 40, 30
     ds = _dataset(tmp_path, cache, [n_cqt], chunk=chunk, dmax=dmax, batch_size=1)
-    dec = SemiCRFDecoder(dmax_s=dmax * HOP_S * STRIDE)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
+    dec = SemiCRFDecoder(CueScorer(dmax_s=dmax * HOP_S * STRIDE))
 
     batches = list(ds)
     n_dp = (n_cqt // STRIDE // chunk) * chunk
@@ -266,12 +266,12 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
     contour = _synthetic_contour()
     ft = np.arange(n_dp * STRIDE) * HOP_S
     whole_e = build_evidence(_cues(ft, contour), STRIDE)
-    whole = log_partitions(dec.scorer, whole_e, grid)
+    whole = log_partitions(dec.scorer, whole_e, dmax)
 
     carry, A = None, None
     for batch in batches:
         # The batch carries no contour -- no potential reads one -- so the cue
         # builder is handed the same synthetic track the whole-track pass used.
         e = build_evidence(_cues(batch.frame_times[0], contour), STRIDE)
-        A, carry = chunk_log_partition(dec.scorer, e, grid, carry, batch.geometry.context)
+        A, carry = chunk_log_partition(dec.scorer, e, dmax, carry, batch.geometry.context)
     assert torch.allclose(A, whole, atol=1e-3), f"{A.item()} != {whole.item()}"

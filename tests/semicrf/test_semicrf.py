@@ -24,7 +24,6 @@ from stemify.semicrf.forward import (
 )
 from stemify.semicrf.marginals import segment_confidence, span_marginals
 from stemify.semicrf.semiring import MAX_PLUS
-from stemify.semicrf.spans import Grid
 from stemify.semicrf.window import initial_window
 from stemify.semicrf.viterbi import viterbi
 from stemify.semicrf.score import segmentation_score, segmentation_scores
@@ -32,13 +31,15 @@ from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.gold import gold_segments
 from stemify.music.notes import NoteEvent
 
+from spanscorer import CueScorer, fitted
+
 SPANS = [(0.2, 0.9), (1.2, 1.9)]
 HZ = [110.0, 146.0]
 MIDI = [45, 50]
 
 DT = 0.0116  # feature hop, seconds
 T = 240
-TIMES = np.arange(T) * DT  # ~2.8 s grid
+TIMES = np.arange(T) * DT  # ~2.8 s dmax
 
 
 def _curve(spans: list[tuple[float, float]], hi: float, lo: float) -> np.ndarray:
@@ -74,9 +75,9 @@ def _notes(spans: list[tuple[float, float]], midis: list[float]) -> list[NoteEve
 
 def test_gold_rest_across_audible_gap():
     # 0.9 -> 1.2 is a 0.3 s gap (> GAP_REST_S): a real rest between the two notes.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     e = build_evidence(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
-    dmax = dec.scorer.grid(e.frame_times[0]).dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     labels = [lab for lab, _, _ in gold]
     assert labels.count(NOTE) == 2
@@ -86,9 +87,9 @@ def test_gold_rest_across_audible_gap():
 def test_gold_closes_a_note_off_artifact_gap():
     # 0.5 -> 0.55 is a 0.05 s gap (< GAP_REST_S): a note-off artifact, so the notes
     # are made contiguous (note -> note) with no interior rest.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     e = build_evidence(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
-    dmax = dec.scorer.grid(e.frame_times[0]).dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
     # No rest between the notes: everything from the first note to the last is NOTE.
     note_idx = [k for k, (lab, _, _) in enumerate(gold) if lab == NOTE]
@@ -96,7 +97,7 @@ def test_gold_closes_a_note_off_artifact_gap():
     assert all(lab == NOTE for lab, _, _ in between)
 
 
-def _score_by_loop(scorer, ev, gold, grid):
+def _score_by_loop(scorer, ev, gold, dmax):
     """The pre-vectorisation reference: one segment at a time, straight from the
     definition ``sum of unary + incoming transition``.
 
@@ -108,58 +109,43 @@ def _score_by_loop(scorer, ev, gold, grid):
     score = ev.onset_logit.new_zeros(())
     prev = START
     for label, i, j in gold:
-        score = score + scorer.unary(ev, grid, 0, i, j)[label]
+        score = score + scorer.unary(ev, dmax, 0, i, j)[label]
         score = score + scorer.transitions()[prev, label]
         prev = label
     return score
 
 
-def _fitted_scorer(dec):
-    """Move the potentials off their symmetric init, so a bug that happens to cancel
-    at w=1/bias=0 cannot pass."""
-    with torch.no_grad():
-        dec.scorer.w_on.fill_(0.7)
-        dec.scorer.w_v.fill_(1.3)
-        dec.scorer.w_u.fill_(0.4)
-        dec.scorer.b_note.fill_(0.25)
-        dec.scorer.b_rest.fill_(-0.4)
-        dec.scorer.dur.copy_(torch.linspace(-1.0, 1.0, dec.scorer.dur.numel()))
-        dec.scorer.trans.copy_(torch.tensor([[0.3, -0.2], [-0.5, 0.1]]))
-        dec.scorer.init.copy_(torch.tensor([0.6, -0.3]))
-    return dec
-
-
 def test_gold_score_matches_the_per_segment_loop():
     # The vectorised gold_score evaluates both label branches and selects with
     # `where`; the loop it replaced branched. They must agree exactly.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     e = build_evidence(cues, dec.stride)
-    grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
+    dmax = dmax
     gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     assert len(gold) > 2  # the test is vacuous if gold is trivial
 
-    fast = segmentation_score(dec.scorer, e, gold, grid)
-    ref = _score_by_loop(dec.scorer, e, gold, grid)
+    fast = segmentation_score(dec.scorer, e, gold, dmax)
+    ref = _score_by_loop(dec.scorer, e, gold, dmax)
     assert torch.allclose(fast, ref, atol=1e-5), f"{fast.item()} != {ref.item()}"
 
 
 def test_gold_score_gradient_matches_the_per_segment_loop():
     # gold_score is half the NLL, so its gradient is what trains the potentials.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     e = build_evidence(cues, dec.stride)
-    grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
+    dmax = dmax
     gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
 
     g_fast = torch.autograd.grad(
-        segmentation_score(dec.scorer, e, gold, grid), list(dec.scorer.parameters()),
+        segmentation_score(dec.scorer, e, gold, dmax), list(dec.scorer.parameters()),
         retain_graph=True, allow_unused=True,
     )
     g_ref = torch.autograd.grad(
-        _score_by_loop(dec.scorer, e, gold, grid), list(dec.scorer.parameters()),
+        _score_by_loop(dec.scorer, e, gold, dmax), list(dec.scorer.parameters()),
         allow_unused=True,
     )
     for a, b in zip(g_fast, g_ref, strict=True):
@@ -173,7 +159,7 @@ def test_gold_scores_batched_equals_per_track():
     # The batched form flattens every track's segments into one indexed set and folds
     # them back with index_add; a mis-grouped `first` mask would mis-assign the START
     # transition, which only shows up with more than one track.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     short = Frames(
@@ -184,17 +170,17 @@ def test_gold_scores_batched_equals_per_track():
     ns = _notes([(0.2, 0.9)], [45])
 
     ev = build_evidence([a, short], dec.stride)
-    grid = dec.scorer.grid(ev.frame_times[0])
+    dmax = dec.scorer.dmax_for(ev.frame_times[0])
     golds = [
-        gold_segments(ft, n, grid.dmax)
+        gold_segments(ft, n, dmax)
         for ft, n in zip(ev.frame_times, [na, ns], strict=True)
     ]
 
-    batched = segmentation_scores(dec.scorer, ev, golds, grid)
+    batched = segmentation_scores(dec.scorer, ev, golds, dmax)
     # ``one(b)`` re-cuts row b to its own length, so the single-track path never sees
     # the flat padding the batch carries past the short track's end.
     single = torch.stack([
-        segmentation_score(dec.scorer, ev.one(b), g, grid)
+        segmentation_score(dec.scorer, ev.one(b), g, dmax)
         for b, g in enumerate(golds)
     ])
     assert torch.allclose(batched, single, atol=1e-4)
@@ -203,16 +189,16 @@ def test_gold_scores_batched_equals_per_track():
 def test_gold_scores_handles_a_track_with_no_segments():
     # An empty note list yields empty gold; index_add must leave that row at zero
     # rather than dropping the row and shifting every later track's score.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     cues = _two_note_cues([(0.2, 0.9)], [110.0])
     e = build_evidence(cues, dec.stride)
-    grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
+    dmax = dmax
     gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9)], [45]), dmax)
 
-    scores = segmentation_scores(dec.scorer, build_evidence([cues, cues], dec.stride), [[], gold], grid)
+    scores = segmentation_scores(dec.scorer, build_evidence([cues, cues], dec.stride), [[], gold], dmax)
     assert scores[0].item() == 0.0
-    assert torch.allclose(scores[1], segmentation_score(dec.scorer, e, gold, grid), atol=1e-4)
+    assert torch.allclose(scores[1], segmentation_score(dec.scorer, e, gold, dmax), atol=1e-4)
 
 
 def _truncate(ev, n):
@@ -289,17 +275,16 @@ def test_log_partition_equals_brute_force_enumeration():
     # file compares one of our implementations against another -- batched vs single,
     # chunked vs whole, cpu vs cuda -- which two copies of the *same* wrong recurrence
     # would pass. This one enumerates all segmentations explicitly and sums them.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     segs = list(_all_segmentations(T, dmax))
     assert len(segs) > 100, f"only {len(segs)} segmentations -- not a real test"
     brute = torch.logsumexp(
-        torch.stack([_score_by_loop(dec.scorer, e, s, grid) for s in segs]), dim=0
+        torch.stack([_score_by_loop(dec.scorer, e, s, dmax) for s in segs]), dim=0
     )
-    got = log_partitions(dec.scorer, e, grid)[0]
+    got = log_partitions(dec.scorer, e, dmax)[0]
     assert torch.allclose(got, brute, atol=1e-4), (
         f"log Z {got.item()} != brute-force {brute.item()} over {len(segs)} segmentations"
     )
@@ -308,18 +293,17 @@ def test_log_partition_equals_brute_force_enumeration():
 def test_viterbi_equals_brute_force_argmax():
     # Same ground truth, max semiring: the returned segmentation must be the single
     # highest-scoring one out of every possible tiling.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T, seed=1)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     scored = [
-        (_score_by_loop(dec.scorer, e, s, grid).item(), s)
+        (_score_by_loop(dec.scorer, e, s, dmax).item(), s)
         for s in _all_segmentations(T, dmax)
     ]
     best_score, best = max(scored, key=lambda kv: kv[0])
-    got = viterbi(dec.scorer, e, grid)
-    got_score = _score_by_loop(dec.scorer, e, got, grid).item()
+    got = viterbi(dec.scorer, e, dmax)
+    got_score = _score_by_loop(dec.scorer, e, got, dmax).item()
     assert abs(got_score - best_score) < 1e-4, (
         f"viterbi scored {got_score}, best possible {best_score}"
     )
@@ -334,18 +318,17 @@ def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
     is enumeration, not our other recurrence -- one loop now serves both semirings, so a
     mistake in it would move `log Z` and Viterbi together and stay invisible to any test
     that compares them to each other."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T, seed=1)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     best = max(
-        _score_by_loop(dec.scorer, e, s, grid).item()
+        _score_by_loop(dec.scorer, e, s, dmax).item()
         for s in _all_segmentations(T, dmax)
     )
     rows = dec.scorer.labels.n_rows
     window = scan(
-        dec.scorer, e, grid, initial_window(e.onset_logit, 1, dmax, rows),
+        dec.scorer, e, dmax, initial_window(e.onset_logit, 1, dmax, rows),
         stop=T, semiring=MAX_PLUS,
     ).window
     got = float(window[0, -1, : dec.scorer.labels.n_labels].max().detach())
@@ -355,11 +338,11 @@ def test_scan_under_max_plus_equals_the_best_score_by_enumeration():
 # --------------------------------------------------------------------------- #
 # Span marginals                                                               #
 # --------------------------------------------------------------------------- #
-def _enumerated_marginals(scorer, ev, grid, T, dmax):
+def _enumerated_marginals(scorer, ev, dmax, T):
     """`P(span in y)` by explicit enumeration: every segmentation, its probability,
     summed over the ones containing each span. Ground truth by construction."""
     segs = list(_all_segmentations(T, dmax))
-    scores = torch.tensor([_score_by_loop(scorer, ev, s, grid).item() for s in segs])
+    scores = torch.tensor([_score_by_loop(scorer, ev, s, dmax).item() for s in segs])
     probs = (scores - torch.logsumexp(scores, 0)).exp()
     want = torch.zeros(T + 1, dmax, 2)
     for p, seg in zip(probs, segs, strict=True):
@@ -374,13 +357,12 @@ def test_span_marginals_equal_brute_force_enumeration():
     right recurrence *and* the perturbation lands on the right axis -- a shape mistake
     that shares eps across the wrong dimension still yields a plausible, normalised,
     entirely wrong table. Enumeration has no recurrence to be wrong about."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T, seed=5)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
-    want = _enumerated_marginals(dec.scorer, e, grid, T, dmax)
-    got = span_marginals(dec.scorer, e, grid)[0]
+    want = _enumerated_marginals(dec.scorer, e, dmax, T)
+    got = span_marginals(dec.scorer, e, dmax)[0]
     assert torch.allclose(got, want, atol=1e-5), (
         f"max abs error {float((got - want).abs().max())}"
     )
@@ -390,11 +372,10 @@ def test_something_must_end_at_the_last_frame():
     """A segmentation tiles `[0, T)`, so the spans ending at `T` are mutually exclusive
     and exhaustive: their posteriors sum to exactly 1. Cheap, and it catches a table
     that is right in shape but off by a normaliser."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 7, 3
     e = _random_emissions(T, seed=6)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
-    m = span_marginals(dec.scorer, e, grid)[0]
+    m = span_marginals(dec.scorer, e, dmax)[0]
     assert float(m[T].sum()) == pytest.approx(1.0, abs=1e-5)
 
 
@@ -403,13 +384,12 @@ def test_marginals_and_the_note_count_gradient_agree():
     differentiating `log Z` by `b_note` -- whose feature *is* the note count. They come
     from the same identity applied at different granularity, so disagreement means the
     perturbation is not scoring the event its axis claims."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T, seed=7)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
-    by_marginal = float(span_marginals(dec.scorer, e, grid)[0, :, :, NOTE].sum())
-    logz = log_partitions(dec.scorer, e, grid).sum()
+    by_marginal = float(span_marginals(dec.scorer, e, dmax)[0, :, :, NOTE].sum())
+    logz = log_partitions(dec.scorer, e, dmax).sum()
     (by_gradient,) = torch.autograd.grad(logz, [dec.scorer.b_note])
     assert by_marginal == pytest.approx(float(by_gradient), abs=1e-4)
 
@@ -417,14 +397,13 @@ def test_marginals_and_the_note_count_gradient_agree():
 def test_asking_the_log_semiring_for_backpointers_is_refused():
     """The silent version returns an all-zero table, and a traceback over zeros walks
     a real-looking path that no reduction ever chose."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 6, 3
     e = _random_emissions(T, seed=2)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
     labels = dec.scorer.labels
     with pytest.raises(ValueError, match="backpointer"):
         scan(
-            dec.scorer, e, grid,
+            dec.scorer, e, dmax,
             initial_window(e.onset_logit, 1, dmax, labels.n_rows), stop=T,
             witness=e.onset_logit.new_zeros(
                 (T + 1, 1, labels.n_labels), dtype=torch.long
@@ -443,18 +422,17 @@ def test_note_bias_equals_brute_force_argmax_over_biased_scores():
     """The same standard the unbiased recurrence is held to. A bias folded into the
     scan accumulates through the window and the backpointers, so "it shifts the answer"
     is not evidence it shifts it by ``k * bias`` -- only enumeration is."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax, bias = 8, 3, 0.8
     e = _random_emissions(T, seed=1)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     scored = [
-        (_score_by_loop(dec.scorer, e, s, grid).item() + bias * _notes_in(s), s)
+        (_score_by_loop(dec.scorer, e, s, dmax).item() + bias * _notes_in(s), s)
         for s in _all_segmentations(T, dmax)
     ]
     best_score, best = max(scored, key=lambda kv: kv[0])
-    got = viterbi(dec.scorer, e, grid, note_bias=bias)
-    got_score = _score_by_loop(dec.scorer, e, got, grid).item() + bias * _notes_in(got)
+    got = viterbi(dec.scorer, e, dmax, note_bias=bias)
+    got_score = _score_by_loop(dec.scorer, e, got, dmax).item() + bias * _notes_in(got)
     assert abs(got_score - best_score) < 1e-4, (
         f"biased viterbi scored {got_score}, best possible {best_score}"
     )
@@ -466,26 +444,24 @@ def test_a_rest_never_collects_the_bias():
     span, which cancels between any two segmentations of equal span count and so
     corrects nothing -- while still perturbing the decode enough to look like it works
     on a single track."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 6, 3
     e = _random_emissions(T, seed=4)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     # Drive every span to rest with a large negative bias, then confirm a further
     # change of bias cannot move a segmentation that collects none of it.
-    all_rest = viterbi(dec.scorer, e, grid, note_bias=-50.0)
+    all_rest = viterbi(dec.scorer, e, dmax, note_bias=-50.0)
     assert _notes_in(all_rest) == 0, "a -50 bias should leave no note spans at all"
-    assert viterbi(dec.scorer, e, grid, note_bias=-500.0) == all_rest
+    assert viterbi(dec.scorer, e, dmax, note_bias=-500.0) == all_rest
 
 
 def test_note_bias_defaults_to_no_correction():
     """Every result in docs/experiments.md was decoded without one. A default that
     shifted the decode would silently restate all of them."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 8, 3
     e = _random_emissions(T, seed=2)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
-    assert viterbi(dec.scorer, e, grid) == viterbi(dec.scorer, e, grid, note_bias=0.0)
+    assert viterbi(dec.scorer, e, dmax) == viterbi(dec.scorer, e, dmax, note_bias=0.0)
 
 
 def test_note_bias_moves_note_count_monotonically():
@@ -493,13 +469,12 @@ def test_note_bias_moves_note_count_monotonically():
     note count is non-decreasing in ``b``. Worth pinning because it is what makes a
     sweep interpretable: a non-monotone knob has no "the count crosses gold here", and
     the F1 curve's peak would not mean what the script reads it as."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 10, 3
     e = _random_emissions(T, seed=3)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     counts = [
-        _notes_in(viterbi(dec.scorer, e, grid, note_bias=b))
+        _notes_in(viterbi(dec.scorer, e, dmax, note_bias=b))
         for b in (-3.0, -1.0, -0.5, 0.0, 0.5, 1.0, 3.0)
     ]
     assert counts == sorted(counts), f"note count not monotone in the bias: {counts}"
@@ -509,20 +484,19 @@ def test_note_bias_moves_note_count_monotonically():
 def test_batched_log_partition_equals_brute_force():
     # The batched scan is what training actually runs; check it against ground truth
     # too, not only against the single-track version.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     T, dmax = 7, 3
     es = [_random_emissions(T, seed=s) for s in (2, 3)]
     ev = _stack_evidence(es)
-    grid = Grid(dmax, torch.arange(dmax + 1).clamp(max=dec.scorer.dur.numel() - 1))
 
     segs = list(_all_segmentations(T, dmax))
     brute = torch.stack([
         torch.logsumexp(
-            torch.stack([_score_by_loop(dec.scorer, e, s, grid) for s in segs]), dim=0
+            torch.stack([_score_by_loop(dec.scorer, e, s, dmax) for s in segs]), dim=0
         )
         for e in es
     ])
-    got = log_partitions(dec.scorer, ev, grid)
+    got = log_partitions(dec.scorer, ev, dmax)
     assert torch.allclose(got, brute, atol=1e-4), f"{got.tolist()} != {brute.tolist()}"
 
 
@@ -554,11 +528,11 @@ def _chunks(e, size, dmax):
     return out
 
 
-def _run_chunked(dec, e, size, grid):
+def _run_chunked(dec, e, size, dmax):
     """Scan a track chunk by chunk, carrying alpha. Returns the cumulative log-mass."""
     carry, A = None, None
-    for chunk, ctx in _chunks(e, size, grid.dmax):
-        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)
+    for chunk, ctx in _chunks(e, size, dmax):
+        A, carry = chunk_log_partition(dec.scorer, chunk, dmax, carry, ctx)
     return A
 
 
@@ -592,14 +566,14 @@ def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
     # The property the whole truncated-BPTT design rests on: carrying the alpha window
     # across chunk boundaries reproduces the whole-track log Z exactly. If this drifts,
     # chunked training optimises a different objective than it reports.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
 
     size = e.T // n_chunks
     trimmed = _truncate(e, size * n_chunks)  # chunks must tile it exactly
-    whole = log_partitions(dec.scorer, trimmed, grid)
-    got = _run_chunked(dec, trimmed, size, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
+    got = _run_chunked(dec, trimmed, size, dmax)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -607,17 +581,17 @@ def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
     # dmax spans several chunks here, so a span's candidate starts reach back through
     # more than one boundary -- where an off-by-one in the window or a short context
     # shows up and a single-boundary test would not.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
-    dmax = grid.dmax
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
+    dmax = dmax
 
     size = max(1, dmax // 3)
     n = e.T // size
     assert n > 3 and size < dmax, "the point is several chunks inside one dmax"
     trimmed = _truncate(e, size * n)
-    whole = log_partitions(dec.scorer, trimmed, grid)
-    got = _run_chunked(dec, trimmed, size, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
+    got = _run_chunked(dec, trimmed, size, dmax)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -628,16 +602,16 @@ def test_a_right_margin_is_not_scanned(right):
     # `right` frames ahead of where the next chunk resumes and those frames are
     # scanned twice. Every shape still matches when that happens and the loss still
     # falls, so nothing but this equality catches it.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = log_partitions(dec.scorer, trimmed, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
 
     carry, got = None, None
-    for chunk, ctx, rgt in _chunks_with_right(trimmed, size, grid.dmax, right):
-        got, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx, rgt)
+    for chunk, ctx, rgt in _chunks_with_right(trimmed, size, dmax, right):
+        got, carry = chunk_log_partition(dec.scorer, chunk, dmax, carry, ctx, rgt)
     assert torch.allclose(got, whole, atol=1e-3), f"{got.item()} != {whole.item()}"
 
 
@@ -645,16 +619,16 @@ def test_scanning_the_right_margin_corrupts_the_carry():
     # The negative control for the above: passing right=0 while the window *has* a
     # right margin double-counts those frames. Pinned so nobody "simplifies" the
     # parameter away on the grounds that the tests pass without it.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = log_partitions(dec.scorer, trimmed, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
 
     carry, got = None, None
-    for chunk, ctx, _rgt in _chunks_with_right(trimmed, size, grid.dmax, 11):
-        got, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)  # right=0
+    for chunk, ctx, _rgt in _chunks_with_right(trimmed, size, dmax, 11):
+        got, carry = chunk_log_partition(dec.scorer, chunk, dmax, carry, ctx)  # right=0
     assert not torch.allclose(got, whole, atol=1e-3)
 
 
@@ -662,16 +636,16 @@ def test_dropping_the_left_context_changes_the_answer():
     # Guards the invariant the docstring states: the carry alone is not enough. Without
     # the overlap the scan clamps boundary-crossing starts to the chunk's own frame 0
     # and scores them against the wrong cues -- silently, so it needs an explicit test.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = log_partitions(dec.scorer, trimmed, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
 
     carry, A = None, None
     for chunk, _ in _chunks(trimmed, size, 0):  # dmax=0 -> no overlap at all
-        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, 0)
+        A, carry = chunk_log_partition(dec.scorer, chunk, dmax, carry, 0)
     assert not torch.allclose(A, whole, atol=1e-3), (
         "dropping the left context still matched, so the parity tests above prove "
         "nothing about the context"
@@ -682,20 +656,20 @@ def test_detaching_the_carry_still_reaches_every_chunk():
     # Truncated BPTT: with the carry detached, a single end-of-track loss would only
     # reach the last chunk. The telescoping per-chunk loss must put gradient on every
     # chunk's own cues.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
 
     grads, carry, prev_A = [], None, 0.0
-    for chunk, ctx in _chunks(trimmed, size, grid.dmax):
+    for chunk, ctx in _chunks(trimmed, size, dmax):
         onset = chunk.onset_logit.detach().clone().requires_grad_(True)
         live = Evidence(
             onset, chunk.voiced_c, chunk.rest_c,
             chunk.lengths, chunk.frame_times, chunk.contours,
         )
-        A, carry = chunk_log_partition(dec.scorer, live, grid, carry, ctx)
+        A, carry = chunk_log_partition(dec.scorer, live, dmax, carry, ctx)
         (A - prev_A).sum().backward()
         carry, prev_A = carry.detach(), A.detach()
         grads.append(onset.grad)
@@ -709,16 +683,16 @@ def test_detaching_the_carry_still_reaches_every_chunk():
 def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
     # The training loss is sum_k (A_k - A_{k-1}); with A_0 = 0 that must telescope to
     # the whole-track log Z, or the reported NLL is not the NLL being optimised.
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
-    grid = dec.scorer.grid(e.frame_times[0])
+    dmax = dec.scorer.dmax_for(e.frame_times[0])
     size = e.T // 4
     trimmed = _truncate(e, size * 4)
-    whole = log_partitions(dec.scorer, trimmed, grid)
+    whole = log_partitions(dec.scorer, trimmed, dmax)
 
     total, carry, prev_A = 0.0, None, 0.0
-    for chunk, ctx in _chunks(trimmed, size, grid.dmax):
-        A, carry = chunk_log_partition(dec.scorer, chunk, grid, carry, ctx)
+    for chunk, ctx in _chunks(trimmed, size, dmax):
+        A, carry = chunk_log_partition(dec.scorer, chunk, dmax, carry, ctx)
         total = total + (A - prev_A)
         carry, prev_A = carry.detach(), A.detach()
     assert torch.allclose(total, whole, atol=1e-3), f"{total.item()} != {whole.item()}"
@@ -727,7 +701,7 @@ def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
 def test_chunk_log_partition_rejects_ragged_lengths():
     # A chunk reads its answer off the end of the window, so a short track would be
     # read at the wrong position rather than failing loudly.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     ea = build_evidence(a, dec.stride)
     short = Frames(
@@ -735,14 +709,14 @@ def test_chunk_log_partition_rejects_ragged_lengths():
         frame_times=TIMES[:120],
         contour=Contour(times=TIMES[:120], freqs=a.contour.freqs[:120]),
     )
-    grid = dec.scorer.grid(ea.frame_times[0])
+    dmax = dec.scorer.dmax_for(ea.frame_times[0])
     ragged = build_evidence([a, short], dec.stride)
     with pytest.raises(ValueError, match="uniform lengths"):
-        chunk_log_partition(dec.scorer, ragged, grid)
+        chunk_log_partition(dec.scorer, ragged, dmax)
 
 
 def test_nll_is_differentiable_and_trains_down():
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
@@ -763,7 +737,7 @@ def test_nll_grad_reaches_the_encoder_through_grad_bearing_frames():
     # A stand-in "encoder": a learnable bias added to the onset logits. If the CRF
     # loss puts gradient on it through grad-bearing Frames, the same path reaches a real
     # backbone's heads -- this is what makes end-to-end training possible.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     onset_logit = torch.logit(torch.from_numpy(cues.onset).clamp(1e-6, 1 - 1e-6))
@@ -781,14 +755,14 @@ def test_nll_grad_reaches_the_encoder_through_grad_bearing_frames():
 def test_numpy_cues_nll_does_not_reach_the_inputs():
     # The inference path: a numpy Frames is a constant, so the loss is differentiable
     # only in the CRF's own potentials -- never the (already-computed) cues.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     e = build_evidence(cues, dec.stride)
     assert not e.onset_logit.requires_grad
 
 
 def test_decode_recovers_two_notes_after_fitting():
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
@@ -809,7 +783,7 @@ def test_decode_recovers_two_notes_after_fitting():
 def test_batched_nll_equals_single_track_padded():
     # The batched scan over a padded minibatch must equal the per-track scan, track
     # for track -- padding (different lengths) must not leak into a track's log Z.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     na = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     # a shorter track, so the batch pads
@@ -828,7 +802,7 @@ def test_batched_nll_equals_single_track_padded():
 def test_batched_nll_grad_survives_padding():
     # The padded-batch build scatters graph tensors into a zeros buffer; check grad
     # still reaches an encoder stand-in through the batched scan.
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     a = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     bias = torch.zeros(1, requires_grad=True)
     onset_logit = torch.logit(torch.from_numpy(a.onset).clamp(1e-6, 1 - 1e-6)) + bias
@@ -846,10 +820,10 @@ def test_batched_nll_grad_survives_padding():
 
 # --- device placement -------------------------------------------------------------
 # The semi-CRF had never run off CPU: both entry points that build a LearnedEncoder
-# hardcode device="cpu", and there is no semi-CRF training entry point yet, so nothing
+# hardcode device="cpu", and there was no semi-CRF training entry point, so nothing
 # ever called .to() on the potentials. Two fields were stranded on the host as a
-# result -- the dur_edges_s buffer (read via .numpy(), which raises once moved) and Jc
-# (built from the numpy contour). These tests are what keep that from returning.
+# result -- a registered buffer read via .numpy(), which raises once moved, and a
+# cumsum built from the numpy contour. These tests are what keep that from returning.
 
 
 def _tensor_cues(cues: Frames, device, bias: torch.Tensor | None = None) -> Frames:
@@ -866,7 +840,7 @@ def _tensor_cues(cues: Frames, device, bias: torch.Tensor | None = None) -> Fram
 
 
 def _fitted(cues: Frames, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDecoder:
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(steps):
         opt.zero_grad()
@@ -878,7 +852,7 @@ def _fitted(cues: Frames, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDe
 def test_numpy_cues_decode_on_device(device):
     # The offline-eval path: numpy Frames have no device of their own, so the module's
     # placement is the authority and the emissions must follow the parameters.
-    dec = SemiCRFDecoder().to(device)
+    dec = SemiCRFDecoder(CueScorer()).to(device)
     cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
     nll = dec.nll(cues, notes)
     assert nll.device.type == device.type
@@ -887,7 +861,7 @@ def test_numpy_cues_decode_on_device(device):
 
 def test_tensor_cues_grad_reaches_encoder_on_device(device):
     # The training path: heads on `device` feeding a decoder on `device`, end to end.
-    dec = SemiCRFDecoder().to(device)
+    dec = SemiCRFDecoder(CueScorer()).to(device)
     bias = torch.zeros(1, device=device, requires_grad=True)
     tcues = _tensor_cues(_two_note_cues(SPANS, HZ), device, bias)
     dec.nll(tcues, _notes(SPANS, MIDI)).backward()
@@ -897,7 +871,7 @@ def test_tensor_cues_grad_reaches_encoder_on_device(device):
 
 def test_nll_batch_on_device(device):
     # The batched scan is what SemiCRFLoss actually calls, so it needs its own sweep.
-    dec = SemiCRFDecoder().to(device)
+    dec = SemiCRFDecoder(CueScorer()).to(device)
     full = _two_note_cues(SPANS, HZ)
     short = _two_note_cues([(0.3, 0.8)], [98.0])
     out = dec.nll_batch(
@@ -912,8 +886,8 @@ def test_cuda_nll_matches_cpu():
     # Parity, not just liveness: the same potentials must score the same track the
     # same on either backend, or a "device fix" has changed the model.
     cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
-    cpu = SemiCRFDecoder()
-    gpu = SemiCRFDecoder()
+    cpu = SemiCRFDecoder(CueScorer())
+    gpu = SemiCRFDecoder(CueScorer())
     gpu.load_state_dict(cpu.state_dict())
     assert torch.allclose(cpu.nll(cues, notes), gpu.to("cuda").nll(cues, notes).cpu(),
                           atol=1e-4)
@@ -922,10 +896,10 @@ def test_cuda_nll_matches_cpu():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device available")
 def test_cuda_decode_matches_cpu():
     # Viterbi picks discrete boundaries, so a fitted model must decode to the *same*
-    # notes on both backends -- onsets are read off the frame grid, not interpolated.
+    # notes on both backends -- onsets are read off the frame dmax, not interpolated.
     cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
     cpu = _fitted(cues, notes)
-    gpu = SemiCRFDecoder()
+    gpu = SemiCRFDecoder(CueScorer())
     gpu.load_state_dict(cpu.state_dict())
     gpu = gpu.to("cuda")
 
@@ -955,7 +929,7 @@ def test_decode_empty_contour_is_no_notes():
         frame_times=np.zeros(0),
         contour=Contour.empty(),
     )
-    assert SemiCRFDecoder().decode(empty) == []
+    assert SemiCRFDecoder(CueScorer()).decode(empty) == []
 
 
 def test_decode_without_voicing_head_falls_back_to_contour():
@@ -966,7 +940,7 @@ def test_decode_without_voicing_head_falls_back_to_contour():
         frame_times=cues.frame_times,
         contour=cues.contour,
     )
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(120):
@@ -991,7 +965,7 @@ def test_the_dp_runs_with_no_contour_at_all():
         frame_times=ft,
         contour=None,
     )
-    dec = SemiCRFDecoder()
+    dec = SemiCRFDecoder(CueScorer())
     notes = _notes([(0.1, 0.4), (0.5, 0.6)], [45, 50])
     loss = dec.nll(cues, notes)
     assert torch.isfinite(loss)
@@ -1008,7 +982,7 @@ def test_decoding_without_a_contour_says_why():
         contour=None,
     )
     with pytest.raises(ValueError, match="no contour"):
-        SemiCRFDecoder().decode(cues)
+        SemiCRFDecoder(CueScorer()).decode(cues)
 
 
 def test_no_voicing_head_and_no_contour_is_refused():
@@ -1022,25 +996,25 @@ def test_no_voicing_head_and_no_contour_is_refused():
         contour=None,
     )
     with pytest.raises(ValueError, match="no voicing signal"):
-        SemiCRFDecoder().nll(cues, _notes([(0.1, 0.2)], [45]))
+        SemiCRFDecoder(CueScorer()).nll(cues, _notes([(0.1, 0.2)], [45]))
 
 
-def test_the_learned_pitch_features_survive_into_inference():
-    # The DP's `path_length` and `pitch_spread` are functions of the pitch head's
-    # per-bin logits. Training and inference now build the same `Frames`; when they
-    # were two types and only one carried the logits, a checkpoint decoded as though
-    # w_path and w_spread were zero however they were fitted -- and nothing fails,
-    # because the discrepancy only exists after training.
+def test_the_pitch_logits_survive_into_inference():
+    """The DP's only pitch-valued potential is a function of the pitch head's per-bin
+    logits. Training and inference now build the same `Frames`; when they were two types
+    and only one carried the logits, a checkpoint decoded as though every pitch label
+    scored alike however it was fitted -- and nothing fails, because the discrepancy
+    only exists after training."""
     T, K = 40, 216
     ft = np.arange(T) * DT
     rng = np.random.default_rng(0)
     onset = rng.random(T).astype(np.float32)
     voicing = np.full(T, 0.9, dtype=np.float32)
     contour = Contour(times=ft, freqs=np.full(T, 110.0, dtype=np.float32))
-    # Confident, and moving halfway through: exactly what the two features detect.
+    # Confident on one semitone, so the head's own log-probability of it is near 0
+    # and of every other semitone is far below.
     logits = np.full((T, K), -8.0, dtype=np.float32)
-    logits[: T // 2, 40] = 12.0
-    logits[T // 2 :, 55] = 12.0
+    logits[:, 40] = 12.0
 
     at_inference = Frames(
         heads={"onset": onset, "voicing": voicing, "pitch": logits},
@@ -1057,18 +1031,15 @@ def test_the_learned_pitch_features_survive_into_inference():
         contour=contour,
     )
 
-    dec = SemiCRFDecoder(stride=1)
-    with torch.no_grad():
-        dec.scorer.w_path.fill_(3.0)
-        dec.scorer.w_spread.fill_(3.0)
-
     scores = []
     for cues in (at_inference, in_training):
         ev = build_evidence(cues, stride=1, device=torch.device("cpu"))
-        assert ev.path_c is not None, "pitch logits did not reach the evidence"
-        assert float(ev.path_length(0, 0, T - 1)) > 0.5, "a real pitch move read as zero"
-        grid = dec.scorer.grid(ev.frame_times[0])
-        scores.append(float(dec.scorer.unary(ev, grid, 0, 0, T - 1)[0].detach()))
+        assert ev.pitch_logprob_c is not None, "pitch logits did not reach the evidence"
+        logprob = ev.mean_pitch_logprob(0, 0, T - 1)
+        # Semitone 13 holds bin 40 at 3 bins/semitone, and the DP must be able to tell
+        # it from its neighbours -- otherwise every relabelling scores alike.
+        assert int(logprob.argmax()) == 13, "the confident semitone is not the best one"
+        scores.append(float(logprob.max()))
 
     assert scores[0] == pytest.approx(scores[1], abs=1e-5), (
         f"inference scores {scores[0]} but training scored {scores[1]} for the same "
@@ -1080,13 +1051,13 @@ def test_the_learned_pitch_features_survive_into_inference():
 # Evidence's optional fields, which are same-shaped and were passed positionally #
 # --------------------------------------------------------------------------- #
 def test_one_preserves_each_optional_field_separately():
-    """`path_c` and `entropy_c` are both (B, T+1). Built positionally, transposing them
-    type-checks, runs, trains, and scores pitch instability with the entropy cumsum --
-    a wrong model that never raises.
+    """`voiced_c` and `rest_c` are both (B, T+1). Built positionally, transposing them
+    type-checks, runs, trains, and scores rests with the voiced cumsum -- a wrong model
+    that never raises.
 
     Distinguishable values per field, so a swap fails here rather than months later as
     an unexplained result."""
-    B, T, K = 2, 5, 3
+    B, T, K, C = 2, 5, 3, 4
     ev = Evidence(
         onset_logit=torch.zeros(B, T),
         voiced_c=torch.full((B, T + 1), 1.0),
@@ -1094,16 +1065,17 @@ def test_one_preserves_each_optional_field_separately():
         lengths=[T, T],
         frame_times=[np.arange(T) * DT, np.arange(T) * DT],
         contours=None,
-        path_c=torch.full((B, T + 1), 3.0),
-        entropy_c=torch.full((B, T + 1), 4.0),
-        pitch_c=torch.full((B, T + 1, K), 5.0),
+        pitch_logprob_c=torch.full((B, T + 1, K), 3.0),
+        hidden=torch.full((B, T, C), 4.0),
     )
     row = ev.one(1)
     assert float(row.voiced_c.mean()) == 1.0
     assert float(row.rest_c.mean()) == 2.0
-    assert row.path_c is not None and float(row.path_c.mean()) == 3.0
-    assert row.entropy_c is not None and float(row.entropy_c.mean()) == 4.0
-    assert row.pitch_c is not None and float(row.pitch_c.mean()) == 5.0
+    assert row.pitch_logprob_c is not None
+    assert float(row.pitch_logprob_c.mean()) == 3.0
+    # `hidden` is per-frame, not a cumsum, so it is cut at T rather than T+1.
+    assert row.hidden is not None and row.hidden.shape == (1, T, C)
+    assert float(row.hidden.mean()) == 4.0
 
 
 def test_confidence_is_off_unless_asked_for():
@@ -1111,7 +1083,7 @@ def test_confidence_is_off_unless_asked_for():
     validation pass wanting only F1 must not pay that, and a note carrying a made-up
     number would be worse than one carrying none: a reviewer sorting by confidence
     would be sorting noise."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     assert all(n.confidence == 1.0 for n in dec.decode(cues))
 
@@ -1120,16 +1092,16 @@ def test_confidence_is_the_span_posterior():
     """Not a score, not a margin -- the same number `span_marginals` reports, looked up
     for the span that was actually emitted. Pinned against that table directly, because
     an index convention off by one here would still produce plausible spread."""
-    dec = _fitted_scorer(SemiCRFDecoder())
+    dec = SemiCRFDecoder(fitted(CueScorer()))
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
-    ev, grid = dec._prepare([cues])
-    segs = viterbi(dec.scorer, ev, grid)
-    table = span_marginals(dec.scorer, ev, grid)
+    ev, dmax = dec._prepare([cues])
+    segs = viterbi(dec.scorer, ev, dmax)
+    table = span_marginals(dec.scorer, ev, dmax)
 
-    got = segment_confidence(table, segs, grid)
+    got = segment_confidence(table, segs, dmax)
     assert got, "no segments to check -- fixture is not exercising the decode"
     for (label, i, j), value in got.items():
         assert value == pytest.approx(
-            float(table[0, j, i - j + grid.dmax, label]), abs=1e-6
+            float(table[0, j, i - j + dmax, label]), abs=1e-6
         )
         assert 0.0 <= value <= 1.0, f"{value} is not a probability"
