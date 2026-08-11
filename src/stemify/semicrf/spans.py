@@ -1,12 +1,12 @@
 """What a span is worth: the ``SpanScorer`` contract.
 
-The semi-CRF scores a segmentation as ``sum over segments of unary(label, i, j) +
+The semi-CRF scores a segmentation as ``sum over segments of unary(label, start, end) +
 trans(prev -> label)``. This module owns *unary* and *trans*, and is the only place
 either is written down.
 
 That exclusivity is the point. The quantity is consumed by three callers with
 different access patterns -- the forward scan (every candidate start at a fixed
-``j``), Viterbi (the same), and the gold scorer (an arbitrary scattered set of
+``end``), Viterbi (the same), and the gold scorer (an arbitrary scattered set of
 spans) -- and each used to compute it itself, reaching into the parameters directly.
 Four copies of one formula, which have to agree or ``log Z`` and ``score(gold)``
 measure different things. When that happens the NLL still falls and the gradients
@@ -62,18 +62,18 @@ class SpanScorer(nn.Module, ABC):
     @abstractmethod
     def unary(
         self,
-        ev: Evidence,
+        evidence: Evidence,
         dmax: int,
-        b: torch.Tensor | int,
-        i: torch.Tensor | int,
-        j: torch.Tensor | int,
+        row: torch.Tensor | int,
+        start: torch.Tensor | int,
+        end: torch.Tensor | int,
     ) -> torch.Tensor:
-        """Score of span ``[i, j)`` in batch row ``b``, for **every** label.
+        """Score of span ``[start, end)`` in batch row ``row``, for **every** label.
 
-        ``b``/``i``/``j`` broadcast against each other, and the result is their
+        ``row``/``start``/``end`` broadcast against each other, and the result is their
         broadcast shape plus a trailing axis of ``labels.n_labels``. That is what
         lets one implementation serve both access patterns: the scan passes
-        ``b=(B,1)``, ``i=(1,dmax)``, scalar ``j`` and gets ``(B, dmax, n_labels)``;
+        ``row=(B,1)``, ``start=(1,dmax)``, scalar ``end`` and gets ``(B, dmax, n_labels)``;
         the gold scorer passes three ``(S,)`` tensors and gets ``(S, n_labels)``.
 
         Every label is computed rather than selected first. It is more arithmetic

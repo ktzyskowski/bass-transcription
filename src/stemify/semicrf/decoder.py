@@ -79,8 +79,8 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
         All tracks come off one feature hop, so the segment cap is derived once from the
         first rather than per track."""
-        ev = build_evidence(frames_list, self.stride, self.device)
-        return ev, self.scorer.dmax_for(ev.frame_times[0])
+        evidence = build_evidence(frames_list, self.stride, self.device)
+        return evidence, self.scorer.dmax_for(evidence.frame_times[0])
 
     def nll(self, frames: Frames, notes: list[NoteEvent]) -> torch.Tensor:
         """``log Z - score(gold)`` for one track -- the batch of one."""
@@ -96,13 +96,13 @@ class SemiCRFDecoder(Decoder, nn.Module):
 
         Both halves read the *same* padded batch: gold indices never reach past a
         track's true length, so the flat padding beyond it is never gathered."""
-        ev, dmax = self._prepare(frames_list)
+        evidence, dmax = self._prepare(frames_list)
         golds = [
-            gold_segments(ft, n, dmax, self.scorer.labels)
-            for ft, n in zip(ev.frame_times, notes_list, strict=True)
+            gold_segments(times, notes, dmax, self.scorer.labels)
+            for times, notes in zip(evidence.frame_times, notes_list, strict=True)
         ]
-        return log_partitions(self.scorer, ev, dmax) - segmentation_scores(
-            self.scorer, ev, golds, dmax
+        return log_partitions(self.scorer, evidence, dmax) - segmentation_scores(
+            self.scorer, evidence, golds, dmax
         )
 
     def nll_chunk(
@@ -131,9 +131,9 @@ class SemiCRFDecoder(Decoder, nn.Module):
         only of a track's first chunk: ``log Z`` applies the real carried transition, so
         assuming ``START`` here makes the two halves of the NLL score different
         quantities."""
-        ev, dmax = self._prepare(frames_list)
-        A, window = chunk_log_partition(self.scorer, ev, dmax, carry, context, right)
-        gold = segmentation_scores(self.scorer, ev, golds, dmax, prevs)
+        evidence, dmax = self._prepare(frames_list)
+        A, window = chunk_log_partition(self.scorer, evidence, dmax, carry, context, right)
+        gold = segmentation_scores(self.scorer, evidence, golds, dmax, prevs)
         return A, gold, window
 
     def decode(
@@ -153,20 +153,20 @@ class SemiCRFDecoder(Decoder, nn.Module):
         is what said the collapse was a readout and not a worse model. Deliberately a
         call-site argument that nothing persists -- the pipeline decodes uncorrected,
         so no result can silently acquire a constant fitted to somebody's val set."""
-        ev, dmax = self._prepare([frames])
-        if ev.lengths[0] == 0:
+        evidence, dmax = self._prepare([frames])
+        if evidence.lengths[0] == 0:
             return []
-        segs = viterbi(self.scorer, ev, dmax, note_bias)
+        segs = viterbi(self.scorer, evidence, dmax, note_bias)
         confidence = (
-            segment_confidence(span_marginals(self.scorer, ev, dmax), segs, dmax)
+            segment_confidence(span_marginals(self.scorer, evidence, dmax), segs, dmax)
             if with_confidence else None
         )
-        return self._segs_to_notes(segs, ev, confidence)
+        return self._segs_to_notes(segs, evidence, confidence)
 
     def _segs_to_notes(
         self,
         segs: list[tuple[int, int, int]],
-        ev: Evidence,
+        evidence: Evidence,
         confidence: Mapping[tuple[int, int, int], float] | None = None,
     ) -> list[NoteEvent]:
         """Turn ``note`` segments into ``NoteEvent``s, from whichever pitch source the
@@ -183,14 +183,17 @@ class SemiCRFDecoder(Decoder, nn.Module):
         ``LearnedEncoder`` substitutes the pitch head's ``decode_contour`` output when the
         model has that head, so both arrive as a plain ``Contour``."""
         labels = self.scorer.labels
-        ft = ev.frame_times[0]
-        hop = float(np.median(np.diff(ft))) if ft.size > 1 else 0.01 * self.stride
+        times = evidence.frame_times[0]
+        hop = (
+            float(np.median(np.diff(times))) if times.size > 1
+            else 0.01 * self.stride
+        )
         pitch_of: Callable[[int, float, float], float | None]
         if labels.names_pitch:
             def pitch_of(label: int, onset: float, offset: float) -> float | None:
                 return float(labels.midi_of(label))
         else:
-            if ev.contours is None:
+            if evidence.contours is None:
                 raise ValueError(
                     "cannot name note pitches: this scorer's alphabet does not name "
                     "them and this Evidence carries no contour. The DP scores spans "
@@ -198,23 +201,24 @@ class SemiCRFDecoder(Decoder, nn.Module):
                     "Frames from an encoder (pyin or a pitch head), not a contour-less "
                     "training batch."
                 )
-            contour = ev.contours[0]
-            ct, cf = contour.times, contour.freqs
-            cmidi = np.full(cf.shape, np.nan)
-            cmidi[cf > 0] = librosa.hz_to_midi(cf[cf > 0])
+            contour = evidence.contours[0]
+            freqs = contour.freqs
+            contour_times = contour.times
+            contour_midi = np.full(freqs.shape, np.nan)
+            contour_midi[freqs > 0] = librosa.hz_to_midi(freqs[freqs > 0])
 
             def pitch_of(label: int, onset: float, offset: float) -> float | None:
-                sel = (ct >= onset) & (ct < offset)
-                if not sel.any() or np.isnan(cmidi[sel]).all():
+                inside = (contour_times >= onset) & (contour_times < offset)
+                if not inside.any() or np.isnan(contour_midi[inside]).all():
                     return None
-                median = float(np.nanmedian(cmidi[sel]))
+                median = float(np.nanmedian(contour_midi[inside]))
                 return None if np.isnan(median) else median
 
         notes: list[NoteEvent] = []
-        for label, i, j in segs:
+        for label, start, end in segs:
             if not labels.is_note(label):
                 continue
-            onset, offset = float(ft[i]), float(ft[j - 1] + hop)
+            onset, offset = float(times[start]), float(times[end - 1] + hop)
             pitch = pitch_of(label, onset, offset)
             if pitch is None:
                 continue
@@ -224,6 +228,9 @@ class SemiCRFDecoder(Decoder, nn.Module):
                 # honest value for a decode that computed no posterior. Reporting
                 # a made-up number would be worse than reporting none, because a
                 # reviewer sorting by confidence would be sorting noise.
-                confidence=1.0 if confidence is None else confidence.get((label, i, j), 0.0),
+                confidence=(
+                    1.0 if confidence is None
+                    else confidence.get((label, start, end), 0.0)
+                ),
             ))
         return notes

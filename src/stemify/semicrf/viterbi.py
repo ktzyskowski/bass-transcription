@@ -21,9 +21,9 @@ from stemify.semicrf.window import initial_window
 
 @torch.no_grad()
 def viterbi(
-    scorer: SpanScorer, ev: Evidence, dmax: int, note_bias: float = 0.0
+    scorer: SpanScorer, evidence: Evidence, dmax: int, note_bias: float = 0.0
 ) -> list[tuple[int, int, int]]:
-    """The single highest-scoring segmentation of track 0 of ``ev``.
+    """The single highest-scoring segmentation of track 0 of ``evidence``.
 
     ``note_bias`` is added once per ``note`` span, so a segmentation with ``k`` notes
     is shifted by ``k * note_bias``. It exists because this reduction and the objective
@@ -48,20 +48,20 @@ def viterbi(
     is a device-to-host sync, and a sync drains the queue. A ``(T+1, B, n_labels)`` int64 table
     buys one transfer in place of O(T) of them.
     """
-    T = ev.lengths[0]
+    T = evidence.lengths[0]
     if T == 0:
         return []
     # Every *pitch* label collects the bias, rest collects none -- the correction is
     # per emitted note, and under a wide alphabet "a note" is any of the pitch labels
     # rather than the integer 0. At two labels this is exactly `bias[NOTE]`.
-    bias = ev.onset_logit.new_zeros(scorer.labels.n_labels)
+    bias = evidence.onset_logit.new_zeros(scorer.labels.n_labels)
     bias[: scorer.labels.n_pitches] = note_bias
-    back = ev.onset_logit.new_zeros(
-        (T + 1, ev.B, scorer.labels.n_labels), dtype=torch.long
+    back = evidence.onset_logit.new_zeros(
+        (T + 1, evidence.n_tracks, scorer.labels.n_labels), dtype=torch.long
     )
     window = scan(
-        scorer, ev, dmax,
-        initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows),
+        scorer, evidence, dmax,
+        initial_window(evidence.onset_logit, evidence.n_tracks, dmax, scorer.labels.n_rows),
         stop=T, semiring=MAX_PLUS, bias=bias, witness=back,
     ).window
 
@@ -69,18 +69,18 @@ def viterbi(
     label = int(last[0, : scorer.labels.n_labels].argmax())
     cpu_back = back[:, 0].cpu()                             # the one transfer
     cpu = torch.device("cpu")
-    j, segs = T, []
-    while j > 0:
+    end, segs = T, []
+    while end > 0:
         # `term` flattened (dmax, 3=prev), so an argmax index splits as
         # (window offset, previous label) -- and the offset maps back to a frame
         # through the *same* clamped start table the recurrence scored against,
         # rather than through a second copy of that arithmetic.
-        flat = int(cpu_back[j, label])
+        flat = int(cpu_back[end, label])
         n_rows = scorer.labels.n_rows
-        i = int(candidate_starts(dmax, j, cpu)[flat // n_rows])
+        start = int(candidate_starts(dmax, end, cpu)[flat // n_rows])
         prev = flat % n_rows
-        segs.append((label, i, j))
-        j, label = i, prev
+        segs.append((label, start, end))
+        end, label = start, prev
         if label == scorer.labels.START:
             break
     segs.reverse()

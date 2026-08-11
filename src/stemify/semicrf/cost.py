@@ -54,7 +54,7 @@ def boundary_cost(
 ) -> torch.Tensor:
     """``(B, n_frames+1, dmax, 1)`` -- boundary errors of every candidate span.
 
-    Indexed the way the scan enumerates: entry ``[b, j, d]`` is the span ending at ``j``
+    Indexed the way the scan enumerates: entry ``[row, end, d]`` is the span ending at ``end``
     whose start is the ``d``-th candidate, matching ``candidate_starts``. The trailing
     axis is 1 rather than ``n_labels`` because the cost is label-blind, and broadcasting
     is what keeps it that way in memory as well as in principle.
@@ -80,12 +80,12 @@ def boundary_cost(
     # Where gold's knowledge starts in each row. `n_frames` (past the end) for an empty
     # gold, which makes every span free rather than every span guilty.
     known_from = torch.full((B,), float(n_frames), device=device, dtype=dtype)
-    for b, gold in enumerate(golds):
-        gold_starts = [i for _, i, _ in gold]
+    for row, gold in enumerate(golds):
+        gold_starts = [start for _, start, _ in gold]
         if not gold_starts:
             continue
-        is_boundary[b, torch.tensor(gold_starts, device=device)] = 1.0
-        known_from[b] = float(min(gold_starts))
+        is_boundary[row, torch.tensor(gold_starts, device=device)] = 1.0
+        known_from[row] = float(min(gold_starts))
 
     # Dilated by the metric's tolerance: "is there a gold boundary *near* here". A
     # max-pool rather than a sum, so two gold boundaries a frame apart still forgive one
@@ -94,7 +94,7 @@ def boundary_cost(
     near = torch.nn.functional.max_pool1d(
         is_boundary[:, None], kernel_size=width, stride=1, padding=tolerance_frames
     )[:, 0]
-    # cum[b, t] = number of gold boundaries strictly below t. Raw, not dilated: a gold
+    # cum[row, t] = number of gold boundaries strictly below t. Raw, not dilated: a gold
     # boundary swallowed by a span is swallowed however close it sits to another.
     cum = torch.cat(
         [is_boundary.new_zeros(B, 1), torch.cumsum(is_boundary, dim=1)], dim=1
@@ -105,7 +105,7 @@ def boundary_cost(
     starts = (ends[:, None] - dmax + offsets[None, :]).clamp(min=0)   # (n_frames+1, dmax)
 
     spurious = 1.0 - near[:, starts]                                 # (B, F+1, dmax)
-    # Counted over `(i + tol, j - tol)`: a gold boundary within tolerance of the span's
+    # Counted over `(start + tol, end - tol)`: a gold boundary within tolerance of the span's
     # own endpoints is matched *by* those endpoints, not swallowed by the span.
     hi = (ends - tolerance_frames).clamp(0, n_frames + 1)
     lo = (starts + 1 + tolerance_frames).clamp(0, n_frames + 1)

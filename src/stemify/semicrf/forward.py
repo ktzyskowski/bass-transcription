@@ -1,6 +1,6 @@
 """The segmental recurrence, and its logsumexp reduction: ``log Z``.
 
-``alpha[j][label]`` is the total mass of all ways to tile ``[0, j)`` ending in a
+``alpha[end][label]`` is the total mass of all ways to tile ``[0, end)`` ending in a
 ``label`` span, so ``log Z`` is the logsumexp over every segmentation. Differentiable
 -- ``d log Z`` gives the model's expected segment features -- which is what makes it
 the normaliser half of the NLL.
@@ -37,34 +37,34 @@ from stemify.semicrf.spans import SpanScorer
 from stemify.semicrf.window import initial_window, push
 
 
-def candidate_starts(dmax: int, j: int, device: torch.device) -> torch.Tensor:
-    """``(dmax,)`` candidate start frames for a span ending at ``j``, oldest first.
+def candidate_starts(dmax: int, end: int, device: torch.device) -> torch.Tensor:
+    """``(dmax,)`` candidate start frames for a span ending at ``end``, oldest first.
 
     Clamped at 0 so the ramp steps never index out of bounds; those positions pair with
     a ``NEG`` alpha and so cannot win. Shared with ``viterbi``, which needs the same
     mapping to turn a backpointer's window offset back into a frame index -- deriving
     it twice is how an off-by-one becomes a decode that is wrong only near track
     starts."""
-    return (torch.arange(-dmax, 0, device=device) + j).clamp(min=0)
+    return (torch.arange(-dmax, 0, device=device) + end).clamp(min=0)
 
 
 def step_terms(
     scorer: SpanScorer,
-    ev: Evidence,
+    evidence: Evidence,
     dmax: int,
     window: torch.Tensor,
-    j: int,
+    end: int,
     semiring: Semiring = LOG,
     witness: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """``(B, dmax, n_labels)``: the score of ending a span at ``j`` from each candidate
+    """``(B, dmax, n_labels)``: the score of ending a span at ``end`` from each candidate
     start, with the previous label already summed (or maxed) out.
 
     This is **the** recurrence. Reducing the result over ``dim=1`` finishes the step:
     ``logsumexp`` gives the forward pass, ``max`` gives Viterbi.
 
     **The previous-label axis is contracted here rather than returned.** Written as one
-    broadcast, ``alpha[i][prev] + trans[prev][next] + unary[next, i, j]`` is
+    broadcast, ``alpha[s][prev] + trans[prev][next] + unary[next, s, end]`` is
     ``(B, dmax, n_rows, n_labels)`` -- fine at two labels, 9 MB per step at forty-nine
     and ~1.15 GB retained across a chunk. ``semiring.contract`` does the same arithmetic
     without materialising it, because ⊗ distributes over ⊕: the shared ``unary`` factors
@@ -76,7 +76,7 @@ def step_terms(
     ``None`` under a semiring with no survivor to point at.
 
     The window is read at its **full** ``dmax`` width rather than trimmed for
-    ``j < dmax``. Out-of-range positions hold ``NEG``, so they contribute nothing:
+    ``end < dmax``. Out-of-range positions hold ``NEG``, so they contribute nothing:
     identical arithmetic, one *static* shape at every step. That is what makes the loop
     capturable as a single CUDA graph, and what lets a chunk resume from a carry.
 
@@ -84,11 +84,11 @@ def step_terms(
     potentials they produce are meaningless, but they are *finite*, and they pair with a
     ``NEG`` alpha, so they cannot perturb the result.
     """
-    B = window.shape[0]
-    device = ev.device
-    starts = candidate_starts(dmax, j, device)                              # (dmax,)
-    rows = torch.arange(B, device=device).unsqueeze(1)                      # (B, 1)
-    unary = scorer.unary(ev, dmax, rows, starts.unsqueeze(0), j)     # (B, dmax, n_labels)
+    n_tracks = window.shape[0]
+    device = evidence.device
+    starts = candidate_starts(dmax, end, device)                              # (dmax,)
+    rows = torch.arange(n_tracks, device=device).unsqueeze(1)               # (B, 1)
+    unary = scorer.unary(evidence, dmax, rows, starts.unsqueeze(0), end)
     trans = scorer.transitions()                                    # (n_rows, n_labels)
     if not witness:
         return semiring.contract(window, trans) + unary, None
@@ -125,8 +125,8 @@ class Capture:
         """The capture implied by each row's true length, which is where it always
         comes from -- a padded batch of ragged tracks."""
         ends: dict[int, list[int]] = {}
-        for b, length in enumerate(lengths):
-            ends.setdefault(int(length), []).append(b)
+        for row, length in enumerate(lengths):
+            ends.setdefault(int(length), []).append(row)
         return cls(ends)
 
     def rows_ending_at(self, step: int) -> list[int]:
@@ -151,7 +151,7 @@ class ScanResult:
 
 def scan(
     scorer: SpanScorer,
-    ev: Evidence,
+    evidence: Evidence,
     dmax: int,
     window: torch.Tensor,
     capture: Capture | None = None,
@@ -198,14 +198,14 @@ def scan(
     point at is an error rather than a silent no-op, because the traceback that follows
     would read zeros and return a plausible wrong segmentation.
     """
-    B = ev.B
+    n_tracks = evidence.n_tracks
     captured: dict[int, torch.Tensor] = {}
-    stop = ev.T if stop is None else stop
+    stop = evidence.n_frames if stop is None else stop
     n_rows = scorer.labels.n_rows
-    neg_col = ev.onset_logit.new_full((B, 1), semiring.zero)
-    for j in range(start + 1, stop + 1):
+    neg_col = evidence.onset_logit.new_full((n_tracks, 1), semiring.zero)
+    for end in range(start + 1, stop + 1):
         term, arg_prev = step_terms(
-            scorer, ev, dmax, window, j, semiring, witness=witness is not None
+            scorer, evidence, dmax, window, end, semiring, witness=witness is not None
         )
         if bias is not None:
             term = term + bias
@@ -214,7 +214,7 @@ def scan(
             # used to broadcast over is contracted away inside `step_terms` now, which
             # says the same thing it always did -- a span's identity does not include
             # what preceded it.
-            term = term + perturb[:, j]
+            term = term + perturb[:, end]
         if witness is None:
             val = semiring.reduce(term, dim=1)                 # (B, n_labels)
         else:
@@ -234,18 +234,18 @@ def scan(
             # is gathered at `arg_start`; reducing `arg_prev` again here would pick a
             # `prev` from some other start and return a path that was never scored.
             best_prev = arg_prev.gather(1, arg_start.unsqueeze(1)).squeeze(1)
-            witness[j] = arg_start * n_rows + best_prev
+            witness[end] = arg_start * n_rows + best_prev
         new = torch.cat([val, neg_col], dim=1)                 # (B, n_rows)
         if capture is not None:
-            for b in capture.rows_ending_at(j):
-                captured[b] = new[b]
+            for row in capture.rows_ending_at(end):
+                captured[row] = new[row]
         window = push(window, new)
     return ScanResult(window, captured)
 
 
 def log_partitions(
     scorer: SpanScorer,
-    ev: Evidence,
+    evidence: Evidence,
     dmax: int,
     perturb: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -253,37 +253,38 @@ def log_partitions(
 
     ``perturb`` rides through to ``scan``; see ``marginals`` for what differentiating
     with respect to it buys."""
-    window = initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows)
+    window = initial_window(evidence.onset_logit, evidence.n_tracks, dmax, scorer.labels.n_rows)
 
     # Each track is read out at its *own* length, which the rolling window cannot hold:
     # lengths differ by far more than dmax (16617 vs 23355 on a real batch). So capture
-    # alpha[L][b] as j passes each track's L, instead of retaining all Tmax.
-    capture = Capture.at_lengths(ev.lengths)
-    captured = dict(scan(scorer, ev, dmax, window, capture, perturb=perturb).captured)
+    # alpha[L][row] as end passes each track's L, instead of retaining all Tmax.
+    capture = Capture.at_lengths(evidence.lengths)
+    captured = dict(scan(scorer, evidence, dmax, window, capture, perturb=perturb).captured)
     # An empty track ends at START, before the scan's first step, so no step can capture
     # it. Filled from the seeded window instead -- the same alpha the scan would have
     # read had it run for zero steps.
-    for b in capture.rows_ending_at(0):
-        captured[b] = window[b, -1]
-    # Every row is written: `ends` is keyed by `ev.lengths`, no length exceeds `ev.T`
-    # (Tmax *is* the max), and the scan visits every j in [1, T]. Checked rather than
+    for row in capture.rows_ending_at(0):
+        captured[row] = window[row, -1]
+    # Every row is written: `ends` is keyed by `evidence.lengths`, no length exceeds
+    # `evidence.n_frames` (Tmax *is* the max), and the scan visits every end in [1, T]. Checked
+    # rather than
     # cast, because a row left unwritten means a track whose length the evidence and
     # the scan disagree about -- and `torch.stack` would report that as a bare TypeError
     # about NoneType, several frames from the cause.
-    missing = [b for b in range(ev.B) if b not in captured]
+    missing = [row for row in range(evidence.n_tracks) if row not in captured]
     if missing:
         raise RuntimeError(
             f"rows {missing} were never captured: their lengths "
-            f"{[ev.lengths[b] for b in missing]} lie outside the scanned range "
-            f"[1, {ev.T}]"
+            f"{[evidence.lengths[row] for row in missing]} lie outside the scanned range "
+            f"[1, {evidence.n_frames}]"
         )
-    alphas = [captured[b] for b in range(ev.B)]
+    alphas = [captured[row] for row in range(evidence.n_tracks)]
     return torch.logsumexp(torch.stack(alphas)[:, : scorer.labels.n_labels], dim=1)
 
 
 def chunk_log_partition(
     scorer: SpanScorer,
-    ev: Evidence,
+    evidence: Evidence,
     dmax: int,
     carry: torch.Tensor | None = None,
     context: int = 0,
@@ -296,7 +297,7 @@ def chunk_log_partition(
     the alpha state the next chunk resumes from. Pass ``carry=None`` for a track's
     first chunk.
 
-    **``ev`` must carry ``context`` frames of left overlap ahead of the chunk's own
+    **``evidence`` must carry ``context`` frames of left overlap ahead of the chunk's own
     frames, and ``context`` must be ``dmax`` unless the chunk starts at frame 0.** The
     carry supplies the *alpha* of positions before the chunk, but a span crossing the
     boundary also needs its *cue values*, and those live in the previous chunk. Without
@@ -317,10 +318,10 @@ def chunk_log_partition(
     Detaching is what makes it truncated; passing the window through undetached
     reproduces whole-track backprop.
     """
-    Tmax = ev.T
-    if any(length != Tmax for length in ev.lengths):
+    Tmax = evidence.n_frames
+    if any(length != Tmax for length in evidence.lengths):
         raise ValueError(
-            f"chunk_log_partition needs uniform lengths, got {sorted(set(ev.lengths))} "
+            f"chunk_log_partition needs uniform lengths, got {sorted(set(evidence.lengths))} "
             f"against Tmax={Tmax}; use log_partitions for ragged whole tracks"
         )
     if not 0 <= context < Tmax:
@@ -331,8 +332,8 @@ def chunk_log_partition(
             "the chunk needs at least one frame of its own to scan"
         )
     window = (
-        initial_window(ev.onset_logit, ev.B, dmax, scorer.labels.n_rows)
+        initial_window(evidence.onset_logit, evidence.n_tracks, dmax, scorer.labels.n_rows)
         if carry is None else carry
     )
-    window = scan(scorer, ev, dmax, window, start=context, stop=Tmax - right).window
+    window = scan(scorer, evidence, dmax, window, start=context, stop=Tmax - right).window
     return torch.logsumexp(window[:, -1, : scorer.labels.n_labels], dim=1), window

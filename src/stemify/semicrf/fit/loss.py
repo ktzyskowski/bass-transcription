@@ -20,8 +20,8 @@ backprop, and gives back the memory saving with it. That is the one axis on whic
 deleted path differed, so it is a flag here rather than a second module.
 
 **Why the carry is keyed by stream and not by batch row.** With ``num_workers > 1``
-consecutive batches come from different workers, so row *b* of one batch is not the
-continuation of row *b* of the last. ``ChunkDataset`` stamps a globally unique
+consecutive batches come from different workers, so a given *row* of one batch is not
+the continuation of that row of the last. ``ChunkDataset`` stamps a globally unique
 ``stream`` on every chunk for exactly this reason. Entries are reset by the chunk's
 own ``reset`` flag, which the dataset raises on each track's first chunk --
 so a fresh pass over the loader (a new epoch, or the val loader) rebuilds every carry
@@ -277,11 +277,11 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         )
         fresh = self._fresh(batch, device, dmax)
         windows, prev = [], []
-        for b, (stream, reset) in enumerate(
+        for row, (stream, reset) in enumerate(
             zip(batch.streams, batch.resets, strict=True)
         ):
             if reset:
-                windows.append(fresh[b])
+                windows.append(fresh[row])
                 prev.append(torch.zeros((), device=device))
             else:
                 window, a = self._carry[stream]
@@ -344,8 +344,8 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         # chunk k's encoder activations, which is what bounds memory to one chunk.
         carried_A = A.detach() if self.detach_carry else A
         carried_window = window.detach() if self.detach_carry else window
-        for b, stream in enumerate(batch.streams):
-            self._carry[stream] = (carried_window[b], carried_A[b])
+        for row, stream in enumerate(batch.streams):
+            self._carry[stream] = (carried_window[row], carried_A[row])
 
         total = nll
         metrics = {"nll": float(nll.item())}

@@ -5,7 +5,7 @@ single-track type, because the two differed only in a leading axis while duplica
 every accessor and forcing the alpha window to be shape-polymorphic.
 
 Voicing and the pitch cues enter as *prefix cumsums*, so a span's mass is an O(1)
-difference ``C[j] - C[i]`` rather than a re-sum per candidate. That is what keeps the
+difference ``C[end] - C[start]`` rather than a re-sum per candidate. That is what keeps the
 scan linear in the segment cap, and it is the constraint every future feature has to
 satisfy -- an interior term must be additive over frames, or endpoint- and length-only.
 
@@ -39,7 +39,7 @@ from stemify.semicrf.placement import (
 )
 
 # A span index: an int for a single span, or a tensor when the scan broadcasts a
-# whole row of candidate starts at once. Every accessor takes all three the same
+# whole row of candidate starts at once. Every accessor takes row/start/end the same
 # way, which is what lets one `SpanScorer.unary` serve the scan and the gold scorer.
 Idx = torch.Tensor | int
 
@@ -57,7 +57,7 @@ class Evidence:
 
     Ragged tracks are padded to a common length: ``onset_logit`` pads with 0 and the
     cumsums pad **flat** (last value repeated), so no voiced or onset mass accrues past
-    a track's true end. The scan reads each track out at its own ``lengths[b]``.
+    a track's true end. The scan reads each track out at its own ``lengths[row]``.
     """
 
     onset_logit: torch.Tensor       # (B, Tmax)
@@ -100,38 +100,39 @@ class Evidence:
         )
 
     @property
-    def B(self) -> int:
+    def n_tracks(self) -> int:
+        """Rows in this batch. One track is a batch of one."""
         return len(self.lengths)
 
     @property
-    def T(self) -> int:
-        """The padded width. Use ``lengths[b]`` for a track's own extent."""
+    def n_frames(self) -> int:
+        """The padded width. Use ``lengths[row]`` for a track's own extent."""
         return int(self.onset_logit.shape[1])
 
     @property
     def device(self) -> torch.device:
         return self.onset_logit.device
 
-    def one(self, b: int = 0) -> "Evidence":
-        """Row ``b`` as its own batch of one -- for the single-track paths (Viterbi,
+    def one(self, row: int = 0) -> "Evidence":
+        """Row ``row`` as its own batch of one -- for the single-track paths (Viterbi,
         decode) that would otherwise index every field by hand."""
-        t = self.lengths[b]
+        length = self.lengths[row]
         def cut(x: torch.Tensor | None) -> torch.Tensor | None:
-            return None if x is None else x[b : b + 1, : t + 1]
+            return None if x is None else x[row : row + 1, : length + 1]
         # Keyword arguments, not positional: several of these are same-shaped
         # (B, Tmax+1) cumsums, so transposing two of them here would type-check, run,
         # train, and score the wrong quantity -- a wrong model that never raises.
         return Evidence(
-            onset_logit=self.onset_logit[b : b + 1, :t],
-            voiced_c=self.voiced_c[b : b + 1, : t + 1],
-            rest_c=self.rest_c[b : b + 1, : t + 1],
-            lengths=[t],
-            frame_times=[self.frame_times[b]],
-            contours=None if self.contours is None else [self.contours[b]],
+            onset_logit=self.onset_logit[row : row + 1, :length],
+            voiced_c=self.voiced_c[row : row + 1, : length + 1],
+            rest_c=self.rest_c[row : row + 1, : length + 1],
+            lengths=[length],
+            frame_times=[self.frame_times[row]],
+            contours=None if self.contours is None else [self.contours[row]],
             pitch_logprob_c=cut(self.pitch_logprob_c),
-            # `[:, :t]`, not `cut`: `hidden` is per-frame, not a cumsum, so it has
-            # T entries rather than T+1.
-            hidden=None if self.hidden is None else self.hidden[b : b + 1, :t],
+            # `[:, :length]`, not `cut`: `hidden` is per-frame, not a cumsum, so it
+            # has T entries rather than T+1.
+            hidden=None if self.hidden is None else self.hidden[row : row + 1, :length],
             # `span_scores` is deliberately *not* carried. It is indexed by row, and
             # a table built for the whole batch would silently answer row 0 for
             # every question asked of this single-row view.
@@ -139,8 +140,8 @@ class Evidence:
 
     # --- span accessors: the index conventions, in one place --------------------
 
-    def mean_pitch_logprob(self, b: Idx, i: Idx, j: Idx) -> torch.Tensor:
-        """Mean per-frame log-probability of each semitone across ``[i, j)``.
+    def mean_pitch_logprob(self, row: Idx, start: Idx, end: Idx) -> torch.Tensor:
+        """Mean per-frame log-probability of each semitone across ``[start, end)``.
 
         ``(..., n_semitones)`` -- one score per pitch the head can name, which is what
         lets a ``note@p`` span be worth something different from ``note@q``. Raises
@@ -158,9 +159,11 @@ class Evidence:
                 "pitch-labelled alphabet has nothing to score. Use a {note, rest} "
                 "scorer, or decode through cues from a model with a pitch head."
             )
-        span = j - i
-        d = span if isinstance(span, int) else span.unsqueeze(-1)
-        return (self.pitch_logprob_c[b, j] - self.pitch_logprob_c[b, i]) / d
+        length = end - start
+        width = length if isinstance(length, int) else length.unsqueeze(-1)
+        return (
+            self.pitch_logprob_c[row, end] - self.pitch_logprob_c[row, start]
+        ) / width
 
 
 @dataclass(frozen=True)
@@ -194,7 +197,7 @@ def _track_tensors(cues: Frames, stride: int, device: torch.device) -> _TrackTen
     onset = on_device(torch.as_tensor(cues.onset).float()[::stride], device)
     onset_logit = torch.logit(onset.clamp(1e-6, 1 - 1e-6))
     voicing = cues.voicing[::stride] if cues.voicing is not None else None
-    Vc, Uc = voiced_logcumsum(voicing, cues.contour, frame_times, device)
+    voiced_c, rest_c = voiced_logcumsum(voicing, cues.contour, frame_times, device)
     # A plain attribute, not a getattr default: both cue types carry this field, and
     # the probe that used to stand here is what let the numpy path silently arrive
     # without one -- zeroing the learned span features at decode.
@@ -205,7 +208,9 @@ def _track_tensors(cues: Frames, stride: int, device: torch.device) -> _TrackTen
         n_semitones = strided.shape[-1] // BINS_PER_SEMITONE
         pitch_logprob = pitch_logprob_cumsum(strided, n_semitones)
     hidden = None if cues.hidden is None else on_device(cues.hidden, device)[::stride]
-    return _TrackTensors(onset_logit, Vc, Uc, frame_times, pitch_logprob, hidden)
+    return _TrackTensors(
+        onset_logit, voiced_c, rest_c, frame_times, pitch_logprob, hidden
+    )
 
 
 def build_evidence(
@@ -231,20 +236,23 @@ def build_evidence(
         raise ValueError("build_evidence needs at least one track")
     device = frames_device(batch[0]) if device is None else torch.device(device)
 
-    built = [_track_tensors(c, stride, device) for c in batch]
+    built = [_track_tensors(track, stride, device) for track in batch]
     _require_one_model(built)
     padded = _pad(built)
 
     # A batch of contours only when every track has one: a partial list would silently
     # give some decoded notes a pyin pitch and others none.
-    maybe = [c.contour for c in batch]
-    contours = None if any(c is None for c in maybe) else cast(list[Contour], maybe)
+    maybe = [track.contour for track in batch]
+    contours = (
+        None if any(c is None for c in maybe)
+        else cast(list[Contour], maybe)
+    )
     return Evidence(
         onset_logit=padded.onset_logit,
         voiced_c=padded.voiced_c,
         rest_c=padded.rest_c,
-        lengths=[t.length for t in built],
-        frame_times=[t.frame_times for t in built],
+        lengths=[track.length for track in built],
+        frame_times=[track.frame_times for track in built],
         contours=contours,
         pitch_logprob_c=padded.pitch_logprob_c,
         hidden=padded.hidden,
@@ -258,13 +266,13 @@ def _require_one_model(built: list[_TrackTensors]) -> None:
     these produces a wrong number rather than a crash, so the check has to be the thing
     that stops it.
     """
-    if len({t.pitch_logprob is not None for t in built}) > 1:
+    if len({track.pitch_logprob is not None for track in built}) > 1:
         raise ValueError(
             "batch mixes tracks with and without pitch logits; every track in a batch "
             "must come from the same model, or a pitch label is scored against real "
             "evidence for some rows and against nothing for others"
         )
-    if len({t.hidden is not None for t in built}) > 1:
+    if len({track.hidden is not None for track in built}) > 1:
         raise ValueError(
             "batch mixes tracks with and without backbone activations; a scorer that "
             "pools the trunk would read a learned projection of real features for some "
@@ -303,32 +311,33 @@ def _pad(built: list[_TrackTensors]) -> _Padded:
     learned projection of it, and a projection has a bias, so zero frames past the end
     would still accrue mass into every prefix.
     """
-    lengths = [t.length for t in built]
-    B, Tmax = len(built), max(lengths)
+    lengths = [track.length for track in built]
+    n_tracks, n_frames = len(built), max(lengths)
     ref = built[0].onset_logit
     first = built[0]
 
-    onset = ref.new_zeros(B, Tmax)
-    voiced_c = ref.new_zeros(B, Tmax + 1)
-    rest_c = ref.new_zeros(B, Tmax + 1)
+    onset = ref.new_zeros(n_tracks, n_frames)
+    voiced_c = ref.new_zeros(n_tracks, n_frames + 1)
+    rest_c = ref.new_zeros(n_tracks, n_frames + 1)
     hidden = (
         None if first.hidden is None
-        else ref.new_zeros(B, Tmax, first.hidden.shape[-1])
+        else ref.new_zeros(n_tracks, n_frames, first.hidden.shape[-1])
     )
     logprob_c = (
         None if first.pitch_logprob is None
-        else ref.new_zeros(B, Tmax + 1, first.pitch_logprob.shape[-1])
+        else ref.new_zeros(n_tracks, n_frames + 1, first.pitch_logprob.shape[-1])
     )
 
-    for b, track in enumerate(built):
-        t = track.length
-        onset[b, :t] = track.onset_logit
-        _flat_pad(voiced_c, b, t, track.voiced_c)
-        _flat_pad(rest_c, b, t, track.rest_c)
+    for row, track in enumerate(built):
+        length = track.length
+        onset[row, :length] = track.onset_logit
+        _flat_pad(voiced_c, row, length, track.voiced_c)
+        _flat_pad(rest_c, row, length, track.rest_c)
         if hidden is not None and track.hidden is not None:
-            hidden[b, :t], hidden[b, t:] = track.hidden, track.hidden[-1]
+            hidden[row, :length] = track.hidden
+            hidden[row, length:] = track.hidden[-1]
         if track.pitch_logprob is not None:
-            _flat_pad(logprob_c, b, t, track.pitch_logprob)
+            _flat_pad(logprob_c, row, length, track.pitch_logprob)
 
     return _Padded(
         onset_logit=onset, voiced_c=voiced_c, rest_c=rest_c,

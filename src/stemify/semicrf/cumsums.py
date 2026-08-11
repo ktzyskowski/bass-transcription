@@ -1,6 +1,6 @@
 """Prefix sums over per-frame evidence, so a span score is O(1) in its length.
 
-Every span feature the scorer reads is a sum or mean over ``[i, j)``. Materialising
+Every span feature the scorer reads is a sum or mean over ``[start, end)``. Materialising
 that per candidate span would be O(dmax) per step; a cumulative sum makes it one
 subtraction. These are the cumsums ``Evidence`` carries, built once per batch.
 
@@ -39,8 +39,8 @@ def voiced_logcumsum(
     "everything is voiced" would return a plausible number for a model that was never
     given the question."""
     if voicing is not None:
-        v = on_device(voicing, device).float().clamp(1e-6, 1 - 1e-6)
-        vlp, ulp = torch.log(v), torch.log1p(-v)
+        voiced = on_device(voicing, device).float().clamp(1e-6, 1 - 1e-6)
+        voiced_lp, rest_lp = torch.log(voiced), torch.log1p(-voiced)
     else:
         if contour is None:
             raise ValueError(
@@ -49,12 +49,12 @@ def voiced_logcumsum(
                 "with a voicing head, or pass a contour to fall back on."
             )
         mask = resample_mask(contour.times, contour.freqs > 0, frame_times)
-        vp = np.clip(mask, 1e-6, 1 - 1e-6)
-        vlp = on_device(np.log(vp).astype(np.float32), device)
-        ulp = on_device(np.log1p(-vp).astype(np.float32), device)
-    Vc = torch.cat([vlp.new_zeros(1), torch.cumsum(vlp, 0)])
-    Uc = torch.cat([ulp.new_zeros(1), torch.cumsum(ulp, 0)])
-    return Vc, Uc
+        voiced = np.clip(mask, 1e-6, 1 - 1e-6)
+        voiced_lp = on_device(np.log(voiced).astype(np.float32), device)
+        rest_lp = on_device(np.log1p(-voiced).astype(np.float32), device)
+    voiced_c = torch.cat([voiced_lp.new_zeros(1), torch.cumsum(voiced_lp, 0)])
+    rest_c = torch.cat([rest_lp.new_zeros(1), torch.cumsum(rest_lp, 0)])
+    return voiced_c, rest_c
 
 
 def pitch_logprob_cumsum(
@@ -78,7 +78,8 @@ def pitch_logprob_cumsum(
     result is a proper distribution over the pitches the alphabet can name rather than
     one leaking mass into bins no label reads.
 
-    Cumulative because a span reads it as ``(C[j] - C[i]) / (j - i)`` -- the **mean**
+    Cumulative because a span reads it as ``(C[end] - C[start]) / (end - start)`` --
+    the **mean**
     log-probability, so a geometric mean of the frame posteriors. That is the right
     aggregate here and the arithmetic mean is not: one frame confidently disagreeing
     should veto a span's pitch, which is what a geometric mean does and a mixture
@@ -92,7 +93,7 @@ def pitch_logprob_cumsum(
             "bins/semitone. The label set is derived from the head's axis "
             "(LabelSet.from_bins); they have drifted."
         )
-    lp = torch.log_softmax(logits, dim=-1)
+    logprob = torch.log_softmax(logits, dim=-1)
     # **Pooling blocks are centred on the semitone, which costs one bin of padding.**
     # Semitone `s` sits at bin `bins_per_semitone * s` exactly (that is what
     # `LabelSet.bin_of` returns), so its block has to be the bins *around* that, not
@@ -100,9 +101,9 @@ def pitch_logprob_cumsum(
     # semitone sharp -- and a note tuned slightly flat would be credited to the
     # semitone below. Padding one `log 0` bin at the bottom shifts every block down by
     # one, making them `[3s-1, 3s+2)`.
-    pad = lp.new_full((lp.shape[0], 1), float("-inf"))
-    blocks = torch.cat([pad, lp], dim=-1)[:, :need]
+    pad = logprob.new_full((logprob.shape[0], 1), float("-inf"))
+    blocks = torch.cat([pad, logprob], dim=-1)[:, :need]
     pooled = torch.logsumexp(
-        blocks.reshape(lp.shape[0], n_pitches, bins_per_semitone), dim=-1
+        blocks.reshape(logprob.shape[0], n_pitches, bins_per_semitone), dim=-1
     )                                                         # (T, n_pitches)
     return torch.cat([pooled.new_zeros(1, n_pitches), torch.cumsum(pooled, 0)])

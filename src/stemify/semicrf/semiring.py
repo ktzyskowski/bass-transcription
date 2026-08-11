@@ -1,6 +1,6 @@
 """The algebra the segmental recurrence is parameterised over.
 
-``alpha[j][L]`` combines every way of reaching position ``j`` in label ``L``. *How*
+``alpha[end][L]`` combines every way of reaching position ``end`` in label ``L``. *How*
 they combine is the only thing separating training from decoding: sum the alternatives
 and the scan computes ``log Z``; take the best and it computes Viterbi. The recurrence,
 the window bookkeeping and the candidate enumeration are identical either way, which is
@@ -57,8 +57,9 @@ class Semiring(Protocol):
         """
         ...
 
-    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """⊕ over the shared axis of ``a ⊗ b``: ``(..., K)`` and ``(K, N)`` -> ``(..., N)``.
+    def contract(self, window: torch.Tensor, trans: torch.Tensor) -> torch.Tensor:
+        """⊕ over the shared axis of ``window ⊗ trans``: ``(..., K)`` and ``(K, N)`` ->
+        ``(..., N)``.
 
         The semiring matmul, and the reason it exists is memory. The recurrence combines
         an alpha window with a transition matrix over the *previous* label, and doing
@@ -74,7 +75,7 @@ class Semiring(Protocol):
         ...
 
     def contract_with_witness(
-        self, a: torch.Tensor, b: torch.Tensor
+        self, window: torch.Tensor, trans: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         """``(contracted, index into K of the survivor)``, or ``None`` for a ⊕ with none.
 
@@ -105,24 +106,24 @@ class _Log:
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         return None
 
-    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """``logsumexp_k(a[..., k] + b[k, n])``, as a shifted matmul.
+    def contract(self, window: torch.Tensor, trans: torch.Tensor) -> torch.Tensor:
+        """``logsumexp_k(window[..., k] + trans[k, n])``, as a shifted matmul.
 
-        ``log(exp(a - ma) @ exp(b - mb)) + ma + mb`` -- the log-domain matmul. Both
+        ``log(exp(w - mw) @ exp(t - mt)) + mw + mt`` -- the log-domain matmul. Both
         operands are shifted to a maximum of 0 before the exponential, so nothing
         overflows and the underflow that remains is correct: a term ``NEG`` below the
         max contributes exactly 0, which is the mass of an unreachable path.
 
-        A row of ``a`` that is *entirely* ``NEG`` (the ramp positions before a track has
+        A row of ``window`` that is *entirely* ``NEG`` (the ramp positions before a track has
         dmax frames behind it) shifts to 0 and comes back at ``NEG + O(log K)``, i.e.
         still unreachable. That is the property ``initial_window`` relies on.
         """
-        ma = a.max(dim=-1, keepdim=True).values
-        mb = b.max()
-        return torch.log(torch.exp(a - ma) @ torch.exp(b - mb)) + ma + mb
+        mw = window.max(dim=-1, keepdim=True).values
+        mt = trans.max()
+        return torch.log(torch.exp(window - mw) @ torch.exp(trans - mt)) + mw + mt
 
     def contract_with_witness(
-        self, a: torch.Tensor, b: torch.Tensor
+        self, window: torch.Tensor, trans: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
         return None
 
@@ -145,8 +146,8 @@ class _MaxPlus:
         best = terms.max(dim=dim)
         return best.values, best.indices
 
-    def contract(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        """``max_k(a[..., k] + b[k, n])``. There is no max-plus matmul primitive, so
+    def contract(self, window: torch.Tensor, trans: torch.Tensor) -> torch.Tensor:
+        """``max_k(window[..., k] + trans[k, n])``. There is no max-plus matmul primitive, so
         this broadcasts and reduces.
 
         That rebuilds exactly the tensor ``LOG.contract`` exists to avoid -- and it is
@@ -154,12 +155,12 @@ class _MaxPlus:
         is retained for a backward pass, so the peak is one step's worth rather than a
         chunk's.
         """
-        return (a.unsqueeze(-1) + b).max(dim=-2).values
+        return (window.unsqueeze(-1) + trans).max(dim=-2).values
 
     def contract_with_witness(
-        self, a: torch.Tensor, b: torch.Tensor
+        self, window: torch.Tensor, trans: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        best = (a.unsqueeze(-1) + b).max(dim=-2)
+        best = (window.unsqueeze(-1) + trans).max(dim=-2)
         return best.values, best.indices
 
 

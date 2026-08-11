@@ -10,8 +10,8 @@ Here the per-frame function is learned and the readout is a network::
 
     phi_t   = MLP(trunk_t || onset_t || voiced_t || unvoiced_t)        T evaluations
     P_k     = prefix sums of phi_t * t^k                               one pass
-    f(a, b) = MLP(moments(a,b) || phi at the edges || e_dur[b - a])    T * dmax
-    s(a,b,y)= <f(a,b), e_y> + bias_y + alpha(a,b) * logprob_y(a,b)     one matmul
+    f(s, e) = MLP(moments(s,e) || phi at the edges || e_dur[e - s])    T * dmax
+    score   = <f(s,e), emb_y> + bias_y + alpha(s,e) * logprob_y(s,e)   one matmul
 
 Four things it can express that no setting of ``w``'s weights can:
 
@@ -27,13 +27,13 @@ else, so "there is a strong onset in the *middle* of this span" -- the single be
 signal for rejecting a merged double-note -- had no feature at all. It arrives here as
 ``M_0`` of the onset channel, and its position as ``M_1``.
 
-**A span-dependent weight on the pitch head.** ``alpha(a, b)`` lets the model distrust
+**A span-dependent weight on the pitch head.** ``alpha(s, e)`` lets the model distrust
 the head across a transient and trust it across a sustain, where a single global scalar
 would weight pitch evidence identically everywhere.
 
 The label enters bilinearly and not as an MLP input. That is not a style choice: at 49
-labels and ~600k spans a track, ``g(a, b, y)`` evaluated per label is 29M MLP calls,
-while one ``f(a, b)`` and a dot product against an embedding table is 600k plus a matmul.
+labels and ~600k spans a track, ``g(s, e, y)`` evaluated per label is 29M MLP calls,
+while one ``f(s, e)`` and a dot product against an embedding table is 600k plus a matmul.
 
 **What it does not do is pick its own pitch.** ``alpha * logprob_y`` reads the pitch
 head's own per-semitone log-probability rather than reconstructing pitch identity inside
@@ -60,7 +60,7 @@ from stemify.semicrf.spans import SpanScorer
 
 # How many span-end positions to score in one batched MLP call. Bounds the peak
 # activation footprint without changing the result: the table is built in slices along
-# `j` and concatenated. A training chunk is ~128 positions and fits in one slice, so this
+# `end` and concatenated. A training chunk is ~128 positions and fits in one slice, so this
 # only binds at inference, where a whole track is thousands of frames and the unsliced
 # intermediates would be tens of GB.
 J_BLOCK = 256
@@ -83,7 +83,7 @@ class NeuralSpanScorer(SpanScorer):
         """``trunk_dim`` is the backbone's hidden width, which the evidence must match.
 
         ``dmax_frames`` sizes the duration embedding, and it is in *frames* because the
-        embedding is indexed by ``b - a``. That pins this scorer to one grid resolution:
+        embedding is indexed by ``end - start``. That pins this scorer to one grid resolution:
         a scorer whose duration parameter were in seconds would survive a change of hop,
         and this one cannot. ``dmax_for`` therefore checks rather than adapts -- a hop
         deriving a different ``dmax`` would silently index a table fitted against another.
@@ -190,7 +190,7 @@ class NeuralSpanScorer(SpanScorer):
             raise ValueError(
                 f"this scorer's duration embedding is sized for dmax={self.dmax_frames} "
                 f"frames, but a {hop * 1000:.2f} ms hop over dmax_s={self.dmax_s}s gives "
-                f"{dmax}. The embedding is indexed by (b - a) in frames, so decoding on a "
+                f"{dmax}. The embedding is indexed by (row - a) in frames, so decoding on a "
                 "different grid than it was fitted on would read another span's row."
             )
         return dmax
@@ -210,106 +210,106 @@ class NeuralSpanScorer(SpanScorer):
         out[self.labels.START, rest] = self.class_trans[2, 1]
         return out
 
-    def _frame_features(self, ev: Evidence) -> torch.Tensor:
+    def _frame_features(self, evidence: Evidence) -> torch.Tensor:
         """``(B, T, frame_dim)`` -- the learned per-frame projection ``phi``."""
-        if ev.hidden is None:
+        if evidence.hidden is None:
             raise ValueError(
                 "NeuralSpanScorer pools the backbone's per-frame activations, and this "
                 "Evidence carries none. Encode through a model with a backbone "
                 "(FrameNet.heads_and_hidden fills Frames.hidden)."
             )
-        if ev.hidden.shape[-1] != self.trunk_dim:
+        if evidence.hidden.shape[-1] != self.trunk_dim:
             raise ValueError(
-                f"trunk width {ev.hidden.shape[-1]} does not match the "
+                f"trunk width {evidence.hidden.shape[-1]} does not match the "
                 f"{self.trunk_dim} this scorer was built for; the checkpoint and "
                 "the backbone disagree."
             )
         # Per-frame voicing, recovered by differencing its own cumsum rather than carried
         # twice. `voiced_c[t+1] - voiced_c[t]` is exactly `log P(voiced at t)`, which is
         # what went into the sum.
-        voiced = ev.voiced_c[:, 1:] - ev.voiced_c[:, :-1]
-        rest = ev.rest_c[:, 1:] - ev.rest_c[:, :-1]
-        stacked = torch.stack([ev.onset_logit, voiced, rest], dim=-1)
-        out: torch.Tensor = self.phi(torch.cat([ev.hidden, stacked], dim=-1))
+        voiced = evidence.voiced_c[:, 1:] - evidence.voiced_c[:, :-1]
+        rest = evidence.rest_c[:, 1:] - evidence.rest_c[:, :-1]
+        stacked = torch.stack([evidence.onset_logit, voiced, rest], dim=-1)
+        out: torch.Tensor = self.phi(torch.cat([evidence.hidden, stacked], dim=-1))
         return out
 
     def _span_vectors(
         self,
         phi: torch.Tensor,
         cumsums: torch.Tensor,
-        b: torch.Tensor,
-        i: torch.Tensor,
-        j: torch.Tensor,
+        row: torch.Tensor,
+        start: torch.Tensor,
+        end: torch.Tensor,
     ) -> torch.Tensor:
-        """``(..., span_dim)`` -- ``f(a, b)``, everything except the label."""
+        """``(..., span_dim)`` -- ``f(start, end)``, everything except the label."""
         # Broadcast the three indices *first*, so every part below lands on one
-        # shape and the concatenation needs no expanding. Reading `phi[b, j - 1]`
-        # against an unbroadcast `j` would give a narrower tensor than the moments
+        # shape and the concatenation needs no expanding. Reading `phi[row, end - 1]`
+        # against an unbroadcast `end` would give a narrower tensor than the moments
         # beside it -- and `cat` would then reject shapes that are, in the sense
         # that matters, compatible.
-        lead = b + i + j                     # a tensor of the common shape; value unused
-        b, i, j = b.expand_as(lead), i.expand_as(lead), j.expand_as(lead)
-        moments = span_moments(cumsums, b, i, j, dtype=phi.dtype)
+        lead = row + start + end                     # a tensor of the common shape; value unused
+        row, start, end = row.expand_as(lead), start.expand_as(lead), end.expand_as(lead)
+        moments = span_moments(cumsums, row, start, end, dtype=phi.dtype)
         last = phi.shape[1] - 1
-        before = phi[b, (i - 1).clamp(min=0)]
-        first = phi[b, i.clamp(max=last)]
-        final = phi[b, (j - 1).clamp(min=0, max=last)]
-        length = (j - i).clamp(0, self.dmax_frames)
+        before = phi[row, (start - 1).clamp(min=0)]
+        first = phi[row, start.clamp(max=last)]
+        final = phi[row, (end - 1).clamp(min=0, max=last)]
+        length = (end - start).clamp(0, self.dmax_frames)
         out: torch.Tensor = self.f(
             torch.cat([moments, before, first, final, self.dur(length)], dim=-1)
         )
         return out
 
     def _label_scores(
-        self, f: torch.Tensor, ev: Evidence, b: torch.Tensor,
-        i: torch.Tensor, j: torch.Tensor,
+        self, f: torch.Tensor, evidence: Evidence, row: torch.Tensor,
+        start: torch.Tensor, end: torch.Tensor,
     ) -> torch.Tensor:
         """``(..., n_labels)`` -- the bilinear readout plus the gated pitch term."""
         scores = f @ self.label_emb.weight.T + self.label_bias
-        logprob = ev.mean_pitch_logprob(b, i, j)                  # (..., n_pitches)
+        logprob = evidence.mean_pitch_logprob(row, start, end)                  # (..., n_pitches)
         rest = self.rest_logprob.expand(*logprob.shape[:-1], 1)
         gate = torch.nn.functional.softplus(self.alpha(f))        # (..., 1)
         return scores + gate * torch.cat([logprob, rest], dim=-1)
 
-    def precompute(self, ev: Evidence, dmax: int) -> torch.Tensor:
+    def precompute(self, evidence: Evidence, dmax: int) -> torch.Tensor:
         """``(B, T+1, dmax, n_labels)`` -- every span's unary, in one pass.
 
         Built here rather than per scan step because the DP is launch-bound: calling an
-        MLP once per ``j`` is ``T`` launches of a few hundred rows each, which is the
+        MLP once per ``end`` is ``T`` launches of a few hundred rows each, which is the
         shape that lost 22x to a graph-captured scan before. One batched call instead,
         and ``unary`` becomes a gather.
 
-        Sliced along ``j`` so the peak activation footprint is bounded by ``J_BLOCK``
+        Sliced along ``end`` so the peak activation footprint is bounded by ``J_BLOCK``
         rather than by track length. Result and gradient are identical either way -- the
         spans are independent, and the slices concatenate.
         """
-        phi = self._frame_features(ev)
+        phi = self._frame_features(evidence)
         cumsums = moment_cumsums(phi, self.order)
         dev = phi.device
-        offsets = torch.arange(dmax, device=dev)                  # b - a - 1
-        rows = torch.arange(ev.B, device=dev)[:, None, None]
-        # `j = 0` is zeroed rather than computed. No span ends at frame 0 -- the scan
-        # runs `j` from 1 and gold spans are half-open -- and the empty span it would
+        offsets = torch.arange(dmax, device=dev)                  # end - start - 1
+        rows = torch.arange(evidence.n_tracks, device=dev)[:, None, None]
+        # `end = 0` is zeroed rather than computed. No span ends at frame 0 -- the scan
+        # runs `end` from 1 and gold spans are half-open -- and the empty span it would
         # describe divides by its own zero length in `mean_pitch_logprob`. Keeping the
-        # row makes `j` index the table directly, with no offset to get wrong.
-        blocks = [phi.new_zeros(ev.B, 1, dmax, self.labels.n_labels)]
-        for lo in range(1, ev.T + 1, J_BLOCK):
-            ends = torch.arange(lo, min(lo + J_BLOCK, ev.T + 1), device=dev)
-            j = ends[None, :, None]                               # (1, J, 1)
+        # row makes `end` index the table directly, with no offset to get wrong.
+        blocks = [phi.new_zeros(evidence.n_tracks, 1, dmax, self.labels.n_labels)]
+        for lo in range(1, evidence.n_frames + 1, J_BLOCK):
+            ends = torch.arange(lo, min(lo + J_BLOCK, evidence.n_frames + 1), device=dev)
+            end = ends[None, :, None]                               # (1, J, 1)
             # Clamped at 0 exactly as `candidate_starts` does, so a span reaching before
             # the evidence pairs with a NEG alpha rather than indexing out of bounds.
-            i = (j - offsets[None, None, :] - 1).clamp(min=0)      # (1, J, dmax)
-            f = self._span_vectors(phi, cumsums, rows, i, j)
-            blocks.append(self._label_scores(f, ev, rows, i, j))
+            start = (end - offsets[None, None, :] - 1).clamp(min=0)      # (1, J, dmax)
+            f = self._span_vectors(phi, cumsums, rows, start, end)
+            blocks.append(self._label_scores(f, evidence, rows, start, end))
         return torch.cat(blocks, dim=1)
 
     def unary(
         self,
-        ev: Evidence,
+        evidence: Evidence,
         dmax: int,
-        b: torch.Tensor | int,
-        i: torch.Tensor | int,
-        j: torch.Tensor | int,
+        row: torch.Tensor | int,
+        start: torch.Tensor | int,
+        end: torch.Tensor | int,
     ) -> torch.Tensor:
         """A gather into the precomputed table, which is built on first call.
 
@@ -318,9 +318,10 @@ class NeuralSpanScorer(SpanScorer):
         having to remember. The table is stored on the ``Evidence``, whose lifetime is
         exactly one batch, so there is no invalidation rule to get wrong.
         """
-        if ev.span_scores is None:
-            ev.span_scores = self.precompute(ev, dmax)
-        # `j - i - 1` is the span's length minus one, which is the axis the table is
-        # built along. `candidate_starts` clamps `i` at 0, so for `j <= dmax` several
-        # candidates collapse onto start 0 and land at `j - 1`, still inside the axis.
-        return ev.span_scores[b, j, j - torch.as_tensor(i, device=ev.device) - 1]
+        if evidence.span_scores is None:
+            evidence.span_scores = self.precompute(evidence, dmax)
+        # `end - start - 1` is the span's length minus one, which is the axis the table
+        # is built along. `candidate_starts` clamps the start at 0, so for
+        # `end <= dmax` several candidates collapse onto start 0 and land at
+        # `end - 1`, still inside the axis.
+        return evidence.span_scores[row, end, end - torch.as_tensor(start, device=evidence.device) - 1]

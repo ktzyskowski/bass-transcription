@@ -1,8 +1,8 @@
 """The rolling ``alpha`` buffer both recurrences scan over.
 
-``alpha[j][label]`` is the score of the best (Viterbi) or total (forward) way to tile
-``[0, j)`` ending in a ``label`` span. The recurrence only ever reads
-``alpha[j-dmax:j]``, so nothing older need be kept -- this module is that bounded
+``alpha[end][label]`` is the score of the best (Viterbi) or total (forward) way to
+tile ``[0, end)`` ending in a ``label`` span. The recurrence only ever reads
+``alpha[end-dmax:end]``, so nothing older need be kept -- this module is that bounded
 buffer and nothing else.
 
 Shape is ``(B, dmax, n_rows)``, where ``n_rows`` is the alphabet plus ``START`` -- 3 for
@@ -18,7 +18,7 @@ from stemify.semicrf.constants import NEG
 
 def initial_window(
     ref: torch.Tensor,
-    B: int,
+    n_tracks: int,
     dmax: int,
     n_rows: int,
     slot: torch.Tensor | None = None,
@@ -33,8 +33,8 @@ def initial_window(
     an alphabet of any width without this module knowing the width.
 
     Defaulting to ``(dmax - 1, START)`` is a track's beginning: the scan's first step is
-    ``j = start + 1`` and reads window index ``k`` as position ``j - dmax + k``, so the
-    last slot is position ``start`` -- "no frames consumed yet".
+    ``end = first + 1`` and reads window index ``k`` as position ``end - dmax + k``, so
+    the last slot is position ``first`` -- "no frames consumed yet".
 
     ``slot`` and ``label`` move that seed **per row**, which is what lets a scan begin
     partway into a track. Both are needed together and for the same reason: a segment
@@ -49,14 +49,14 @@ def initial_window(
     ``dmax`` small tensors -- O(T * dmax) copies, ~900k on a 5-minute track, which is
     the shape that punishes a GPU hardest (all launch overhead, no arithmetic).
     """
-    window = ref.new_full((B, dmax, n_rows), NEG)
-    rows = torch.arange(B, device=window.device)
+    window = ref.new_full((n_tracks, dmax, n_rows), NEG)
+    rows = torch.arange(n_tracks, device=window.device)
     at = (
-        torch.full((B,), dmax - 1, dtype=torch.long, device=window.device)
+        torch.full((n_tracks,), dmax - 1, dtype=torch.long, device=window.device)
         if slot is None else slot.to(window.device)
     )
-    row = (
-        torch.full((B,), n_rows - 1, dtype=torch.long, device=window.device)
+    seeded = (
+        torch.full((n_tracks,), n_rows - 1, dtype=torch.long, device=window.device)
         if label is None else label.to(window.device)
     )
     if int(at.min()) < 0 or int(at.max()) >= dmax:
@@ -66,7 +66,7 @@ def initial_window(
             "inside the chunk starts at most dmax back, so an out-of-range slot means "
             "the gold pieces and the scan disagree about where the chunk begins"
         )
-    window[rows, at, row] = 0.0
+    window[rows, at, seeded] = 0.0
     return window
 
 

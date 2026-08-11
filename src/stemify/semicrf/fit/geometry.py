@@ -8,11 +8,12 @@ all bare ``int``:
   3. **Chunk-local DP frame** -- a window's own coordinates, origin at its first
      context frame. Gold is rebased into this on its way out of the dataset.
   4. **Window slot** -- ``0 .. dmax-1``, the rolling alpha buffer's index.
-  5. **Window offset** -- the recurrence's ``k``, where ``position = j - dmax + k``.
-  6. **Duration** -- ``j - i``, which indexes the duration table.
+  5. **Window offset** -- the recurrence's ``k``, where ``position = end - dmax + k``.
+  6. **Duration** -- ``end - start``, which indexes the duration table.
 
-Nothing distinguished them. A gold segment is ``(label, i, j)`` before it is rebased
-and ``(label, i, j)`` after -- the same tuple type, a different frame of reference, no
+Nothing distinguished them. A gold segment is ``(label, start, end)`` before it is
+rebased and ``(label, start, end)`` after -- the same tuple type, a different frame of
+reference, no
 marker either way. Both of the recorded bugs in this area came through that seam: a
 chunk seeded at ``START`` when gold's own boundary was meant (5.18 nats/track, hidden
 from every telescoping test by zero-initialised transitions), and a seed slot formula
@@ -27,7 +28,7 @@ codebase already reached for this once, in ``forward.candidate_starts``: shared 
 a decode that is wrong only near track starts"*.
 
 **Cold path only, and that is not a compromise.** The scan's per-step arithmetic
-(``candidate_starts``) stays entirely within the scan's own frame -- ``j`` in, start
+(``candidate_starts``) stays entirely within the scan's own frame -- ``end`` in, start
 positions in the same coordinates out. Nothing crosses a frame boundary inside the
 loop. Every conversion here happens once per chunk (rebasing), once per batch
 (seeding), or once after the scan (readout), so a Python object on this path costs
@@ -101,8 +102,8 @@ class ChunkGeometry:
     def seed_slot(self, local_start: int, dmax: int) -> int:
         """Where a gold segment starting at ``local_start`` sits in the alpha window.
 
-        The scan's first step is ``j = context + 1`` and it reads window index ``k`` as
-        position ``j - dmax + k``; inverting that gives this. A position equal to
+        The scan's first step is ``end = context + 1`` and it reads window index ``k``
+        as position ``end - dmax + k``; inverting that gives this. A position equal to
         ``context`` -- "no frames consumed yet" -- lands on the last slot, which is why
         a track's first chunk needs no special case.
 
@@ -148,7 +149,10 @@ class ChunkFrame:
         Labels ride through untouched -- only the indices are in a coordinate system.
         """
         return LocalSegmentation(
-            [(label, self.localise(i), self.localise(j)) for label, i, j in gold]
+            [
+                (label, self.localise(start), self.localise(end))
+                for label, start, end in gold
+            ]
         )
 
     def cqt_window(self) -> tuple[int, int]:

@@ -89,7 +89,7 @@ def forward_retaining(
     alphas = [window[:, -1, :]]                                        # alpha at j = 0
     terms: list[torch.Tensor] = [ev.onset_logit.new_zeros(1, dmax, 3, 2)]  # j=0 unused
     neg_col = ev.onset_logit.new_full((1, 1), NEG)
-    for j in range(1, ev.T + 1):
+    for j in range(1, ev.n_frames + 1):
         term, _ = step_terms(scorer, ev, dmax, window, j)          # (1, dmax, n_labels)
         terms.append(term)
         val = torch.logsumexp(term.reshape(1, -1, 2), dim=1)           # (1, 2)
@@ -217,7 +217,7 @@ def probe(
             t0 = time.perf_counter()
             with torch.no_grad():
                 alphas, terms = forward_retaining(decoder.scorer, ev, dmax)
-                mine = float(torch.logsumexp(alphas[ev.T][0, :2], dim=0))
+                mine = float(torch.logsumexp(alphas[ev.n_frames][0, :2], dim=0))
                 theirs = float(log_partitions(decoder.scorer, ev, dmax)[0])
             if abs(mine - theirs) > 1e-2 * max(1.0, abs(theirs)):
                 raise RuntimeError(
@@ -226,11 +226,11 @@ def probe(
                 )
 
             drawn = [
-                sample_segmentation(alphas, terms, dmax, ev.T, ev.device, gen)
+                sample_segmentation(alphas, terms, dmax, ev.n_frames, ev.device, gen)
                 for _ in range(samples)
             ]
             for segs in drawn:
-                check_tiling(segs, ev.T, dmax)
+                check_tiling(segs, ev.n_frames, dmax)
             # FFBS is right only if the draws reproduce a quantity computed a completely
             # different way. The expected note count comes from the marginals, which are
             # verified against brute-force enumeration, so agreement here ties the
@@ -254,7 +254,7 @@ def probe(
             counts["mbr"].append(len(cands[best_by_consensus]) / n)
             counts["oracle"].append(len(cands[max(range(samples), key=lambda k: scores[k])]) / n)
             print(f"  {ex.track_id if hasattr(ex, 'track_id') else '?':<22} "
-                  f"T={ev.T:<6d} map={rows['map'][-1]:.4f} "
+                  f"T={ev.n_frames:<6d} map={rows['map'][-1]:.4f} "
                   f"sample={rows['sample'][-1]:.4f} mbr={rows['mbr'][-1]:.4f} "
                   f"oracle={rows['oracle'][-1]:.4f}  ({time.perf_counter() - t0:.0f}s)")
             del alphas, terms

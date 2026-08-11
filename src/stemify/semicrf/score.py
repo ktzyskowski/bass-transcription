@@ -3,7 +3,7 @@
 The third way to score a tiling, alongside ``forward`` (logsumexp over all of them)
 and ``viterbi`` (the best one). The NLL is ``log Z - score(gold)``, so this is the gold
 half -- but nothing here knows the segmentation is gold, only that it is a list of
-``(label, i, j)`` spans.
+``(label, start, end)`` spans.
 
 Separate from ``gold.py`` on purpose: that module decides *which* segmentation is gold
 (the audible-gap rule, pure numpy) and changes when the labelling rule changes; this one
@@ -29,7 +29,7 @@ from stemify.semicrf.spans import SpanScorer
 
 
 def _prev_labels(
-    lab: torch.Tensor, first: torch.Tensor, b: torch.Tensor, seeds: torch.Tensor
+    label: torch.Tensor, first: torch.Tensor, row: torch.Tensor, seeds: torch.Tensor
 ) -> torch.Tensor:
     """The label preceding each segment; ``seeds[row]`` wherever ``first`` is set.
 
@@ -45,13 +45,13 @@ def _prev_labels(
     the transition table moved off its zero init. Measured at 5.18 nats over a
     six-chunk track, and invisible at initialisation -- which is exactly where the
     telescoping tests look."""
-    prev = torch.cat([lab.new_zeros(1), lab[:-1]])
-    return torch.where(first, seeds[b], prev)
+    prev = torch.cat([label.new_zeros(1), label[:-1]])
+    return torch.where(first, seeds[row], prev)
 
 
 def segmentation_scores(
     scorer: SpanScorer,
-    ev: Evidence,
+    evidence: Evidence,
     per_track: Sequence[Segmentation],
     dmax: int,
     prev_labels: Sequence[int] | None = None,
@@ -72,24 +72,24 @@ def segmentation_scores(
     Indices are never clamped, so a caller passing a span past a track's true length
     would silently read the flat padding ``build_evidence`` leaves there.
     """
-    rows = [(b, *seg) for b, segs in enumerate(per_track) for seg in segs]
-    out = ev.onset_logit.new_zeros(len(per_track))
-    if not rows:
+    flat = [(row, *seg) for row, segs in enumerate(per_track) for seg in segs]
+    out = evidence.onset_logit.new_zeros(len(per_track))
+    if not flat:
         return out
-    t = torch.tensor(rows, dtype=torch.long, device=ev.device)   # (S, 4)
-    b, lab, i, j = t[:, 0], t[:, 1], t[:, 2], t[:, 3]
+    spans = torch.tensor(flat, dtype=torch.long, device=evidence.device)   # (S, 4)
+    row, label, start, end = spans[:, 0], spans[:, 1], spans[:, 2], spans[:, 3]
 
-    # `rows` is grouped by track, so a change in `b` marks each row's first segment.
-    first = torch.ones_like(b, dtype=torch.bool)
-    first[1:] = b[1:] != b[:-1]
+    # `flat` is grouped by track, so a change in `row` marks each row's first segment.
+    first = torch.ones_like(row, dtype=torch.bool)
+    first[1:] = row[1:] != row[:-1]
     # `START` is the *scorer's* row, one past its alphabet, so it moves with the
     # alphabet's width. Reading a two-label constant here would index a pitch label
     # instead -- silently, since it is a valid row.
     seeds = (
         torch.full((len(per_track),), scorer.labels.START,
-                   dtype=torch.long, device=ev.device)
+                   dtype=torch.long, device=evidence.device)
         if prev_labels is None
-        else torch.tensor(list(prev_labels), dtype=torch.long, device=ev.device)
+        else torch.tensor(list(prev_labels), dtype=torch.long, device=evidence.device)
     )
     if seeds.shape[0] != len(per_track):
         raise ValueError(
@@ -97,15 +97,15 @@ def segmentation_scores(
             "is one predecessor per batch row, not one per segment"
         )
 
-    both = scorer.unary(ev, dmax, b, i, j)                       # (S, 2)
-    unary = both.gather(-1, lab.unsqueeze(-1)).squeeze(-1)       # (S,)
-    prev = _prev_labels(lab, first, b, seeds)
-    terms = unary + scorer.transitions()[prev, lab]
-    return out.index_add(0, b, terms)
+    both = scorer.unary(evidence, dmax, row, start, end)               # (S, n_labels)
+    unary = both.gather(-1, label.unsqueeze(-1)).squeeze(-1)     # (S,)
+    prev = _prev_labels(label, first, row, seeds)
+    terms = unary + scorer.transitions()[prev, label]
+    return out.index_add(0, row, terms)
 
 
 def segmentation_score(
-    scorer: SpanScorer, ev: Evidence, segs: Segmentation, dmax: int
+    scorer: SpanScorer, evidence: Evidence, segs: Segmentation, dmax: int
 ) -> torch.Tensor:
     """Unnormalised score of one track's segmentation -- the batch of one."""
-    return segmentation_scores(scorer, ev, [segs], dmax)[0]
+    return segmentation_scores(scorer, evidence, [segs], dmax)[0]

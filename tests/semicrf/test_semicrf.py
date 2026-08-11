@@ -512,7 +512,7 @@ def _chunks(e, size, dmax):
     Yields ``(chunk, context)`` -- ``context`` is short only for chunks whose overlap
     already reaches global frame 0."""
     out = []
-    for s in range(0, e.T - size + 1, size):
+    for s in range(0, e.n_frames - size + 1, size):
         lo = max(0, s - dmax)
         out.append((
             Evidence(
@@ -543,9 +543,9 @@ def _chunks_with_right(e, size, dmax, right):
     see zero-padding at the chunk's right edge -- and the DP must not scan it. Yields
     ``(chunk, context, right)``; the last chunk's margin is clipped to the track."""
     out = []
-    for s in range(0, e.T - size + 1, size):
+    for s in range(0, e.n_frames - size + 1, size):
         lo = max(0, s - dmax)
-        hi = min(e.T, s + size + right)
+        hi = min(e.n_frames, s + size + right)
         out.append((
             Evidence(
                 e.onset_logit[:, lo:hi],
@@ -570,7 +570,7 @@ def test_chunked_carry_equals_the_whole_track_log_partition(n_chunks):
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
 
-    size = e.T // n_chunks
+    size = e.n_frames // n_chunks
     trimmed = _truncate(e, size * n_chunks)  # chunks must tile it exactly
     whole = log_partitions(dec.scorer, trimmed, dmax)
     got = _run_chunked(dec, trimmed, size, dmax)
@@ -587,7 +587,7 @@ def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
     dmax = dmax
 
     size = max(1, dmax // 3)
-    n = e.T // size
+    n = e.n_frames // size
     assert n > 3 and size < dmax, "the point is several chunks inside one dmax"
     trimmed = _truncate(e, size * n)
     whole = log_partitions(dec.scorer, trimmed, dmax)
@@ -605,7 +605,7 @@ def test_a_right_margin_is_not_scanned(right):
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    size = e.T // 4
+    size = e.n_frames // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, dmax)
 
@@ -622,7 +622,7 @@ def test_scanning_the_right_margin_corrupts_the_carry():
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    size = e.T // 4
+    size = e.n_frames // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, dmax)
 
@@ -639,7 +639,7 @@ def test_dropping_the_left_context_changes_the_answer():
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    size = e.T // 4
+    size = e.n_frames // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, dmax)
 
@@ -659,7 +659,7 @@ def test_detaching_the_carry_still_reaches_every_chunk():
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    size = e.T // 4
+    size = e.n_frames // 4
     trimmed = _truncate(e, size * 4)
 
     grads, carry, prev_A = [], None, 0.0
@@ -686,7 +686,7 @@ def test_telescoping_chunk_losses_sum_to_the_whole_track_log_partition():
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    size = e.T // 4
+    size = e.n_frames // 4
     trimmed = _truncate(e, size * 4)
     whole = log_partitions(dec.scorer, trimmed, dmax)
 

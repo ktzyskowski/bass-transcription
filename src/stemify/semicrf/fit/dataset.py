@@ -16,7 +16,7 @@ this is an ``IterableDataset`` that emits whole ``ChunkBatch`` objects (use
 
 Each row carries a ``stream`` id and a ``reset`` flag rather than relying on position,
 because with ``num_workers > 1`` consecutive batches come from *different* workers, so
-row ``b`` of one batch is not the continuation of row ``b`` of the last. The trainer
+a given *row* of one batch is not the continuation of that row of the last. The trainer
 keys its carries by ``stream``; see ``loss.py`` beside this.
 """
 
@@ -96,27 +96,27 @@ def collate(chunks: list[Chunk], geometry: ChunkGeometry) -> ChunkBatch:
 
     ``y`` stacks by key without this knowing any of them, so a future head (string,
     fret, velocity) costs nothing here."""
-    widths = {c.features.shape for c in chunks}
+    widths = {chunk.features.shape for chunk in chunks}
     if len(widths) != 1:
         raise ValueError(f"chunks must share a shape, got {sorted(widths)}")
-    heads = {tuple(sorted(c.y)) for c in chunks}
+    heads = {tuple(sorted(chunk.y)) for chunk in chunks}
     if len(heads) != 1:
         raise ValueError(f"chunks must carry the same targets, got {sorted(heads)}")
     features = torch.from_numpy(
-        np.ascontiguousarray(np.stack([c.features for c in chunks]))
+        np.ascontiguousarray(np.stack([chunk.features for chunk in chunks]))
     )
     return ChunkBatch(
         features=features,
         y={
-            head: torch.from_numpy(np.stack([c.y[head] for c in chunks]))
+            head: torch.from_numpy(np.stack([chunk.y[head] for chunk in chunks]))
             for head in heads.pop()
         },
-        golds=[c.gold for c in chunks],
-        frame_times=[c.frame_times for c in chunks],
+        golds=[chunk.gold for chunk in chunks],
+        frame_times=[chunk.frame_times for chunk in chunks],
         geometry=geometry,
-        streams=[c.stream for c in chunks],
-        resets=[c.reset for c in chunks],
-        prevs=[c.prev for c in chunks],
+        streams=[chunk.stream for chunk in chunks],
+        resets=[chunk.reset for chunk in chunks],
+        prevs=[chunk.prev for chunk in chunks],
     )
 
 
@@ -186,7 +186,7 @@ class _Track:
         # A gold segment is assigned to the chunk holding its END. Its start is then at
         # worst dmax earlier, so a dmax left context always covers it -- the same
         # constant the scan needs for its own candidate starts.
-        keep = [k for k, (_, _, j) in enumerate(self._gold) if lo < j <= hi]
+        keep = [k for k, (_, _, end) in enumerate(self._gold) if lo < end <= hi]
         # Track DP frames become this window's own here -- the one coordinate change
         # in the pipeline, and the seam both recorded bugs in this area came through.
         gold = frame.localise_all(TrackSegmentation([self._gold[k] for k in keep]))
@@ -247,14 +247,14 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         per frame.
 
         ``items`` are **shuffled once** here, and that shuffle is load-bearing rather
-        than cosmetic. Streams take ``items[b::batch_size]`` and advance in near
+        than cosmetic. Streams take ``items[row::batch_size]`` and advance in near
         lockstep, so the incoming order decides what a batch contains:
 
         - concatenated by condition (``[...clean..., ...separated...]``) every stream
           sits in the clean block at the same time, so batches come out
           condition-*homogeneous* -- and the TCN's BatchNorm then sees one condition's
           statistics at a time, which is the thing domain randomisation exists to avoid;
-        - interleaved (``clean, separated, clean, ...``) stream ``b`` only ever draws
+        - interleaved (``clean, separated, clean, ...``) stream ``row`` only ever draws
           items of one parity, so each stream is permanently one condition.
 
         Both train on the union and report the right ``--sources`` while never mixing
@@ -335,7 +335,7 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
 
     def __iter__(self) -> Iterator[ChunkBatch]:
         items, base = self._shard()
-        streams = [items[b :: self.batch_size] for b in range(self.batch_size)]
+        streams = [items[row :: self.batch_size] for row in range(self.batch_size)]
         if not all(streams):
             # Used to `return` here, which emitted nothing and said nothing: the epoch
             # then averaged over zero batches and the trainer died several frames later
@@ -362,33 +362,33 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
             # one backward covers the whole window, so a chain that straddles the
             # boundary has its second half reach into a graph the first half's backward
             # already freed. Streams sit at different positions in tracks of different
-            # lengths, so `chunk_no[b] % segment_chunks` desynchronises the rows from
+            # lengths, so `chunk_no[row] % segment_chunks` desynchronises the rows from
             # each other *and* from the trainer within one epoch -- which is a crash
             # partway through training, not a wrong number.
             boundary = bool(self.segment_chunks) and batch_no % self.segment_chunks == 0
-            row: list[Chunk] = []
-            for b in range(self.batch_size):
+            chunks: list[Chunk] = []
+            for row in range(self.batch_size):
                 reset = boundary
                 # One name for the stream's current track instead of re-reading
-                # `opened[b]` four times: the loop's whole job is to leave it open, so
+                # `opened[row]` four times: the loop's whole job is to leave it open, so
                 # the value that falls out of it is the one the chunk is cut from.
-                track = opened[b]
-                while track is None or chunk_no[b] >= track.n_chunks:
+                track = opened[row]
+                while track is None or chunk_no[row] >= track.n_chunks:
                     if track is not None:
-                        cursors[b] += 1
-                    if cursors[b] >= len(streams[b]):
+                        cursors[row] += 1
+                    if cursors[row] >= len(streams[row]):
                         return  # this stream is done; stop the whole worker
-                    track = opened[b] = _Track(
-                        streams[b][cursors[b]], self.chunk_frames, self.dmax,
+                    track = opened[row] = _Track(
+                        streams[row][cursors[row]], self.chunk_frames, self.dmax,
                         self.stride, self.right_context, self.heads,
                         drop_context=rng.random() < self.stem_dropout,
                         labels=self.labels,
                     )
-                    chunk_no[b], reset = 0, True
-                feats, ft, gold, y, prev = track[chunk_no[b]]
-                chunk_no[b] += 1
-                row.append(
-                    Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset,
-                          prev=prev)
+                    chunk_no[row], reset = 0, True
+                feats, frame_times, gold, y, prev = track[chunk_no[row]]
+                chunk_no[row] += 1
+                chunks.append(
+                    Chunk(feats, frame_times, gold=gold, y=y, stream=base + row,
+                          reset=reset, prev=prev)
                 )
-            yield collate(row, self.geometry)
+            yield collate(chunks, self.geometry)

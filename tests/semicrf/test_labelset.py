@@ -105,7 +105,7 @@ def test_pitch_logprob_cumsum_scores_the_right_semitone():
 
     c = pitch_logprob_cumsum(logits, labels.n_pitches)
     assert c.shape == (21, labels.n_pitches)
-    assert bool((c[0] == 0).all()), "cumsum needs a zero row so C[j]-C[i] spans [i, j)"
+    assert bool((c[0] == 0).all()), "cumsum needs a zero row so C[end]-C[start] spans [start, end)"
 
     mean_lp = (c[20] - c[0]) / 20                    # the span's mean log-probability
     assert int(mean_lp.argmax()) == want

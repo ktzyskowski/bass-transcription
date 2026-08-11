@@ -395,9 +395,10 @@ class SemiCRFRecipe(Recipe):
             )
         dmax, right = self._geometry
         items: list[TrainItem] = []
-        for c in conditions:
+        for condition in conditions:
             items += train_items(
-                c.dataset(root, split, limit), c, store, heads=self.aux_heads
+                condition.dataset(root, split, limit), condition, store,
+                heads=self.aux_heads,
             )
         return chunked_ds.ChunkDataset(
             items,
