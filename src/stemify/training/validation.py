@@ -30,8 +30,8 @@ import torch
 import numpy as np
 
 from stemify.persistence.store import Store
-from stemify.transcription.decoders.base import Decoder
-from stemify.transcription.decoders.greedy import GreedyDecoder
+from stemify.transcription.decoder import Decoder
+from stemify.transcription.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.framenet import FrameNet
 from stemify.transcription.frames import Frames

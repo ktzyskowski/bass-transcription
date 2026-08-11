@@ -18,7 +18,7 @@ no contour, which is exactly what cues-level scoring wants and what ``GreedyDeco
 refuses by name. That is the honest failure -- a decoder that names notes by pitch
 cannot name them from a model that does not produce it.
 
-Lives here rather than in ``transcription.encoders`` because it holds a ``FrameNet``:
+Lives here rather than in ``transcription`` because it holds a ``FrameNet``:
 ``Encoder`` is the contract and this is its implementation, which is what keeps the
 contract layer free of torch.
 """
@@ -31,7 +31,7 @@ import torch
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.platform.device import best_device
-from stemify.transcription.encoders.base import Encoder
+from stemify.transcription.encoder import Encoder
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.framenet import FrameNet

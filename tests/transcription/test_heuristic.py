@@ -9,7 +9,7 @@ import numpy as np
 
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
-from stemify.transcription.decoders.greedy import GreedyDecoder, group_contour
+from stemify.transcription.greedy import GreedyDecoder, group_contour
 
 T = 100
 TIMES = np.arange(T) * 0.01  # 10 ms grid, 1 s

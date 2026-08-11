@@ -25,7 +25,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from stemify.persistence.store import Store
-from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoder import Decoder
 from stemify.models.framenet import FrameNet
 from stemify.conditions import resolve
 from stemify.fitting.config import TrainConfig

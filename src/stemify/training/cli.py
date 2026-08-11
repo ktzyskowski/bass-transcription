@@ -25,6 +25,7 @@ from stemify.semicrf.fit.recipe import (
     VOICING_WEIGHT,
 )
 from stemify.semicrf.fit.terms import AUX_TERMS
+from stemify.training.run import RunBuilder
 from stemify.training.train import train
 
 
@@ -343,17 +344,30 @@ def main() -> None:
         # as an absent flag nobody logged.
         max_grad_norm=args.max_grad_norm or None,
     )
-    train(
-        args.root, args.cache_dir, config,
-        recipe=recipe,
-        init_from=args.init_from,
-        val_conditions=args.val_sources.split(",") if args.val_sources else None,
-        val_limit=args.val_limit, val_every=args.val_every,
-        experiment=args.experiment, run_name=args.run_name,
-        batch_log_every=args.batch_log_every,
-        tracking_uri=args.tracking_uri, limit=args.limit, out=args.out,
-        save_epochs=args.save_epochs, force=args.force,
+    # Each setter refuses what it can see on its own; `build` refuses the pairs that
+    # need two settings at once (channel widths, and the monitor against the
+    # validation cadence). Everything fails here, before the corpus is indexed.
+    run = (
+        RunBuilder(args.root, args.cache_dir)
+        .with_recipe(recipe)
+        .fitting(config)
+        .limited_to(args.limit)
+        .validating(
+            args.val_sources.split(",") if args.val_sources else None,
+            limit=args.val_limit,
+            every=args.val_every,
+        )
+        .checkpointing(args.out, save_epochs=args.save_epochs, force=args.force)
+        .warm_starting_from(args.init_from)
+        .tracking(
+            args.tracking_uri,
+            experiment=args.experiment,
+            run_name=args.run_name,
+            batch_log_every=args.batch_log_every,
+        )
+        .build()
     )
+    train(run)
 
 
 if __name__ == "__main__":

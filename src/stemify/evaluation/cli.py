@@ -31,10 +31,10 @@ from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
 from stemify.corpus.mdb_bass_synth import MdbDataset
 from stemify.corpus.slakh import SlakhDataset
-from stemify.transcription.decoders.greedy import GreedyDecoder
-from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.greedy import GreedyDecoder
+from stemify.transcription.decoder import Decoder
 from stemify.semicrf import SemiCRFDecoder
-from stemify.transcription.encoders.base import Encoder
+from stemify.transcription.encoder import Encoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
 from stemify.transcription.transcriber import Transcriber

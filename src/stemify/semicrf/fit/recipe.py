@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 
 from stemify.persistence.store import Store
-from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoder import Decoder
 from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.constants import DMAX_S, STRIDE
 from stemify.semicrf.build import build_scorer

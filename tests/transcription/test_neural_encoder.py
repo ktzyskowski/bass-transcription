@@ -11,7 +11,7 @@ import torch
 from torch import nn
 
 from stemify.music.contour import Contour
-from stemify.transcription.decoders.greedy import GreedyDecoder, onset_times_from_probs
+from stemify.transcription.greedy import GreedyDecoder, onset_times_from_probs
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.audio.features import SAMPLE_RATE, FrameFeatures
 from stemify.audio.sources import Sources

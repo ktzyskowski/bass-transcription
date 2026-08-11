@@ -13,8 +13,8 @@ GreedyDecoder())`` against ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder())
 not different ``Transcriber`` subclasses.
 """
 
-from stemify.transcription.decoders import Decoder
-from stemify.transcription.encoders import Encoder
+from stemify.transcription.decoder import Decoder
+from stemify.transcription.encoder import Encoder
 from stemify.music.notes import NoteEvent
 from stemify.audio.sources import Sources
 

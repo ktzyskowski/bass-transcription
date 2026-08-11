@@ -28,7 +28,7 @@ from typing import Any
 import torch
 
 from stemify.platform.atomic import atomic_write
-from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoder import Decoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.framenet import FrameNet
 from stemify.transcription.transcriber import Transcriber

@@ -11,9 +11,11 @@ persists nothing; and an occupied path is refused **before the run starts**, bec
 job that discovers the collision after hours of training can only clobber or be thrown
 away.
 
-These call `train` with a root that does not exist. That is the point: every assertion
-below must fire before the first loader is built, so reaching the filesystem at all
-would mean the check is too late to be useful.
+These now assert against ``RunBuilder.checkpointing`` rather than against ``train``,
+which is a stronger statement of the same property: the refusal happens where the path
+is *named*, not somewhere inside the procedure that later uses it. The tests that do
+reach ``train`` still pass a root that does not exist, so anything that gets that far
+must have failed for the reason under test rather than by touching the corpus.
 """
 
 from pathlib import Path
@@ -22,16 +24,15 @@ import pytest
 
 from stemify.fitting.config import TrainConfig
 from stemify.training.frame.recipe import FrameRecipe
+from stemify.training.run import RunBuilder
 from stemify.training.train import train
 
 
-def _train(tmp_path: Path, **kwargs):
-    return train(
-        root=str(tmp_path / "no-such-corpus"),
-        cache_dir=tmp_path / "cache",
-        config=TrainConfig(max_epochs=1),
-        recipe=FrameRecipe(conditions=["clean"]),
-        **kwargs,
+def _builder(tmp_path: Path) -> RunBuilder:
+    return (
+        RunBuilder(str(tmp_path / "no-such-corpus"), tmp_path / "cache")
+        .with_recipe(FrameRecipe(conditions=["clean"]))
+        .fitting(TrainConfig(max_epochs=1))
     )
 
 
@@ -39,7 +40,7 @@ def test_an_occupied_path_is_refused(tmp_path):
     occupied = tmp_path / "rung1-bichannel-pitch.pt"
     occupied.write_bytes(b"a result someone still cites")
     with pytest.raises(FileExistsError, match="already exists"):
-        _train(tmp_path, out=occupied)
+        _builder(tmp_path).checkpointing(out=occupied)
     assert occupied.read_bytes() == b"a result someone still cites"
 
 
@@ -49,16 +50,18 @@ def test_force_allows_the_overwrite(tmp_path):
     the run having quietly stopped for some other reason."""
     occupied = tmp_path / "scratch.pt"
     occupied.write_bytes(b"disposable")
+    run = _builder(tmp_path).checkpointing(out=occupied, force=True).build()
     with pytest.raises(Exception) as excinfo:
-        _train(tmp_path, out=occupied, force=True)
+        train(run)
     assert not isinstance(excinfo.value, FileExistsError)
 
 
 def test_no_out_means_nothing_is_written(tmp_path):
     """The smoke-test path. It must not resurrect a default under another name: the
     only evidence that works is an empty directory afterwards."""
+    run = _builder(tmp_path).checkpointing(out=None).build()
     with pytest.raises(Exception) as excinfo:
-        _train(tmp_path, out=None)
+        train(run)
     assert not isinstance(excinfo.value, FileExistsError)
     written = [p for p in tmp_path.rglob("*.pt")]
     assert written == [], f"a run without --out wrote {written}"
@@ -69,4 +72,4 @@ def test_save_epochs_without_out_is_refused(tmp_path):
     would be the worst outcome: the run asked to keep every epoch so selection could
     happen offline, and would finish having kept none."""
     with pytest.raises(ValueError, match="--save-epochs needs --out"):
-        _train(tmp_path, out=None, save_epochs=True)
+        _builder(tmp_path).checkpointing(out=None, save_epochs=True)

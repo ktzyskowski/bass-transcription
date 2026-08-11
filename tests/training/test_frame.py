@@ -268,17 +268,41 @@ def test_pos_weight_actually_reaches_the_loss():
     )
 
 
-def test_val_conditions_accept_retired_names():
-    # The exact crash that killed an overnight arm: --val-sources with old tags.
-    import inspect
+def test_val_conditions_accept_retired_names(tmp_path):
+    """The exact crash that killed an overnight arm: --val-sources with old tags.
 
-    from stemify.training import train as train_mod
+    Asserted on the resulting run rather than on the source text of ``train``, which
+    is how this used to be written -- an ``inspect.getsource`` substring match that
+    passed or failed on where the line happened to live, and would have gone red when
+    the check moved into ``RunBuilder`` even though the behaviour was identical.
+    """
+    from stemify.fitting.config import TrainConfig
+    from stemify.training.run import RunBuilder
 
-    src = inspect.getsource(train_mod.train)
-    assert "canonical(t) for t in val_conditions" in src, (
-        "val conditions must go through the legacy mapping, like --sources does"
+    run = (
+        RunBuilder("corpus", tmp_path)
+        .with_recipe(FrameRecipe(conditions=["bichannel-clean"]))
+        .fitting(TrainConfig())
+        .validating(["stem-mix", "demucs-mix"])   # the retired spellings
+        .build()
     )
-    # And the defaults must name conditions that actually exist.
+    assert run.val_conditions == ["bichannel-clean", "bichannel-separated"]
+
+
+def test_an_unknown_val_condition_is_refused_by_name(tmp_path):
+    from stemify.fitting.config import TrainConfig
+    from stemify.training.run import RunBuilder
+
+    with pytest.raises(ValueError, match="unknown val condition"):
+        (
+            RunBuilder("corpus", tmp_path)
+            .with_recipe(FrameRecipe(conditions=["clean"]))
+            .fitting(TrainConfig())
+            .validating(["clean", "no-such-tag"])
+        )
+
+
+def test_the_default_val_conditions_all_exist():
     from stemify.conditions import CONDITIONS
 
     for default in ("bichannel-clean", "bichannel-separated", "clean", "mixture",

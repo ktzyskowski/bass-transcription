@@ -15,7 +15,7 @@ import argparse
 import pytest
 import torch
 
-from stemify.transcription.decoders.greedy import GreedyDecoder
+from stemify.transcription.greedy import GreedyDecoder
 from stemify.semicrf import SemiCRFDecoder
 from stemify.evaluation.cli import build_decoder
 

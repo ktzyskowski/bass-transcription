@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from stemify.music.contour import Contour
-from stemify.transcription.decoders.greedy import (
+from stemify.transcription.greedy import (
     MERGE_GAP_S,
     group_contour,
     onset_times_from_probs,

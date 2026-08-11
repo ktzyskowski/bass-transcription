@@ -33,7 +33,7 @@ import numpy as np
 
 from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, FrameAnnotated, NoteAnnotated
-from stemify.transcription.encoders.base import Encoder
+from stemify.transcription.encoder import Encoder
 from stemify.evaluation.alignment import align
 from stemify.evaluation.report import Report, jsonable
 from stemify.metrics import MetricResult, AlignedPairs, score_cues

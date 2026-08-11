@@ -30,7 +30,6 @@ on how well the learned cues survive separation.
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from stemify.persistence.store import Store
 from stemify.training.checkpoint import Checkpoint
@@ -42,102 +41,29 @@ from stemify.training.callbacks import (
     ConsoleCallback,
     MLflowCallback,
 )
-from stemify.conditions import CONDITIONS, canonical
-from stemify.fitting.config import TrainConfig
 from stemify.fitting.base import epoch_batches
-from stemify.training.recipes import HEADS, RECIPES, Recipe
+from stemify.training.recipes import HEADS
 from stemify.training.trainer import Trainer
-from stemify.training.validation import (
-    build_eval_fn,
-    build_validators,
-    harness_metric_names,
-)
+from stemify.training.run import RunConfig
+from stemify.training.validation import build_eval_fn, build_validators
 
 logger = logging.getLogger(__name__)
 
 
 
 
-def train(
-    root: str,
-    cache_dir: Path,
-    config: TrainConfig,
-    val_conditions: list[str] | None = None,
-    val_limit: int = 40,
-    val_every: int = 5,
-    tracking_uri: str | None = None,
-    experiment: str = "onset-detection",
-    run_name: str | None = None,
-    batch_log_every: int = 100,
-    limit: int | None = None,
-    out: Path | None = None,
-    recipe: Recipe | None = None,
-    init_from: Path | None = None,
-    save_epochs: bool = False,
-    force: bool = False,
-) -> None:
-    recipe = recipe or RECIPES["frame"]()
-    sources = [c.name for c in recipe.conditions]
-    # Validate on every deployment condition (not just clean stems), so the note
-    # F1 gap between stem and demucs is visible during training rather than only
-    # at final test. Independent of train sources: monitor the full breakdown.
-    # The default tracks the model's input width, since a validator has to feed
-    # the same channels the model was built for.
-    #
-    # `mixture` is deliberately *not* in the default. It is the un-separated negative
-    # control, and it has been settled since July -- bass buried in a full mix scores
-    # 0.18-0.27 whatever the model, which is the finding that made separation
-    # non-negotiable. Scoring it every epoch costs a third of validation to re-derive a
-    # conclusion no run has moved. It is still one flag away (`--val-sources
-    # clean,mixture,separated`) for when the question is reopened. The bichannel
-    # default already omitted its equivalent, so this also makes the two symmetric.
-    val_conditions = val_conditions or (
-        ["bichannel-clean", "bichannel-separated"] if recipe.in_channels == 2
-        else ["clean", "separated"]
-    )
-    # Through `canonical` for the same reason `--sources` is: a run given retired tags
-    # otherwise resolves its training conditions and then dies looking up the val ones.
-    val_conditions = [canonical(t) for t in val_conditions]
-    unknown = [t for t in val_conditions if t not in CONDITIONS]
-    if unknown:
-        raise ValueError(
-            f"unknown val condition(s) {unknown}; have {sorted(CONDITIONS)}"
-        )
-    mismatched = [
-        t for t in val_conditions if CONDITIONS[t].in_channels != recipe.in_channels
-    ]
-    if mismatched:
-        raise ValueError(
-            f"val conditions {mismatched} do not match the model's "
-            f"{recipe.in_channels} input channel(s) (training on {sources}). "
-            "Scoring needs the same channel layout the model was trained with."
-        )
-    store = Store(cache_dir)
-    # **No default path, and the check runs before any work starts.**
-    #
-    # There was a default (`<store-dir>/onset_model.pt`), and it was wrong twice over.
-    # Wrong as a *name*, because it stopped describing the model when a voicing head
-    # arrived and stopped describing it three ways over once pitch did. Wrong as a
-    # *default*, because every run ever launched without `--out` wrote the same file:
-    # tcn-v1 was overwritten by tcn-v2, a warning went into docs/experiments.md, and
-    # tcn-v2 was then overwritten by a two-track smoke run anyway. A shared default for
-    # a per-run artefact is a collision waiting on a careless launch.
-    #
-    # So `out=None` now means *do not save*, which is what a smoke test actually wants,
-    # and naming a run's checkpoint is a deliberate act. The existence check is here
-    # rather than at save time because a run that discovers its path is occupied after
-    # hours of training can only clobber or be thrown away.
-    if out is not None and out.exists() and not force:
-        raise FileExistsError(
-            f"{out} already exists. Name this run's own checkpoint, or pass --force to "
-            "overwrite. A checkpoint is the only artefact a result cannot be reproduced "
-            "without, so overwriting one is never implicit."
-        )
-    if save_epochs and out is None:
-        raise ValueError(
-            "--save-epochs needs --out: it writes '<stem>.epoch<N><suffix>' beside the "
-            "run's checkpoint, and there is nowhere to put those without one."
-        )
+def train(run: RunConfig) -> None:
+    """Fit ``run``'s recipe and, if it names an ``--out``, persist the result.
+
+    One argument. This used to take seventeen, beside a ``TrainConfig`` holding
+    seventeen more, and the first 140 lines were the checks that had to run before any
+    of it could be trusted -- defaults derived from the recipe, tags canonicalised,
+    channel widths matched, the monitor reconciled against the validation cadence.
+    All of that is ``RunBuilder``'s now, so what is left here is the procedure: build
+    the loaders, build the model, wire the callbacks, fit, save.
+    """
+    recipe, config = run.recipe, run.fit
+    store = Store(run.cache_dir)
 
     # One store for every condition and both splits. Features are content-addressed on
     # the resolved audio path, so a stem, a mix and a separated mix of the same track
@@ -145,64 +71,39 @@ def train(
     # and the val conditions transparently reuse whatever this loop already built.
     # The recipe owns the batch shape: fixed windows for frame BCE, whole tracks for
     # the semi-CRF, whose objective scans a whole segmentation.
-    train_loader = recipe.train_loader(root, store, config, limit)
-    val_loader = recipe.val_loader(root, store, config, val_limit)
+    train_loader = recipe.train_loader(run.root, store, config, run.limit)
+    val_loader = recipe.val_loader(run.root, store, config, run.val_limit)
 
     model = recipe.build_model()
-    if init_from is not None:
+    if run.init_from is not None:
         # Encoder weights only. Every recipe builds the same backbone + heads
         # (SemiCRFRecipe.build_model defers to FrameRecipe's), so a checkpoint from
         # one objective initialises another -- which is how a semi-CRF run gets to
         # start from *good* cues instead of learning the encoder and the potentials
         # simultaneously from scratch. Strict: a shape mismatch should fail loudly,
         # not silently leave half the encoder random.
-        warm = Checkpoint.load(init_from)
+        warm = Checkpoint.load(run.init_from)
         model.load_state_dict(warm.model_state)
         if warm.objective_state:
             logger.warning(
                 "%s carries objective parameters (%s); --init-from restores the "
                 "encoder only, so these are dropped",
-                init_from, sorted(warm.objective_state),
+                run.init_from, sorted(warm.objective_state),
             )
-        logger.info("initialised encoder from %s", init_from)
+        logger.info("initialised encoder from %s", run.init_from)
 
     trainer = Trainer(model, recipe.build_loss(), config)
-
-    # A harness metric (note/*, cues/*) can only drive selection if it is scored on the
-    # critical path: the async validator delivers epoch N's score partway through epoch
-    # N+1, by which time N's checkpoint decision is made. So the monitor key decides
-    # which way the harness runs, rather than being a second flag that can disagree
-    # with it.
-    sync_scoring = not config.monitor.startswith("loss/")
-    if sync_scoring and val_every != 1:
-        raise ValueError(
-            f"--monitor {config.monitor!r} is scored by the harness, so it must run "
-            f"every epoch, but --val-every is {val_every}. On a skipped epoch the "
-            "monitored metric would not exist and the run would die mid-training."
-        )
-    if sync_scoring and config.monitor not in harness_metric_names(val_conditions):
-        # Checked here, before the val contours are cached (minutes) and before a
-        # single batch. The monitor is a string the user typed, matched against names
-        # the harness builds by concatenation, and it decides which checkpoint
-        # survives -- so a typo used to surface only when `Trainer` failed the lookup
-        # at the first epoch boundary, well past the setup cost. The full name list is
-        # a property of the result types, so it costs nothing to ask now.
-        raise ValueError(
-            f"--monitor {config.monitor!r} is not a metric this run will produce. "
-            f"Available with --val-conditions {val_conditions}: "
-            f"{sorted(harness_metric_names(val_conditions))}, or a loss/<head>/val key."
-        )
 
     # Written on every improvement, not once at the end: `fit` restores the best
     # weights when it *returns*, so a Ctrl-C, a SIGKILL or an OOM loses the whole run.
     callbacks: list[Callback] = [ConsoleCallback()]
-    if out is not None:
-        callbacks.append(BestCheckpointCallback(out, recipe))
-        if save_epochs:
-            callbacks.append(EveryEpochCheckpointCallback(out, recipe))
+    if run.out is not None:
+        callbacks.append(BestCheckpointCallback(run.out, recipe))
+        if run.save_epochs:
+            callbacks.append(EveryEpochCheckpointCallback(run.out, recipe))
     mlflow = None
     eval_fn = None
-    if tracking_uri:
+    if run.tracking_uri:
         # Run names are labels, not keys -- MLflow mints a fresh run_id per launch,
         # so two runs can share a name. Suffix a UTC timestamp so relaunching with
         # the same --run-name yields distinct, self-dating runs ("tcn-v1" stays the
@@ -214,17 +115,17 @@ def train(
         # in the same label. A run's identity is its objective, its heads and its
         # conditions; those are exactly what makes two runs comparable or not.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
-        name = run_name or "-".join(
+        name = run.run_name or "-".join(
             [recipe.name, *sorted(set(recipe.heads) - set(HEADS)),
              "".join(sorted(c.name[0] for c in recipe.conditions))]
         )
         mlflow = MLflowCallback(
-            run_name=f"{name}-{stamp}", experiment=experiment, tracking_uri=tracking_uri,
-            batch_log_every=batch_log_every,
+            run_name=f"{name}-{stamp}", experiment=run.experiment,
+            tracking_uri=run.tracking_uri, batch_log_every=run.batch_log_every,
             # Loop-level settings here; strategy knobs come from ``recipe.params``,
             # which is the only thing that knows which of them this run even has.
-            params={"encoder": "tcn", "sources": ",".join(sources),
-                    "val_conditions": ",".join(val_conditions),
+            params={"encoder": "tcn", "sources": ",".join(run.sources),
+                    "val_conditions": ",".join(run.val_conditions),
                     "lr": config.learning_rate,
                     "batch_size": config.batch_size,
                     "accumulate_steps": config.accumulate_steps,
@@ -234,20 +135,20 @@ def train(
                     "train_batches": epoch_batches(train_loader),
                     **recipe.params},
         )
-        # Precompute pyin (and, for demucs, the separation) over each val condition
-        # once; async scores are then just model forwards. Slowest at construction
-        # is demucs -- it separates its val audio before pyin.
+        # Precompute each val condition's CQT (and, for demucs, the separation) once;
+        # async scores are then just model forwards. Slowest at construction is demucs,
+        # which separates its val audio first.
         logger.info(
-            "caching val contours for %d tracks x conditions %s...",
-            val_limit, val_conditions,
+            "caching val features for %d tracks x conditions %s...",
+            run.val_limit, run.val_conditions,
         )
-        validators = build_validators(root, val_limit, val_conditions, store=store)
+        validators = build_validators(run.root, run.val_limit, run.val_conditions, store=store)
         # Per-epoch validation reports (all conditions x note+cues) are written here
         # and attached to the run under "validation/", so each scored checkpoint leaves
         # a diffable JSON artifact, not only metric points.
         eval_fn = build_eval_fn(
             validators,
-            report_dir=cache_dir / "val_reports",
+            report_dir=run.cache_dir / "val_reports",
             log_artifact=lambda p, _e: mlflow.log_artifact(p, artifact_path="validation"),
             # Without these a semi-CRF run would be scored as a freshly-initialised
             # GreedyDecoder over its learned cues: plausible numbers, wrong model.
@@ -255,30 +156,30 @@ def train(
             build_model=recipe.build_model,
         )
         callbacks.append(mlflow)
-        if not sync_scoring:
+        if not run.sync_scoring:
             # Off the critical path, delivering to its own sink. Only sound when the
             # score is not what picks the checkpoint.
             callbacks.append(
-                AsyncValidationCallback(eval_fn, mlflow.sink, every=val_every)
+                AsyncValidationCallback(eval_fn, mlflow.sink, every=run.val_every)
             )
 
-    if sync_scoring and eval_fn is None:
+    if run.sync_scoring and eval_fn is None:
         # Reachable: --monitor names a harness metric on a run with no tracking URI, so
         # nothing built the validators. Failing here beats failing at the first epoch
         # boundary an hour in.
         logger.info(
-            "caching val contours for %d tracks x conditions %s (for --monitor %s)...",
-            val_limit, val_conditions, config.monitor,
+            "caching val features for %d tracks x conditions %s (for --monitor %s)...",
+            run.val_limit, run.val_conditions, config.monitor,
         )
         eval_fn = build_eval_fn(
-            build_validators(root, val_limit, val_conditions, store=store),
+            build_validators(run.root, run.val_limit, run.val_conditions, store=store),
             build_decoder=recipe.decoder_from,
             build_model=recipe.build_model,
         )
 
     trainer.fit(
         train_loader, val_loader, callbacks=callbacks,
-        score_fn=eval_fn if sync_scoring else None,
+        score_fn=eval_fn if run.sync_scoring else None,
     )
 
     # fit() restores the best-val checkpoint into trainer.model; persist it so the
@@ -290,17 +191,17 @@ def train(
     # the same way training did, instead of re-deriving them and getting it subtly
     # wrong. The objective's own parameters travel too -- for a semi-CRF they *are*
     # the decoder, and a file without them restores half a system while looking whole.
-    if out is None:
+    if run.out is None:
         logger.info("no --out given: trained weights are not persisted")
         return
     Checkpoint(
         recipe=recipe,
         model_state=trainer.model.state_dict(),
         objective_state=trainer.loss.state_dict(),
-    ).save(out)
-    logger.info("saved checkpoint -> %s", out)
+    ).save(run.out)
+    logger.info("saved checkpoint -> %s", run.out)
     if mlflow is not None:
-        mlflow.log_artifact(out)
+        mlflow.log_artifact(run.out)
 
 
 if __name__ == "__main__":  # pragma: no cover

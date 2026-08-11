@@ -25,7 +25,7 @@ from scipy.signal import find_peaks
 
 from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
-from stemify.transcription.decoders.base import Decoder
+from stemify.transcription.decoder import Decoder
 from stemify.music.grids import resample_mask
 from stemify.music.notes import NoteEvent
 
