@@ -40,7 +40,22 @@ class TrainConfig:
     # deployment number is `note/separated/f1`; monitoring it costs one harness pass per
     # epoch and removes that whole failure mode.
     monitor: str = "loss/total/val"
-    monitor_mode: str = "min"  # "min" for losses, "max" for F1/AP/AUROC
+
+    monitor_mode: str | None = None
+    """``"min"`` for losses, ``"max"`` for F1/AP/AUROC. ``None`` infers it.
+
+    **Inferred here rather than by the caller**, and that placement is the whole
+    point. It used to be derived in ``training/cli.py``, so a ``TrainConfig`` built
+    any other way -- twenty sites do -- silently kept the ``"min"`` default. With a
+    harness monitor that means selecting on *lowest* F1: the run finishes, reports
+    success, and hands back its worst checkpoint. That is the same failure this
+    project has already been bitten by once (a semi-CRF run whose val loss called the
+    worse epoch better), reached through a second door.
+
+    A ``__post_init__`` rather than a builder for exactly that reason: a builder only
+    protects the path that goes through it, and this has to hold for every
+    construction, including a one-line one in a test.
+    """
 
     # Gradient-norm clip applied over the model *and* the objective's parameters,
     # i.e. everything the one optimiser moves. A safety net rather than a tuned
@@ -97,3 +112,38 @@ class TrainConfig:
     num_workers: int = 0
 
     device: str | None = None  # None -> best available (cuda > mps > cpu)
+
+    def __post_init__(self) -> None:
+        """Resolve what follows from the other fields, and refuse what cannot work.
+
+        Everything here is a function of this object alone, which is why it is a
+        ``__post_init__`` and not a builder: it holds however the config was made.
+        Constraints that need a *second* object -- the recipe's channel width, whether
+        the monitored metric is one this run produces -- cannot be answered here and
+        live in ``training.run.RunBuilder``.
+        """
+        if self.monitor_mode is None:
+            # Every metric logged is either a loss (lower is better) or a score in
+            # [0, 1] (higher is). Explicit-or-nothing would instead mean a run that
+            # silently early-stops backwards whenever someone forgets the flag.
+            self.monitor_mode = "min" if self.monitor.startswith("loss/") else "max"
+        if self.monitor_mode not in ("min", "max"):
+            raise ValueError(
+                f"monitor_mode must be 'min' or 'max', got {self.monitor_mode!r}"
+            )
+        for name in ("batch_size", "max_epochs", "accumulate_steps"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be at least 1, got {getattr(self, name)}")
+        if self.patience < 1:
+            raise ValueError(
+                f"patience must be at least 1, got {self.patience}: 0 would stop the "
+                "run at the first epoch that did not improve, including the first."
+            )
+        if self.learning_rate <= 0:
+            raise ValueError(f"learning_rate must be positive, got {self.learning_rate}")
+
+    @property
+    def maximise(self) -> bool:
+        """Whether a *higher* ``monitor`` is better. Resolved, so no caller re-derives
+        it from the string -- which is how the two spellings drifted apart before."""
+        return self.monitor_mode == "max"

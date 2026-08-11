@@ -332,12 +332,11 @@ def main() -> None:
         num_workers=args.num_workers, patience=args.patience,
         learning_rate=args.learning_rate,
         monitor=args.monitor,
-        # Inferred rather than required: every metric we log is either a loss (lower
-        # is better) or a score in [0,1] (higher is). Making it explicit-or-nothing
-        # would mean a run that silently early-stops backwards on a typo'd mode.
-        monitor_mode=args.monitor_mode or (
-            "min" if args.monitor.startswith("loss/") else "max"
-        ),
+        # `None` when the flag is absent, which is `TrainConfig`'s cue to infer it from
+        # `monitor`. The inference used to live here, so every config built any other
+        # way kept the "min" default -- and "min" on an F1 selects the worst
+        # checkpoint of the run.
+        monitor_mode=args.monitor_mode,
         accumulate_steps=args.accumulate_steps,
         # 0 rather than a bare --no-clip flag: the value and its off switch stay one
         # thing, so the run's params record "clipping was off" as a value rather than

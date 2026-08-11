@@ -274,12 +274,9 @@ class Trainer(Generic[B]):
         """
         callbacks = list(callbacks)
         history = History()
-        if self.config.monitor_mode not in ("min", "max"):
-            raise ValueError(
-                f"monitor_mode must be 'min' or 'max', got "
-                f"{self.config.monitor_mode!r}"
-            )
-        maximise = self.config.monitor_mode == "max"
+        # Validated and, when unset, inferred by `TrainConfig` itself -- so it holds
+        # for a config built anywhere, not only one that came through the CLI.
+        maximise = self.config.maximise
         best_val = -float("inf") if maximise else float("inf")
         best_state = None
         stale = 0
