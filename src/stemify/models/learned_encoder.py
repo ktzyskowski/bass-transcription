@@ -1,30 +1,26 @@
 """``LearnedEncoder``: trained backbone + heads as the cue producer.
 
-Runs a ``FrameNet`` over a track's CQT to produce per-frame onset (and voicing,
-when the model has that head) probabilities, pairs them with a pitch contour, and
-returns a ``Frames``. The model is fully convolutional over time, so the whole track
-goes through in one pass -- no windowing at inference.
+Runs a ``FrameNet`` over a track's CQT to produce per-frame onset, voicing and pitch
+in one pass, and returns a ``Frames``. The model is fully convolutional over time, so
+the whole track goes through at once -- no windowing at inference.
 
-Pitch comes from one of two places. A model carrying a ``FrequencyHead`` produces it
-in the *same forward pass* as onset and voicing; otherwise it falls back to the
-injected ``PitchEstimator`` (``PyinPitch`` by default).
+**Pitch comes from the model, and only from the model.** There used to be a second
+route: an injected ``PitchEstimator`` (pyin) that a checkpoint without a
+``FrequencyHead`` fell back to, plus a ``use_pyin`` flag to force it on a checkpoint
+that had one. That fallback outlived its purpose -- the learned head shipped at +5.0
+strict F1 and broke the recall ceiling pyin imposed, and every checkpoint trained since
+2026-07-31 carries one. What remained was a branch, a flag, a ``pitch_source``
+property, an ABC with one real implementation, and a second contour cache, all to
+serve a path no run took.
 
-The learned head *does* also exist as a ``PitchEstimator`` -- ``NeuralPitch``, its
-sibling in this package -- for callers holding only a path. This class does not use it, for one reason: by the
-time it wants a contour it has already computed the CQT and run the backbone, so going
-back out through ``estimate(audio_path)`` would pay for both again. It reads the pitch
-logits out of the forward pass it just did instead.
+A model with no pitch head still encodes: its ``Frames`` carry onset and voicing and
+no contour, which is exactly what cues-level scoring wants and what ``GreedyDecoder``
+refuses by name. That is the honest failure -- a decoder that names notes by pitch
+cannot name them from a model that does not produce it.
 
-That is an optimisation, not a second implementation. Both routes end in
-``models.heads.decode_contour``, so "the learned contour" means the same thing however
-it was reached -- which is what makes the two substitutable rather than merely similar.
-
-``use_pyin=True`` forces the DSP contour even on a model that has a head, which is how
-an A/B between the two is run.
-
-Lives here rather than beside ``ClassicalEncoder`` in ``transcription.encoders`` because it holds
-a ``FrameNet``: ``Encoder`` is the contract, this is its neural implementation, and the
-split is what keeps the DSP path free of torch.
+Lives here rather than in ``transcription.encoders`` because it holds a ``FrameNet``:
+``Encoder`` is the contract and this is its implementation, which is what keeps the
+contract layer free of torch.
 """
 
 from dataclasses import replace
@@ -40,40 +36,24 @@ from stemify.audio.features import FrameFeatures, extract_features, stack_channe
 from stemify.models.heads import CONTOUR_VOICING_THRESHOLD, decode_contour
 from stemify.models.framenet import FrameNet
 from stemify.models.frames import frames_from_output, to_numpy
-from stemify.transcription.pitch import PitchEstimator, PyinPitch
 from stemify.audio.sources import Sources
 
 
 class LearnedEncoder(Encoder):
-    """Neural cue producer: a ``FrameNet``'s onset/voicing probs, plus a contour
-    from its own pitch head when it has one and pyin when it does not."""
+    """Neural cue producer: a ``FrameNet``'s onset, voicing and pitch, in one pass."""
 
     name = "neural"
 
-    def __init__(
-        self,
-        model: FrameNet,
-        device: str | None = None,
-        pitch: PitchEstimator | None = None,
-        use_pyin: bool = False,
-    ) -> None:
+    def __init__(self, model: FrameNet, device: str | None = None) -> None:
         self.device = torch.device(device or best_device())
         self.model = model.to(self.device).eval()
-        self.pitch = pitch or PyinPitch()
-        # A head on the model wins unless the caller insists otherwise. A checkpoint
-        # carrying one was trained to produce the contour, and quietly preferring pyin
-        # would report that run under a pitch source it never used.
-        self.use_pyin = use_pyin
 
     @property
     def has_pitch_head(self) -> bool:
-        """Whether the wrapped model produces its own contour."""
+        """Whether the wrapped model produces a contour. False for the checkpoints
+        predating the pitch head, which can still be scored at cues level (onset and
+        voicing) but can no longer be decoded to notes."""
         return "pitch" in self.model.frequency_heads
-
-    @property
-    def pitch_source(self) -> str:
-        """Which contour this encoder actually reports -- worth recording in a run."""
-        return "pyin" if self.use_pyin or not self.has_pitch_head else "learned"
 
     @property
     def in_channels(self) -> int:
@@ -133,39 +113,24 @@ class LearnedEncoder(Encoder):
                 f"no deployment channel layout for a {self.in_channels}-channel "
                 "model; only (bass,) and (bass, mix) are defined"
             )
-        contour = self.pitch.estimate(sources.bass)
-        return self.encode_features(contour, stack_channels(channels))
+        return self.encode_features(stack_channels(channels))
 
-    def encode_features(
-        self, contour: Contour | None, features: FrameFeatures
-    ) -> Frames:
-        """``Frames`` from a precomputed CQT, and a contour only if this encoder needs
-        one -- the cache-friendly path the async validator uses (no CQT recompute).
-        ``encode`` is this over a freshly computed CQT.
+    def encode_features(self, features: FrameFeatures) -> Frames:
+        """``Frames`` from a precomputed CQT -- the cache-friendly path the async
+        validator uses (no CQT recompute). ``encode`` is this over a fresh one.
 
-        When the model has a pitch head, the ``contour`` argument is *replaced* by the
-        one the head produced rather than merged with it. Two contours cannot both be
-        the pitch source. ``use_pyin`` is how the caller asks for the other choice.
-
-        ``None`` is therefore allowed exactly when the head will supply it, and
-        ``pitch_source`` is the property that says which case a caller is in. Passing
-        ``None`` to an encoder that needs one raises rather than defaulting: a silent
-        fallback here is how a run reports numbers under a pitch source nobody chose,
-        and the difference is worth ~5 F1.
+        It used to take a ``contour`` argument, for the model that had no pitch head to
+        fall back on. Nothing supplies one now, so there is no argument and no branch:
+        the contour is the head's or there is none.
         """
         frames = self._forward(features.values, features.frame_times)
         pitch_logits, voicing = frames.pitch_logits, frames.voicing
-        if pitch_logits is not None and not self.use_pyin:
+        contour = None
+        if pitch_logits is not None:
             contour = self.contour_from(
                 np.asarray(pitch_logits),
                 features.frame_times,
                 None if voicing is None else np.asarray(voicing),
-            )
-        elif contour is None:
-            raise ValueError(
-                f"this encoder's pitch source is {self.pitch_source!r}, so "
-                "encode_features needs a contour: the model has no pitch head "
-                "(or use_pyin was set), and features alone cannot give pitch."
             )
         # Every head rides along untouched, pitch logits included. The contour above is
         # one *reading* of those logits; a segmental decoder scores the distribution
@@ -182,9 +147,7 @@ class LearnedEncoder(Encoder):
     ) -> Contour:
         """Per-bin pitch logits -> a ``Contour`` on the *feature* grid.
 
-        Thin on purpose: the decode itself lives in ``models.heads.decode_contour``,
-        which ``NeuralPitch`` also calls. Two entry points, one decode -- the property
-        that makes "the learned contour" mean the same thing however it was reached.
+        Thin on purpose: the decode itself lives in ``models.heads.decode_contour``.
         What this adds is only the operating point, which is this encoder's own
         (``CONTOUR_VOICING_THRESHOLD``) and not the decoder's.
         """

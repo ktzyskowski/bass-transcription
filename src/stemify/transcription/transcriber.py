@@ -8,9 +8,9 @@ transcribe through the exact same object and cannot drift.
 
 It is deliberately not an ABC: composition is the only behaviour, and the two
 swappable parts are the ``Encoder`` and ``Decoder`` it holds. The interesting
-combinations are just different pairs -- ``Transcriber(ClassicalEncoder(), GreedyDecoder())``
-is the DSP floor, ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder())`` the learned
-end-to-end model -- not different ``Transcriber`` subclasses.
+combinations are just different pairs -- ``Transcriber(LearnedEncoder(ckpt),
+GreedyDecoder())`` against ``Transcriber(LearnedEncoder(ckpt), SemiCRFDecoder())`` --
+not different ``Transcriber`` subclasses.
 """
 
 from stemify.transcription.decoders import Decoder

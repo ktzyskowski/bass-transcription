@@ -7,20 +7,20 @@ between them, and the torch-free implementations that make the whole path runnab
 no network at all.
 
     frames       ``Frames`` -- per-frame evidence, the seam
-    encoders     ``Encoder``; ``ClassicalEncoder`` (spectral flux + pyin) is the floor
+    encoders     ``Encoder``; the implementation is ``models.LearnedEncoder``
     decoders     ``Decoder``; ``GreedyDecoder`` peak-picks and merges
-    pitch        ``PitchEstimator``; ``PyinPitch``, and the memoised contour
     transcriber  ``Transcriber`` -- the composition of one of each
 
-**Contracts and implementations together, deliberately.** The pairing is what the
-contracts are *for*: ``ClassicalEncoder`` and ``LearnedEncoder`` are substitutable
-because they wear one interface, and ``GreedyDecoder`` and ``SemiCRFDecoder`` likewise.
-Splitting the interface from its DSP sibling would leave a package of pure abstraction
-with nothing to check it against -- and the floor is not scaffolding, it is the baseline
-every learned result is quoted against.
+**The decoders live beside their contract, the encoder does not.** ``GreedyDecoder``
+and ``SemiCRFDecoder`` are both here, substitutable over one ``Frames``, and the
+package is testable end to end because of it. ``Encoder`` is a contract with no
+implementation in this layer at all -- its one implementation holds a ``FrameNet``, so
+it is a layer up. That asymmetry used to be filled by ``ClassicalEncoder``, the pyin
+DSP floor; it went with pyin, and what it demonstrated is now asserted by
+``tests/test_layers.py`` instead.
 
 **This sits below ``models``, and that is the load-bearing fact.** ``models`` implements
-these contracts (``LearnedEncoder``, ``NeuralPitch``) and reads this ``Frames``, so
+these contracts (``LearnedEncoder``) and reads this ``Frames``, so
 nothing here may know that torch exists. That is also why the *fitting* contracts are a
 different layer and not this one: ``Recipe.build_model()`` returns a ``FrameNet``, so it
 depends on ``models`` where these are depended *on* by it. One package holding both
@@ -28,5 +28,5 @@ would import ``models`` while ``models`` imports it -- the cycle, relocated rath
 removed.
 
 Below it: ``music`` for ``NoteEvent``/``Contour``, ``audio`` for ``Sources`` and the
-CQT, ``persistence`` for the contour cache. Nothing else.
+CQT. Nothing else.
 """

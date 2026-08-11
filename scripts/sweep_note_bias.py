@@ -66,7 +66,7 @@ def sweep(
     decoder = ck.recipe.decoder_from({"loss": ck.objective_state})
     decoder.to(torch.device(DECODE_DEVICE))
     encoder = LearnedEncoder(model, device=ENCODE_DEVICE)
-    print(f"{checkpoint}  pitch_source={encoder.pitch_source}  "
+    print(f"{checkpoint}  pitch_head={encoder.has_pitch_head}  "
           f"encode={ENCODE_DEVICE} decode={DECODE_DEVICE}")
 
     validators = build_validators(root, limit, conditions, cache=Store(cache_dir), split=split)

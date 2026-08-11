@@ -1,16 +1,16 @@
 """Note-level evaluation: bind a dataset and a ``Transcriber``, and score notes.
 
     NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
-                   Transcriber(ClassicalEncoder(), GreedyDecoder())).run()
+                   Checkpoint.load(p).transcriber()).run()
 
 The cues-level harness (``CuesEvaluation``) scores the encoder's per-frame evidence.
 This asks "did you find the right notes" -- the metric a tab is actually graded on,
 and the one a bass-transcription collaborator's F1 numbers use.
 
-It scores the exact object deployment ships: a ``Transcriber(encoder, decoder)``. The
-DSP floor is ``Transcriber(ClassicalEncoder(), GreedyDecoder())``; a trained model is
-``Transcriber(LearnedEncoder(ckpt), decoder)`` -- so eval and deploy transcribe through
-one object and cannot drift, and there is no separate "learned baseline" class. (A
+It scores the exact object deployment ships: a ``Transcriber(encoder, decoder)`` --
+``Transcriber(LearnedEncoder(ckpt), decoder)``, which ``Checkpoint.transcriber()``
+builds -- so eval and deploy transcribe through one object and cannot drift, and there
+is no separate "learned baseline" class. (A
 note-native transcriber that emits notes without a contour would plug in the same
 way once it exposes ``segment(sources) -> notes``.)
 

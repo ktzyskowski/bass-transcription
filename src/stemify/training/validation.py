@@ -5,18 +5,12 @@ construction and holds them, so each subsequent score is a model forward and the
 scoring -- seconds, not minutes. That is what makes async validation every few epochs
 cheap enough to leave on.
 
-**The DSP contour is deferred, not precomputed.** It used to be: pyin ran over every
-val track at construction, on the reasoning that its contour is fixed across
-checkpoints while the model is not. That reasoning stopped holding when the pitch head
-shipped. ``LearnedEncoder.encode_features`` *replaces* the contour it is handed with
-the head's own output, so for every current run this was a full pyin pass per track
-whose result was overwritten on the next line. It survived because nothing measured it
-and the docstring still explained it.
-
-So ``ValItem`` holds a *source* rather than a contour, and the caller -- which holds
-the encoder and can read ``pitch_source`` -- decides whether to read it. A pitch-head
-checkpoint never does. A headless one (five on disk, and ``--use-pyin``) reaches
-through and pays once per track, because features alone cannot give pitch.
+**There is no DSP contour any more.** ``ValItem`` used to hold a deferred pyin source
+that a checkpoint without a pitch head would reach through -- a lazy property, a
+raising branch, a ``needs_contour`` question the encoder answered, and a second disk
+cache behind it. All of it existed for checkpoints predating the pitch head. The
+contour is the model's now, produced in the same forward pass as onset and voicing, so
+a val example is features and labels and nothing else.
 
 From that one forward per track it scores both altitudes: ``score_examples`` runs the
 decoder for note-level metrics, ``score_cues_examples`` scores the encoder's cues
@@ -28,7 +22,6 @@ and both are tested with synthetic inputs and a fake model, no audio.
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from functools import partial
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,13 +29,11 @@ from typing import Any
 import torch
 import numpy as np
 
-from stemify.transcription.pitch.cache import ensure_contour
 from stemify.persistence.store import Store
 from stemify.transcription.decoders.base import Decoder
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.models.framenet import FrameNet
-from stemify.music.contour import Contour
 from stemify.transcription.frames import Frames
 from stemify.corpus.base import Dataset, NoteAnnotated
 from stemify.audio.features import FrameFeatures, extract_features, stack_channels
@@ -55,7 +46,6 @@ from stemify.metrics import (
     score_notes,
 )
 from stemify.music.notes import NoteEvent
-from stemify.transcription.pitch import PyinPitch
 from stemify.persistence.serde import features_npy
 from stemify.conditions import CONDITIONS, Condition
 from stemify.examples import prepare_examples
@@ -78,28 +68,6 @@ class ValItem:
     features: np.ndarray | None = None      # (n_bins, T) or (C, n_bins, T), if resident
     feature_paths: tuple[Path, ...] = ()    # else load from disk on demand, per channel
     voicing_target: np.ndarray | None = None  # (T,) gt voiced mask, for voicing AUROC
-    # How to obtain a DSP contour for channel 0, *if* anything asks. Deferred rather
-    # than precomputed: a model with a pitch head produces its own contour and
-    # overwrites whatever it is handed, so for every such run this was a pyin pass per
-    # val track whose result was discarded on the next line. Only a headless
-    # checkpoint (or --use-pyin) reaches through here, and then it pays once.
-    contour_source: Callable[[], Contour] | None = None
-    _contour: Contour | None = None
-
-    @property
-    def contour(self) -> Contour:
-        """The DSP contour, computed on first read. Raises rather than returning a
-        placeholder: a caller reaching for this has no pitch head, so an empty contour
-        would silently transcribe every track as unvoiced."""
-        if self._contour is None:
-            if self.contour_source is None:
-                raise ValueError(
-                    "this ValItem was built without a contour source, so it can only "
-                    "score an encoder that supplies its own pitch (a model with a "
-                    "pitch head). Pass contour_source to score a headless checkpoint."
-                )
-            self._contour = self.contour_source()
-        return self._contour
 
     def load_features(self) -> FrameFeatures:
         """The track's CQT paired with its frame grid, from memory or disk. The disk
@@ -117,10 +85,8 @@ class ValItem:
 
 
 # A segmentation step: one val example -> notes. Takes the whole ``ValItem`` rather
-# than ``(contour, features)`` so that *the caller* decides whether a contour is
-# needed at all -- it holds the encoder and can read ``pitch_source``, which the
-# validator cannot. That is what keeps a pitch-head run from touching pyin: nothing
-# reads ``ex.contour``, so nothing computes it.
+# than its features so the caller stays free to read whatever an example carries
+# without the validator having to know what a given decoder needs.
 SegmentFn = Callable[[ValItem], list[NoteEvent]]
 # The encode step: one val example -> the encoder's Frames. Used for cues-level scoring
 # (onset + voicing head quality) -- a checkpoint's LearnedEncoder.encode_features,
@@ -133,7 +99,7 @@ def score_examples(
     examples: Sequence[ValItem],
 ) -> dict[str, float]:
     """Score a segmentation function over precomputed val examples: for each, hand
-    its contour + cached CQT to ``segment`` and compare the notes it returns to the
+    its cached CQT to ``segment`` and compare the notes it returns to the
     references.
 
     The validator owns no segmentation logic -- it just calls the function it was
@@ -175,12 +141,12 @@ def score_cues_examples(
     """Cues-level (encoder) quality over precomputed val examples: onset-curve and
     voicing-head, both threshold-free, in one model pass per track.
 
-    For each example, encode its cached features + contour into ``Frames`` and turn
-    that into the aligned per-channel pairs ``score_cues`` pools: onset (curve vs an
-    impulse target built from the reference note onsets on the CQT grid) and voicing
-    (P(voiced) vs the cached voiced label). Pitch is *not* scored here -- pyin pitch
-    does not move between checkpoints, so it belongs to the offline ``CuesEvaluation``,
-    not the per-epoch loop. Voicing drops out for an onset-only model. Like
+    For each example, encode its cached features into ``Frames`` and turn that into
+    the aligned per-channel pairs ``score_cues`` pools: onset (curve vs an impulse
+    target built from the reference note onsets on the CQT grid) and voicing (P(voiced)
+    vs the cached voiced label). Pitch is *not* scored here -- the offline
+    ``CuesEvaluation`` owns frame-level pitch, where a reference contour is available.
+    Voicing drops out for an onset-only model. Like
     ``score_examples`` this takes a callable, not a model, so the validator stays
     model-agnostic; the shared ``metrics.frame.scoring.score_cues`` keeps it from drifting from
     the offline harness."""
@@ -204,8 +170,7 @@ def score_cues_examples(
 
 
 class CheckpointValidator:
-    """Precompute CQT + reference notes once; score models cheaply. The DSP contour is
-    deferred to a source read only if the scored encoder has no pitch head."""
+    """Precompute CQT + reference notes once; score models cheaply."""
 
     def __init__(
         self,
@@ -216,12 +181,9 @@ class CheckpointValidator:
         # A bare stem condition is the neutral default -- one channel, no transform
         # -- so a caller scoring clean audio need not name one.
         condition = condition or CONDITIONS["clean"]
-        estimator = PyinPitch()
 
-        # One ``store`` replaces the old separate ``contour_cache``/``feature_cache``
-        # paths, and unifies what their two ``None``s meant: with a store, both the
-        # CQT and the contour are disk-backed; without one, features are held in
-        # memory and pyin reruns per launch (the test/small-set path).
+        # With a store the CQT is disk-backed; without one, features are held in memory
+        # (the test/small-set path).
         #
         # The CQT is the same artifact the training loader caches. Since features are
         # keyed on the resolved audio path, *every* condition now reuses whatever the
@@ -238,13 +200,10 @@ class CheckpointValidator:
 
         self.examples: list[ValItem] = []
         for i, item in enumerate(dataset):
-            # The contour describes channel 0: it is the audio being transcribed,
-            # and the context channels are never pitch-tracked.
             # A transform needs somewhere to write even when features are not being
             # cached: `store=None` means "hold the CQTs resident", not "separate to
             # nowhere". Identity ignores it; a separator would not.
             into = store or Store()
-            primary = condition.primary.audio(item, into)
             if store is not None:
                 # Keep only the paths + small frame_times/label resident; the feature
                 # tensors are loaded transiently per score (load_features), so the
@@ -256,7 +215,6 @@ class CheckpointValidator:
                     cached["target_voicing"] if "target_voicing" in cached.files else None
                 )
                 features = None
-                contour_source = partial(ensure_contour, store, estimator, primary)
             else:
                 # No store: featurise each channel now and hold them resident. Only
                 # the small-set/test path takes this branch.
@@ -267,11 +225,9 @@ class CheckpointValidator:
                 features = feats.values
                 voicing_target = None
                 fpaths = ()
-                contour_source = partial(estimator.estimate, primary)
             self.examples.append(
                 ValItem(
                     frame_times=frame_times,
-                    contour_source=contour_source,
                     notes=item.reference_notes(),
                     features=features,
                     feature_paths=fpaths,
@@ -334,9 +290,9 @@ that no longer exists. ``tests/metrics/test_logged_schema.py`` pins them.
 """
 
 # The cues-level results the async validator can produce. Pitch is not among them:
-# `score_cues_examples` supplies no pitch pair, since pyin's contour does not move
-# between checkpoints. Named as *types*, so the metric names below are known without
-# scoring anything.
+# `score_cues_examples` supplies no pitch pair -- frame-level pitch needs a reference
+# contour, which is the offline harness's business. Named as *types*, so the metric
+# names below are known without scoring anything.
 CUES_RESULT_TYPES: tuple[type[MetricResult], ...] = (OnsetPRResult, VoicingAUROCResult)
 
 
@@ -375,19 +331,14 @@ def build_validators(
     same ``CONDITIONS`` table that defines the *training* conditions defines the
     validation ones.
 
-    Every condition shares the one ``store``: contours and CQTs are keyed on each
-    condition's *resolved* audio path, so they cannot collide and no per-tag
-    subdirectory is needed. pyin then runs once per file ever rather than at every
-    launch -- what makes a large val set affordable. The demucs condition separates
-    its val audio through the (cached) DemucsSeparator at construction.
+    Every condition shares the one ``store``: CQTs are keyed on each condition's
+    *resolved* audio path, so they cannot collide and no per-tag subdirectory is
+    needed. The demucs condition separates its val audio through the (cached)
+    DemucsSeparator at construction.
 
-    The per-track loop is serial, and whether that costs anything **depends on the
-    numeric backend**. On macOS/Accelerate pyin's FFTs already spread across cores and
-    a process pool only oversubscribes; on Linux/OpenBLAS (scipy's pocketfft is
-    single-threaded unless handed ``workers``) it pins one core and a pool measures
-    ~4.9x. Serial is the right default because the store means this is paid once per
-    file ever -- but see ``docs/refactor-plan.md`` before concluding a pool is
-    pointless on a given machine."""
+    The per-track loop is serial. It was worth arguing about when a pyin pass ran here;
+    now the only per-track cost is the CQT, which the training loader has usually
+    already cached."""
     return {
         tag: CheckpointValidator(
             CONDITIONS[tag].dataset(root, split, val_limit),
@@ -449,31 +400,14 @@ def build_eval_fn(
         encoder = LearnedEncoder(model, device="cpu")
         decoder = build_decoder(state)
 
-        # Whether this checkpoint needs a DSP contour at all. The encoder is the only
-        # thing that can answer -- ``pitch_source`` is "learned" when a FrequencyHead
-        # names the pitch and "pyin" when nothing else can -- and the validator holds
-        # no opinion. This is what keeps a pitch-head run from touching pyin: nothing
-        # reads ``ex.contour``, so the deferred source is never called.
-        needs_contour = encoder.pitch_source == "pyin"
-
         def encode(ex: ValItem) -> Frames:
-            contour = ex.contour if needs_contour else None
-            return encoder.encode_features(contour, ex.load_features())
+            return encoder.encode_features(ex.load_features())
 
         def segment(ex: ValItem) -> list[NoteEvent]:
             return decoder.decode(encode(ex))
 
         metrics: dict[str, float] = {}
-        # ``pitch_source`` is recorded because it silently decides ~5 F1: an encoder
-        # with a ``FrequencyHead`` names its notes from that head, one without falls
-        # back to pyin, and the two produce byte-identical report shapes. Without this
-        # a saved report cannot say which pipeline made it -- the same defect as a run
-        # whose name did not describe the run.
-        report: dict[str, Any] = {
-            "epoch": epoch,
-            "pitch_source": encoder.pitch_source,
-            "conditions": {},
-        }
+        report: dict[str, Any] = {"epoch": epoch, "conditions": {}}
         for tag, validator in validators.items():
             note = validator.score(segment)
             for key, leaf in NOTE_LOG_KEYS.items():

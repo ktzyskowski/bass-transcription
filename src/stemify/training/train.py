@@ -7,8 +7,9 @@
 (``python -m stemify.training.train`` still works; the console script is declared in
 ``pyproject.toml`` so the entry point is discoverable without reading this file.)
 
-Trains onset and voicing, plus a learned pitch contour with ``--pitch``, which replaces
-pyin as the pitch source (see docs/experiments.md for what that is worth).
+Trains onset and voicing, plus the pitch contour with ``--pitch``. Without it the
+model has no pitch source at all and can only be scored at cues level -- pyin, the
+fallback that used to make a headless run decodable, is gone.
 
 Domain randomisation: the input is drawn from several *conditions* (``--sources``,
 tags from ``core.conditions``) while the target is always the clean-stem MIDI, so
@@ -19,8 +20,8 @@ Validation runs on every deployment condition of the model's own channel width
 (``--val-sources``), not just clean stems. Cheap per-frame val loss drives early
 stopping inline, while ``AsyncValidationCallback`` scores each checkpoint through the
 real ``LearnedEncoder`` + ``GreedyDecoder`` pair -- one ``CheckpointValidator`` per
-condition, each caching its contours so a score is a model forward rather than a pyin
-re-run. From that one forward it logs both altitudes to MLflow --
+condition, each caching its CQT so a score is a model forward. From that one forward it
+logs both altitudes to MLflow --
 ``note/<condition>/f1`` (decoder) and ``cues/<condition>/{onset_ap, voicing_auroc}``
 (encoder) -- and attaches a per-epoch ``validation/`` JSON artifact with the full
 breakdown. The gap between ``note/clean/f1`` and ``note/separated/f1`` is the verdict
@@ -222,12 +223,7 @@ def train(
             batch_log_every=batch_log_every,
             # Loop-level settings here; strategy knobs come from ``recipe.params``,
             # which is the only thing that knows which of them this run even has.
-            # ``pitch_source`` mirrors what the validator records per epoch, hoisted to
-            # a param so the UI answers "was this scored on the learned head or pyin?"
-            # without opening an artifact. Derived from the heads this run trains,
-            # which is what decides whether the encoder has a branch to read.
             params={"encoder": "tcn", "sources": ",".join(sources),
-                    "pitch_source": "learned" if "pitch" in recipe.heads else "pyin",
                     "val_conditions": ",".join(val_conditions),
                     "lr": config.learning_rate,
                     "batch_size": config.batch_size,

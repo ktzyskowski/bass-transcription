@@ -187,7 +187,7 @@ def decode_bins(logits: np.ndarray, neighbourhood: int = 1) -> np.ndarray:
 # Above this, the voicing head is confident enough that the pitch head's guess for a
 # frame is worth reporting at all. Lives beside ``decode_contour`` because it is part of
 # reading this head's output, and both callers of that function need it: LearnedEncoder,
-# which has the logits already, and NeuralPitch, which computes them from a path.
+# which has the logits already.
 #
 # Deliberately *not* the decoder's ``VOICING_THRESHOLD``. The two look like the same
 # number and answer different questions -- this asks "does this frame have a pitch worth
@@ -205,7 +205,7 @@ def decode_contour(
     """Per-bin logits ``(T, n_bins)`` -> a ``Contour`` on the feature grid.
 
     The single place the head's output becomes a pitch track, so the two callers that
-    need it -- ``LearnedEncoder`` (which already has the logits) and ``NeuralPitch``
+    need it -- ``LearnedEncoder`` (which already has the logits)
     (which computes them from a path) -- cannot drift into two different decodes.
 
     Two things fall out that pyin could not give us. The contour shares the CQT's

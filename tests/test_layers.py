@@ -29,10 +29,15 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "stemify"
 PILLAR_ALLOWANCE = {
     "platform": set(),
     "music": set(),
-    "persistence": {"platform", "music"},
+    # Both of these shed a dependency when pyin went. `persistence` held a codec for
+    # the pyin `Contour`, which was its only reason to know `music`; `transcription`
+    # held the contour cache, which was its only reason to know `persistence`. What is
+    # left is a store that reads and writes arrays, and a note pipeline that touches
+    # no disk at all.
+    "persistence": {"platform"},
     "audio": {"platform", "persistence"},
     "corpus": {"music", "audio"},
-    "transcription": {"music", "audio", "persistence"},
+    "transcription": {"music", "audio"},
     "metrics": {"music"},
     "conditions": {"audio", "corpus", "persistence"},
     "examples": {"platform", "music", "audio", "persistence", "corpus"},

@@ -9,7 +9,6 @@ that would be discovered, long after training.
 import numpy as np
 import torch
 
-from stemify.music.contour import Contour
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.training.checkpoint import load_framenet
 from stemify.audio.features import FrameFeatures
@@ -31,7 +30,6 @@ def _encode(model, n_channels, n=24):
     frame_times = np.arange(n) * 0.0116
     shape = (216, n) if n_channels == 1 else (n_channels, 216, n)
     return LearnedEncoder(model, device="cpu").encode_features(
-        Contour(frame_times, np.full(n, 110.0)),
         FrameFeatures(np.random.rand(*shape).astype(np.float32), frame_times),
     )
 

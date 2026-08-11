@@ -69,7 +69,7 @@ def test_a_target_outside_the_unit_interval_is_refused(metric):
 
 @pytest.mark.parametrize("metric", RANKING)
 def test_probabilities_at_the_bounds_are_fine(metric):
-    """``ClassicalEncoder`` emits a 0/1 spike train, which is a probability."""
+    """A hard 0/1 spike train is a probability, and a target is exactly that."""
     metric.compute(np.array([0.0, 1.0, 0.0, 1.0]), np.array([0.0, 1.0, 0.0, 1.0]))
 
 

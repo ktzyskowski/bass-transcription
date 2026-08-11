@@ -1,17 +1,11 @@
-"""Serde: the on-disk formats -- CachedItem's split npz/.npy layout and the
-contour npz -- round-trip, and the legacy migration. Atomic writes are exercised
-implicitly (a save that completes leaves no .partial).
+"""Serde: the on-disk format -- CachedItem's split npz/.npy layout -- round-trips, and
+the legacy migration. Atomic writes are exercised implicitly (a save that completes
+leaves no .partial).
 """
 
 import numpy as np
 
-from stemify.music.contour import Contour
-from stemify.persistence.serde import (
-    CachedItem,
-    features_npy,
-    load_contour,
-    save_contour,
-)
+from stemify.persistence.serde import CachedItem, features_npy
 
 
 def _save_example(tmp_path, name, features, target):
@@ -47,15 +41,3 @@ def test_save_leaves_no_partial(tmp_path):
     _save_example(tmp_path, "clean", np.random.rand(4, 5), np.arange(5))
     assert list(tmp_path.glob("*.partial")) == []  # atomic write cleaned up
 
-
-def test_contour_round_trips_with_and_without_confidence(tmp_path):
-    times = np.linspace(0, 1, 5)
-    c = Contour(times=times, freqs=np.full(5, 110.0), confidence=np.full(5, 0.9))
-    save_contour(c, tmp_path / "c.npz")
-    back = load_contour(tmp_path / "c.npz")
-    np.testing.assert_array_equal(back.freqs, c.freqs)
-    np.testing.assert_array_equal(back.confidence, c.confidence)
-
-    bare = Contour(times=times, freqs=np.full(5, 110.0))  # no confidence
-    save_contour(bare, tmp_path / "b.npz")
-    assert load_contour(tmp_path / "b.npz").confidence is None

@@ -12,9 +12,7 @@ import pytest
 
 from stemify.music.contour import Contour
 from stemify.transcription.decoders.greedy import (
-    DSP_PITCH_SPLIT_SEMITONES,
     MERGE_GAP_S,
-    PITCH_SPLIT_SEMITONES,
     group_contour,
     onset_times_from_probs,
 )
@@ -110,20 +108,13 @@ def test_pitch_change_alone_does_not_split_by_default():
     assert len(group_contour(step, merge_gap_s=None)) == 1
 
 
-def test_pitch_split_is_still_available_for_encoders_without_an_onset_head():
-    step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
-    notes = group_contour(
-        step, pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES, merge_gap_s=None
-    )
-    assert len(notes) == 2
+def test_merge_does_not_join_notes_a_fifth_apart():
+    """The merge tolerance is its own constant, and has to stay one.
 
-
-def test_disabling_the_split_does_not_make_merge_join_everything():
-    """Regression: the split and merge tolerances must stay independent.
-
-    They shared one constant, so expressing "never split on pitch" as a huge tolerance
-    silently turned the rejoin pass into "merge every adjacent note whatever its
-    pitch" -- a perfect fifth collapsing into one note at the average of the two.
+    It was once shared with a pitch-splitting tolerance that has since been deleted,
+    and expressing "never split on pitch" as a huge value silently turned this pass
+    into "merge every adjacent note whatever its pitch" -- a perfect fifth collapsing
+    into one note at the average of the two.
     """
     step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
     notes = group_contour(step, onsets=np.array([0.5]), merge_gap_s=0.05)
@@ -131,8 +122,13 @@ def test_disabling_the_split_does_not_make_merge_join_everything():
     assert not any(abs(n.midi_pitch - 51.0) < 1.0 for n in notes)  # no 45/57 average
 
 
-def test_pitch_split_is_off_by_default():
-    assert PITCH_SPLIT_SEMITONES is None
+def test_a_pitch_change_alone_never_places_a_note():
+    """An onset is the only cue that starts a note. A sustained pitch jump used to be
+    a second one, for the DSP floor whose pyin contour was all it had; on a learned
+    onset head the same rule overrode a ~7 ms-accurate onset with a ~58 ms-late pitch
+    transition, and it went with pyin."""
+    step = contour([A2_HZ] * 50 + [A3_HZ] * 50)
+    assert len(group_contour(step, merge_gap_s=None)) == 1
 
 
 def test_merge_keeps_notes_across_a_real_rest():

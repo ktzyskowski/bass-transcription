@@ -14,7 +14,7 @@ change: nine public members, imported by 24 files, called in three places; seven
 nine had no production caller at all.
 
 So the store answers *where*, callers decide *whether to compute*. The memoisers live
-with the thing they memoise -- ``audio.cache`` owns the CQT, ``transcription.pitch.cache`` owns
+with the thing they memoise -- ``audio.cache`` owns
 the contour -- because that is the layer that knows what "already computed" means and
 what it costs. A new cached artifact is a new memoiser next to its producer, not a
 change here.
@@ -47,13 +47,15 @@ from typing import Literal
 DEFAULT_ROOT = Path("data/cache")
 DIGEST_CHARS = 16
 
-Kind = Literal["features", "contours", "transforms"]
+Kind = Literal["features", "transforms"]
 """The artifact families, as a type rather than a convention.
 
-Three subdirectories, spelled at four call sites. A ``str`` would let a typo open a
-fourth silently -- and a store that writes to ``contour/`` while a reader looks in
-``contours/`` is a permanent cache miss that costs a pyin pass per track per run and
-reports nothing. mypy rejects the typo instead.
+A ``str`` would let a typo open a third subdirectory silently -- and a store that
+writes to ``feature/`` while a reader looks in ``features/`` is a permanent cache miss
+that recomputes every track on every run and reports nothing. mypy rejects the typo
+instead.
+
+``contours`` was a third family, holding pyin point estimates. It went with pyin.
 """
 
 

@@ -22,7 +22,6 @@ import numpy as np
 import numpy.typing as npt
 
 from stemify.platform.atomic import atomic_write
-from stemify.music.contour import Contour
 
 
 def _write_npy(dest: Path, arr: np.ndarray) -> None:
@@ -99,17 +98,3 @@ class CachedItem:
         features = np.load(features_npy(path), mmap_mode="r" if mmap else None)
         return cls(str(z["name"]), features, targets, z["frame_times"])
 
-
-def save_contour(contour: Contour, path: Path) -> None:
-    """Persist a pyin ``Contour`` to npz (times/freqs, and confidence when present)."""
-    arrays = {"times": contour.times, "freqs": contour.freqs}
-    if contour.confidence is not None:
-        arrays["confidence"] = contour.confidence
-    atomic_write(path, lambda p: write_npz(p, compressed=False, **arrays))
-
-
-def load_contour(path: Path) -> Contour:
-    """Read back a ``Contour`` saved by ``save_contour``."""
-    data = np.load(path)
-    conf = data["confidence"] if "confidence" in data.files else None
-    return Contour(times=data["times"], freqs=data["freqs"], confidence=conf)

@@ -1,6 +1,6 @@
 """Cues-level evaluation: score an ``Encoder``'s output, decoder-independent.
 
-    CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ClassicalEncoder()).run()
+    CuesEvaluation(SlakhDataset("data/raw/slakh2100"), Checkpoint.load(p).encoder()).run()
 
 ``NoteEvaluation`` scores a whole ``Transcriber`` -- "did you find the right notes".
 This scores the *encoder* alone: given the per-frame ``Frames`` it produces, how good

@@ -79,28 +79,17 @@ def _held(n: int) -> tuple[Contour, FrameFeatures]:
     return contour, features
 
 
-def test_encode_features_voicing_head_places_rests():
-    # pyin tracks one held pitch, but the voicing head calls the second half a rest,
-    # so the decoded note ends early -- the cached validator path end to end.
+def test_a_model_with_no_pitch_head_produces_no_contour():
+    """It still encodes -- onset and voicing are real evidence and score at cues level
+    -- but there is nothing left to name a note's pitch from, so `GreedyDecoder`
+    refuses by name rather than transcribing silence."""
     n = 40
     contour, features = _held(n)
-    cues = LearnedEncoder(_FakeOnsetVoicingModel(), device="cpu").encode_features(
-        contour, features
-    )
-    assert cues.voicing is not None
-    notes = GreedyDecoder(merge_gap_s=None).decode(cues)
-    assert len(notes) == 1
-    assert notes[0].offset < features.frame_times[n // 2] + 0.05
-
-
-def test_encode_features_without_voicing_falls_back_to_contour():
-    n = 40
-    contour, features = _held(n)
-    cues = LearnedEncoder(_FakeOnsetModel([]), device="cpu").encode_features(
-        contour, features
-    )
-    assert cues.voicing is None  # onset-only model
-    assert len(GreedyDecoder(merge_gap_s=None).decode(cues)) == 1
+    cues = LearnedEncoder(_FakeOnsetModel([]), device="cpu").encode_features(features)
+    assert cues.voicing is None      # onset-only model
+    assert cues.contour is None      # and no pitch source at all
+    with pytest.raises(ValueError, match="carry none"):
+        GreedyDecoder(merge_gap_s=None).decode(cues)
 
 
 def test_encode_from_audio_peaks_the_onset_curve(tmp_path):
@@ -143,7 +132,7 @@ def test_encode_features_passes_a_stacked_input_through_unflattened():
     stacked = FrameFeatures(
         np.random.rand(2, 8, n).astype(np.float32), np.arange(n) * 0.0116
     )
-    LearnedEncoder(model, device="cpu").encode_features(contour, stacked)
+    LearnedEncoder(model, device="cpu").encode_features(stacked)
     assert model.seen == (1, 2)          # (batch, channels) -- the axis survives
 
 
@@ -153,7 +142,7 @@ def test_a_bare_cqt_still_reaches_a_single_channel_model():
     n = 12
     contour, features = _held(n)
     model = _ChannelCountingModel(1)
-    LearnedEncoder(model, device="cpu").encode_features(contour, features)
+    LearnedEncoder(model, device="cpu").encode_features(features)
     assert model.seen == (1, 1)
 
 
@@ -164,7 +153,7 @@ def test_encoding_the_wrong_channel_count_fails_loudly():
     contour, features = _held(n)
     encoder = LearnedEncoder(_ChannelCountingModel(2), device="cpu")
     with pytest.raises(ValueError, match="expects 2 input channel"):
-        encoder.encode_features(contour, features)
+        encoder.encode_features(features)
 
 
 def test_encode_from_audio_reads_the_mix_for_a_second_channel(tmp_path):
@@ -220,48 +209,46 @@ def _flat_features(t: int = 40) -> FrameFeatures:
     return FrameFeatures(np.zeros((N_BINS, t), dtype=np.float32), np.arange(t) * 0.01)
 
 
-def test_pitch_head_replaces_the_supplied_contour():
-    """The head is the pitch source when the model has one -- the caller's cached pyin
-    contour is exactly what such a run exists to stop using."""
+def test_the_pitch_head_is_the_contour():
+    """The head is the only pitch source. A caller used to be able to hand in a pyin
+    contour that this replaced; there is no argument to hand one through now."""
     import librosa
 
     feats = _flat_features()
-    pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
     enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu")
 
-    assert enc.has_pitch_head and enc.pitch_source == "learned"
-    cues = enc.encode_features(pyin_says, feats)
-    # Voiced half carries the head's pitch, not pyin's 200 Hz.
+    assert enc.has_pitch_head
+    cues = enc.encode_features(feats)
+    # Voiced half carries the head's pitch.
     voiced = cues.contour.freqs[: feats.frame_times.size // 2]
     assert np.allclose(librosa.hz_to_midi(voiced), 45.0, atol=0.05)
     # The contour lands on the FEATURE grid -- the point of the swap.
     assert np.array_equal(cues.contour.times, feats.frame_times)
 
 
+def test_the_voicing_head_places_the_rests_a_decoder_sees():
+    """The cached validator path end to end: the head calls the second half a rest, so
+    the decoded note ends there rather than running to the end of the track."""
+    feats = _flat_features()
+    cues = LearnedEncoder(_FakePitchModel(45.0), device="cpu").encode_features(feats)
+    assert cues.voicing is not None
+    notes = GreedyDecoder(merge_gap_s=None).decode(cues)
+    assert len(notes) == 1
+    assert notes[0].offset < feats.frame_times[feats.frame_times.size // 2] + 0.05
+
+
 def test_voicing_head_gates_the_learned_contour():
     feats = _flat_features()
     enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu")
-    cues = enc.encode_features(Contour(feats.frame_times, np.zeros(40)), feats)
+    cues = enc.encode_features(feats)
     half = feats.frame_times.size // 2
     assert (cues.contour.freqs[:half] > 0).all()     # voiced -> a pitch
     assert (cues.contour.freqs[half:] == 0.0).all()  # rest -> no pitch
 
 
-def test_use_pyin_keeps_the_supplied_contour():
-    """The A/B escape hatch: same checkpoint, the other pitch source."""
+def test_a_model_without_a_pitch_head_has_no_contour():
     feats = _flat_features()
-    pyin_says = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
-    enc = LearnedEncoder(_FakePitchModel(45.0), device="cpu", use_pyin=True)
-
-    assert enc.has_pitch_head and enc.pitch_source == "pyin"
-    cues = enc.encode_features(pyin_says, feats)
-    assert np.allclose(cues.contour.freqs, 200.0)
-
-
-def test_a_model_without_a_pitch_head_still_uses_the_supplied_contour():
-    feats = _flat_features()
-    supplied = Contour(feats.frame_times, np.full(feats.frame_times.size, 200.0))
     enc = LearnedEncoder(_FakeOnsetVoicingModel(), device="cpu")
 
-    assert not enc.has_pitch_head and enc.pitch_source == "pyin"
-    assert np.allclose(enc.encode_features(supplied, feats).contour.freqs, 200.0)
+    assert not enc.has_pitch_head
+    assert enc.encode_features(feats).contour is None

@@ -7,7 +7,7 @@ importing it leaves ``torch`` out of ``sys.modules``, so the day something reach
 downward it fails loudly rather than quietly re-coupling the two.
 
 In particular this implements ``transcription``'s contracts (``LearnedEncoder`` is an
-``Encoder``, ``NeuralPitch`` a ``PitchEstimator``) and is depended *on* by ``fitting``,
+``Encoder``) and is depended *on* by ``fitting``,
 whose ``Recipe.build_model()`` returns a ``FrameNet``. That is the whole reason those
 two contract sets are different layers.
 
@@ -19,12 +19,12 @@ model in ``.eval()``, and ``stemify-transcribe`` needs them. Putting them in
 *model* (here) against the *fitting procedure* (there).
 
 Why it is not part of ``core`` either: a contract should be satisfiable without the
-thing satisfying it. ``Encoder`` and ``PitchEstimator`` are core ABCs precisely so that
-``ClassicalEncoder``/``PyinPitch`` (DSP, no torch) and ``LearnedEncoder``/``NeuralPitch``
+thing satisfying it. ``Encoder`` is a contract in the layer below precisely so that
+``LearnedEncoder``
 (a ``FrameNet``) can both wear them without either knowing about the other.
 
-    core/       Encoder, PitchEstimator, Decoder, Frames, Contour -- the contracts
-    models/     TCN -> FrameNet -> heads, plus LearnedEncoder and NeuralPitch
+    core/       Encoder, Decoder, Frames, Contour -- the contracts
+    models/     TCN -> FrameNet -> heads, plus LearnedEncoder
     training/   fits a FrameNet; imports this directly, never through an encoder
 
 ``FrameNet`` is the composition point -- a backbone plus named heads -- and it is what a
@@ -45,7 +45,6 @@ from stemify.models.heads import (
 from stemify.models.networks import TCN, tcn_receptive_field
 from stemify.models.framenet import FrameNet
 from stemify.models.learned_encoder import LearnedEncoder
-from stemify.models.neural_pitch import NeuralPitch
 
 __all__ = [
     "TCN",
@@ -53,7 +52,6 @@ __all__ = [
     "FrameNet",
     "FrequencyHead",
     "LearnedEncoder",
-    "NeuralPitch",
     "decode_bins",
     "decode_contour",
     "onset_head",

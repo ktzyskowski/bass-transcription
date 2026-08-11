@@ -1,9 +1,9 @@
 """Scoring a model against a dataset, at two altitudes of the note pipeline.
 
     from stemify.evaluation import CuesEvaluation, NoteEvaluation
-    cues  = CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ClassicalEncoder()).run()
+    cues  = CuesEvaluation(SlakhDataset("data/raw/slakh2100"), ckpt.encoder()).run()
     notes = NoteEvaluation(SlakhDataset("data/raw/slakh2100"),
-                           Transcriber(ClassicalEncoder(), GreedyDecoder())).run()
+                           ckpt.transcriber()).run()
 
 Two harnesses, same shape (dataset + object -> a ``Report``), different altitude:
 

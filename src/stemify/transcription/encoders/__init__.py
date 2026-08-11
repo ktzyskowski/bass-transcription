@@ -1,14 +1,14 @@
 """Encoders: audio -> ``Frames`` (the evidence-production stage).
 
-``Encoder`` is the contract and ``ClassicalEncoder`` (pyin + spectral flux) is the DSP
-implementation. The learned one, ``LearnedEncoder``, is not here at all: it wraps a
-``FrameNet``, so it lives in ``stemify.models`` with the network it holds.
+``Encoder`` is the contract. Its one implementation, ``LearnedEncoder``, is not here:
+it wraps a ``FrameNet``, so it lives in ``stemify.models`` with the network it holds,
+which is what keeps this layer free of torch.
 
-That split used to be a discipline inside this ``__init__`` -- export the interface,
-leave the torch-bearing implementation to be imported explicitly, so the light DSP path
-never transitively pulls torch. It is now a property of the layering instead: ``core``
-has no torch in it anywhere, and the neural implementation is one layer up. The guard
-that used to be a convention here is a test.
+``ClassicalEncoder`` -- spectral flux plus a pyin contour, the DSP floor -- used to sit
+beside the contract as the torch-free implementation that proved the split was real.
+It went when pyin did: its pitch source no longer exists, and the floor's numbers are
+recorded in docs/experiments.md rather than re-derived. The guard that the lower layers
+stay torch-free is now a test (``tests/test_layers.py``) rather than a resident example.
 """
 
 from stemify.transcription.encoders.base import Encoder

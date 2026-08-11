@@ -1,14 +1,13 @@
 """Cached validation scoring: given precomputed examples and a model, does it
-produce sane note-level metrics. Uses a fake onset model and synthetic examples,
-so no pyin or audio -- the CheckpointValidator's own pyin caching is I/O, tested by
-the smoke run, not here.
+produce sane note-level metrics. Uses fake models and synthetic examples, so no audio
+-- the CheckpointValidator's own CQT caching is I/O, tested by the smoke run.
 """
 
 import numpy as np
+import pytest
 import torch
 from torch import nn
 
-from stemify.music.contour import Contour
 from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.models.learned_encoder import LearnedEncoder
 from stemify.music.notes import NoteEvent
@@ -26,28 +25,11 @@ def _segment(model):
     pair deployment composes, fed one ValItem -- the same path."""
     encoder = LearnedEncoder(model, device="cpu")
     decoder = GreedyDecoder()
-    needs_contour = encoder.pitch_source == "pyin"
 
     def segment(ex):
-        contour = ex.contour if needs_contour else None
-        return decoder.decode(encoder.encode_features(contour, ex.load_features()))
+        return decoder.decode(encoder.encode_features(ex.load_features()))
 
     return segment
-
-
-class _CountingBaseline:
-    """Stands in for a PitchEstimator: returns a fixed contour, counts calls."""
-
-    name = "pyin"
-
-    def __init__(self):
-        self.calls = 0
-
-    def estimate(self, path):
-        self.calls += 1
-        times = np.linspace(0, 1, 5)
-        return Contour(times=times, freqs=np.full(5, 110.0),
-                       confidence=np.full(5, 0.9))
 
 
 class _FakeFrameNet(nn.Module):
@@ -74,30 +56,39 @@ class _FakeFrameNet(nn.Module):
 
 
 class _FakeOnsetModel(_FakeFrameNet):
-    """Onset logits peaking at given frame indices."""
+    """Onset logits peaking at given frame indices, over a flat held pitch.
 
-    def __init__(self, peak_frames):
+    The pitch head is not decoration here: it is the only pitch source there is, so a
+    model without one produces ``Frames`` a note decoder refuses by name. The pitch is
+    held constant at the examples' own ``held_pitch``, so every note-level assertion
+    turns purely on *where the boundaries fell* rather than on what was named.
+    """
+
+    frequency_heads = {"pitch": object()}
+
+    def __init__(self, peak_frames, midi: float = 45.0):
         super().__init__()
         self.peak_frames = peak_frames
+        self.midi = midi
 
     def forward(self, x):  # (1, 1, F, T)
+        from stemify.audio.features import N_BINS as PITCH_BINS
+        from stemify.models.heads import two_hot
+
         t = x.shape[-1]
         logits = torch.full((1, t, 1), -10.0)
         for f in self.peak_frames:
             logits[0, f, 0] = 10.0
-        return {"onset": logits}
+        pitch = (two_hot(torch.full((1, t), self.midi), PITCH_BINS) - 0.5) * 40.0
+        return {"onset": logits, "pitch": pitch}
 
 
 def _example(n_frames, hop, held_pitch, onset_frames):
     frame_times = np.arange(n_frames) * hop
-    # a single held note across the whole clip at held_pitch
-    freqs = np.full(n_frames, 440.0 * 2 ** ((held_pitch - 69) / 12))
-    contour = Contour(frame_times, freqs)
     features = np.random.rand(N_BINS, n_frames).astype(np.float32)  # (n_bins, T) CQT
     notes = [NoteEvent(onset=frame_times[f], offset=frame_times[f] + 0.2,
                        midi_pitch=held_pitch) for f in onset_frames]
-    ex = ValItem(frame_times=frame_times, contour_source=lambda: contour,
-                    notes=notes, features=features)
+    ex = ValItem(frame_times=frame_times, notes=notes, features=features)
     return ex, frame_times
 
 
@@ -148,11 +139,9 @@ def _encode(model):
     """The encode step the validator scores cues through: a checkpoint's
     LearnedEncoder over one ValItem."""
     encoder = LearnedEncoder(model, device="cpu")
-    needs_contour = encoder.pitch_source == "pyin"
 
     def encode(ex):
-        contour = ex.contour if needs_contour else None
-        return encoder.encode_features(contour, ex.load_features())
+        return encoder.encode_features(ex.load_features())
 
     return encode
 
@@ -186,37 +175,10 @@ def _framenet(pitch: bool):
     return RECIPES["frame"](["clean"], pitch=pitch).build_model()
 
 
-def test_the_encoder_reports_which_pitch_source_it_used():
-    assert LearnedEncoder(_framenet(pitch=True), device="cpu").pitch_source == "learned"
-    assert LearnedEncoder(_framenet(pitch=False), device="cpu").pitch_source == "pyin"
-    # ...and asking for pyin explicitly overrides a head that exists.
-    forced = LearnedEncoder(_framenet(pitch=True), device="cpu", use_pyin=True)
-    assert forced.pitch_source == "pyin"
-
-
-def test_the_validation_report_records_the_pitch_source(tmp_path):
-    """A learned-pitch report and a pyin report are otherwise identical in shape, for
-    a choice worth ~5 F1. Unrecorded, a saved artifact cannot say which made it."""
-    import json
-
-    from stemify.training.validation import build_eval_fn
-
-    def report_for(pitch: bool) -> dict:
-        out = tmp_path / ("learned" if pitch else "pyin")
-        model = _framenet(pitch)
-        fn = build_eval_fn({}, report_dir=out, log_artifact=lambda p, e: None,
-                      build_model=lambda: _framenet(pitch))
-        fn({"model": model.state_dict(), "loss": {}}, 0)
-        return json.loads((out / "validation_epoch000.json").read_text())
-
-    assert report_for(True)["pitch_source"] == "learned"
-    assert report_for(False)["pitch_source"] == "pyin"
-
-
 class _FakePitchHeadModel(_FakeFrameNet):
     """Onset logits plus a ``pitch`` frequency head, i.e. the shape every current
-    checkpoint has. Declaring ``frequency_heads`` is what makes ``pitch_source``
-    report "learned" -- the encoder reads that, not the weights."""
+    checkpoint has. Declaring ``frequency_heads`` is what makes ``has_pitch_head``
+    true -- the encoder reads that, not the weights."""
 
     frequency_heads = {"pitch": object()}
 
@@ -231,42 +193,30 @@ class _FakePitchHeadModel(_FakeFrameNet):
         return {"onset": onset, "voicing": voicing, "pitch": pitch}
 
 
-def test_pitch_head_model_never_reaches_for_pyin():
-    """The point of deferring the contour: a checkpoint that names its own pitch must
-    not cause a DSP contour to be computed.
-
-    It used to. ``CheckpointValidator`` ran pyin over every val track at construction,
-    and ``encode_features`` overwrote the result on the next line for any model with a
-    ``FrequencyHead`` -- a full pyin pass per track, discarded. This asserts on the
-    *source* rather than on timing, so it fails if anything starts reading the contour
-    again regardless of how fast pyin happens to be.
-    """
+def test_a_val_example_carries_no_pitch_source_of_its_own():
+    """``ValItem`` used to hold a deferred pyin contour, plus a lazy property and a
+    raising branch to manage it, for checkpoints with no pitch head. The contour comes
+    out of the same forward pass as onset and voicing now, so an example is features
+    and labels and nothing else."""
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0])
-
-    def explode() -> Contour:
-        raise AssertionError(
-            "a pitch-head checkpoint asked for a pyin contour; the head already "
-            "supplies one and it would be discarded"
-        )
-
-    ex.contour_source = explode
-    ex._contour = None
+    assert not hasattr(ex, "contour")
+    assert not hasattr(ex, "contour_source")
 
     scores = score_examples(_segment(_FakePitchHeadModel()), [ex])
     assert "f1" in scores
 
 
-def test_headless_model_still_gets_its_contour():
-    """The other half: a model with no pitch head has no other pitch source, so the
-    deferred contour must still be reachable -- five checkpoints on disk are this
-    shape. Counts calls to pin that it is fetched once, not per score."""
+def test_a_model_with_no_pitch_head_cannot_be_decoded_to_notes():
+    """The honest failure the pyin fallback used to hide. Such a checkpoint still
+    scores at cues level -- its onset and voicing curves are real -- but nothing can
+    name a note's pitch, so the decoder refuses rather than transcribing silence."""
     ex, _ = _example(90, hop=0.0116, held_pitch=45, onset_frames=[0])
-    calls = []
-    contour = ex.contour  # the fixture's contour, before we wrap the source
-    ex._contour = None
-    ex.contour_source = lambda: (calls.append(1), contour)[1]
 
-    segment = _segment(_FakeOnsetModel([0]))
-    segment(ex)
-    segment(ex)
-    assert calls == [1], "the contour should be computed once and memoised"
+    class _Headless(_FakeOnsetModel):
+        frequency_heads: dict = {}
+
+        def forward(self, x):
+            return {"onset": super().forward(x)["onset"]}
+
+    with pytest.raises(ValueError, match="carry none"):
+        score_examples(_segment(_Headless([0])), [ex])

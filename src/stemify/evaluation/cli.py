@@ -1,7 +1,7 @@
 """Command-line entry point for evaluating a model on a dataset.
 
-    uv run stemify-eval --encoder pyin --dataset slakh --level cues
-    uv run stemify-eval --encoder pyin --dataset slakh --level note
+    uv run stemify-eval --encoder learned --checkpoint m.pt --dataset slakh --level cues
+    uv run stemify-eval --encoder learned --checkpoint m.pt --dataset slakh --level note
     uv run stemify-eval --encoder learned --checkpoint m.pt \
         --dataset slakh --level note --decoder semicrf
 
@@ -13,11 +13,11 @@ This module is only argument parsing. The work is:
     CuesEvaluation(dataset, encoder).run() -> CuesReport    (--level cues)
     NoteEvaluation(dataset, Transcriber(encoder, decoder)).run() -> NoteReport  (--level note)
 
-Both levels score the same encoder -- ``pyin`` is the DSP floor (``ClassicalEncoder``),
-``learned`` a trained ``FrameNet`` (``LearnedEncoder``, needs ``--checkpoint``).
-Cues-level scores that encoder's per-frame evidence; note-level pairs it with a
-decoder and scores the notes. Adding a dataset means writing a ``Dataset`` subclass
-and one line in ``DATASETS``; the runners, metrics and reports need no changes.
+Both levels score the same encoder, a trained ``FrameNet`` (``LearnedEncoder``, needs
+``--checkpoint``). Cues-level scores that encoder's per-frame evidence; note-level
+pairs it with a decoder and scores the notes. Adding a dataset means writing a
+``Dataset`` subclass and one line in ``DATASETS``; the runners, metrics and reports
+need no changes.
 """
 
 import argparse
@@ -31,18 +31,17 @@ from stemify.corpus.filobass import FiloBassDataset
 from stemify.corpus.idmt_smt_bass import IdmtDataset
 from stemify.corpus.mdb_bass_synth import MdbDataset
 from stemify.corpus.slakh import SlakhDataset
-from stemify.transcription.decoders.greedy import DSP_PITCH_SPLIT_SEMITONES, GreedyDecoder
+from stemify.transcription.decoders.greedy import GreedyDecoder
 from stemify.transcription.decoders.base import Decoder
 from stemify.semicrf import SemiCRFDecoder
 from stemify.transcription.encoders.base import Encoder
-from stemify.transcription.encoders.classical import ClassicalEncoder
 from stemify.evaluation import CuesEvaluation, NoteEvaluation
 from stemify.evaluation.report import Report
 from stemify.transcription.transcriber import Transcriber
 from stemify.training.checkpoint import Checkpoint, load_framenet
 from stemify.audio.transforms import AudioTransform, DemucsSeparator, Identity
 
-ENCODERS = ("pyin", "learned")
+ENCODERS = ("learned",)
 
 # Decoders available to the note harness. The heuristic is the DSP floor; semicrf is
 # the learned global decoder, whose potentials must be restored from the checkpoint --
@@ -51,14 +50,17 @@ DECODERS = {"heuristic": GreedyDecoder, "semicrf": SemiCRFDecoder}
 
 
 def build_encoder(args: argparse.Namespace) -> Encoder:
-    """The encoder both levels score: the pyin DSP floor, or a trained model.
+    """The encoder both levels score: a trained model.
 
-    ``--encoder pyin`` is ``ClassicalEncoder`` (spectral-flux onset + pyin pitch), the floor.
     ``--encoder learned --checkpoint X`` loads a trained ``FrameNet`` into a
-    ``LearnedEncoder``. The learned encoder is CPU-pinned here -- eval is not the hot path.
+    ``LearnedEncoder``, CPU-pinned here -- eval is not the hot path.
+
+    ``--encoder pyin`` (``ClassicalEncoder``: spectral-flux onsets, pyin pitch) was the
+    other choice, and was the DSP floor every learned result is quoted against. Its
+    numbers are recorded in docs/experiments.md; the code that produced them is in git
+    history. Kept as a one-value choice rather than collapsed into a positional, so an
+    old command line fails on the *value* it named instead of on an unknown flag.
     """
-    if args.encoder == "pyin":
-        return ClassicalEncoder()
     if not args.checkpoint:
         raise SystemExit("--encoder learned needs --checkpoint <model.pt>")
     from stemify.models.learned_encoder import LearnedEncoder
@@ -67,26 +69,21 @@ def build_encoder(args: argparse.Namespace) -> Encoder:
 
 
 def build_decoder(args: argparse.Namespace) -> Decoder:
-    """The decoder, with the one setting that depends on which encoder feeds it.
+    """The decoder. ``heuristic`` takes its defaults; ``semicrf`` does not get to.
 
-    A pitch change places notes only for an encoder that has no trained onset head.
-    ``ClassicalEncoder`` emits a spectral-flux spike train and no voicing curve at all, so
-    for it the contour moving really is the only evidence a new note began -- and the
-    DSP floor has to stay the floor it always was, or every comparison against it
-    silently improves. For a ``LearnedEncoder`` the same rule overrides a ~7 ms-accurate
-    onset with a ~58 ms-late pitch transition, which is why it defaults off; see
-    ``greedy.PITCH_SPLIT_SEMITONES``.
+    This used to branch on the encoder, to give the DSP floor the pitch-change splitting
+    cue it needed and withhold it from a learned encoder, where the same rule overrode a
+    ~7 ms-accurate onset with a ~58 ms-late pitch transition. Both the cue and the floor
+    are gone, so there is nothing left to decide.
 
-    The semicrf path does not have that setting, but it has a harder requirement: its
-    potentials *are* the model. A default-constructed ``SemiCRFDecoder`` has ``w_on=1``
+    The semi-CRF has a harder requirement: its potentials *are* the model. A
+    default-constructed ``SemiCRFDecoder`` has ``w_on=1``
     and ``dur=zeros`` -- no duration preference at all, which is the mechanism the
     objective exists to learn -- and it still emits notes, so scoring through one
     produces plausible numbers for a model nobody trained. They are restored from the
     checkpoint here, and their absence is an error rather than a silent default.
     """
     if args.decoder == "heuristic":
-        if args.encoder == "pyin":
-            return GreedyDecoder(pitch_split_semitones=DSP_PITCH_SPLIT_SEMITONES)
         return GreedyDecoder()
 
     if args.checkpoint is None:
@@ -163,7 +160,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--encoder", choices=ENCODERS, required=True,
-        help="pyin (DSP floor) or learned (a trained FrameNet, with --checkpoint).",
+        help="learned: a trained FrameNet, with --checkpoint.",
     )
     ap.add_argument(
         "--decoder", choices=DECODERS, default="heuristic",

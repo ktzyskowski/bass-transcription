@@ -7,8 +7,9 @@ triggers on mid-sustain noise; pyin drops out for a frame), so the optional
 ``merge_gap_s`` pass undoes the dominant source of over-segmentation, trading
 against recall.
 
-A *pitch change* used to be a third splitting cue, and is now off by default -- see
-``PITCH_SPLIT_SEMITONES`` for why, and for the one encoder that still needs it.
+A *pitch change* used to be a third splitting cue. It is gone: it existed for the DSP
+floor, whose pyin contour walked a staircase into every real onset, and it went with
+pyin. See the ``docs/experiments.md`` sweep for what it cost while it was on.
 
 The pure core is ``group_contour`` -- no audio, no thresholds, taking onset *times*
 and a voiced mask directly -- so a boundary case is testable with a synthetic
@@ -41,34 +42,7 @@ from stemify.music.notes import NoteEvent
 # notes; revisit if short-note recall ever becomes the binding constraint.
 MIN_NOTE_S = 0.10
 
-# A sustained jump this far from the note's running pitch starts a new note.
-# ``None`` -- the default -- means a pitch change never places a note on its own.
-#
-# This was the only cue a DSP pipeline had for a new note, and it became an active
-# liability the moment a trained onset head existed. pyin reaches a note's true pitch
-# well *after* the attack -- often past the match tolerance -- so a real onset makes the
-# contour walk a staircase through intermediate pitches, and every step of that
-# staircase split. Worse, ``group_contour`` had already placed the note correctly at the
-# onset: the split then cut a sub-``MIN_NOTE_S`` fragment off its front, ``emit``
-# dropped that, and the note that survived started late enough to miss tolerance. One
-# reference note, one false negative and one interior-offpitch false positive.
-#
-# The sweep is monotone from 0.8 out to "off" with no interior optimum, which is the
-# shape of a superseded rule rather than a mistuned one. See docs/experiments.md.
-PITCH_SPLIT_SEMITONES: float | None = None
-
-# What an encoder with no trained onset head falls back to. ``ClassicalEncoder`` has only a
-# spectral-flux spike train and no voicing curve at all, so for it a pitch change
-# really is the only evidence that a new note began; this is the value the project
-# shipped with, kept so the DSP floor stays the floor it always was.
-DSP_PITCH_SPLIT_SEMITONES = 0.8
-
-# "Close enough in pitch to be the same note" for the rejoin pass below. Deliberately
-# its own constant rather than reusing the split tolerance: the two answer different
-# questions ("is this a new note" against "were these ever one note"), and while they
-# shared one, disabling the split silently turned the merge pass into "merge every
-# adjacent note whatever its pitch" -- a perfect fifth collapsing into one note at the
-# average of the two.
+# "Close enough in pitch to be the same note" for the rejoin pass below.
 MERGE_PITCH_SEMITONES = 0.8
 
 # Two same-pitch notes closer than this are rejoined: the split that separated them
@@ -124,7 +98,6 @@ def group_contour(
     voiced: np.ndarray | None = None,
     *,
     min_note_s: float = MIN_NOTE_S,
-    pitch_split_semitones: float | None = PITCH_SPLIT_SEMITONES,
     merge_pitch_semitones: float = MERGE_PITCH_SEMITONES,
     merge_gap_s: float | None = MERGE_GAP_S,
 ) -> list[NoteEvent]:
@@ -184,15 +157,7 @@ def group_contour(
         if start is None:
             start = i
             continue
-        # Voiced continuation: does a boundary fall here? (No pitch to compare
-        # against when the run so far is all pyin-pitchless -> no pitch split.)
-        prev = midi[start:i]
-        jumped = (
-            pitch_split_semitones is not None
-            and not np.isnan(prev).all()
-            and abs(midi[i] - np.nanmedian(prev)) > pitch_split_semitones
-        )
-        if onset_frame[i] or jumped:
+        if onset_frame[i]:
             emit(start, i)
             start = i
     if start is not None:
@@ -240,7 +205,6 @@ class GreedyDecoder(Decoder):
     def __init__(
         self,
         min_note_s: float = MIN_NOTE_S,
-        pitch_split_semitones: float | None = PITCH_SPLIT_SEMITONES,
         merge_gap_s: float | None = MERGE_GAP_S,
         onset_threshold: float = ONSET_THRESHOLD,
         min_onset_gap_s: float = MIN_ONSET_GAP_S,
@@ -248,7 +212,6 @@ class GreedyDecoder(Decoder):
         merge_pitch_semitones: float = MERGE_PITCH_SEMITONES,
     ) -> None:
         self.min_note_s = min_note_s
-        self.pitch_split_semitones = pitch_split_semitones
         self.merge_gap_s = merge_gap_s
         self.merge_pitch_semitones = merge_pitch_semitones
         self.onset_threshold = onset_threshold
@@ -262,9 +225,10 @@ class GreedyDecoder(Decoder):
         if frames.contour is None:
             raise ValueError(
                 "GreedyDecoder names every note's pitch from the contour, and these "
-                "Frames carry none. Encode with a pitch source (pyin, or a model with "
-                "a FrequencyHead), or decode with SemiCRFDecoder, which reads the "
-                "pitch head's own per-bin logits instead of a point estimate."
+                "Frames carry none -- the model has no FrequencyHead, so it was "
+                "trained without --pitch. Score it at cues level (its onset and "
+                "voicing curves are real evidence), or decode with SemiCRFDecoder, "
+                "which reads per-bin pitch logits rather than a point estimate."
             )
         # `Frames` holds numpy at decode and tensors under training, and this decoder is
         # the numpy half: scipy peak-picking has no tensor path. `asarray` is a view on
@@ -286,7 +250,6 @@ class GreedyDecoder(Decoder):
             onsets,
             voiced,
             min_note_s=self.min_note_s,
-            pitch_split_semitones=self.pitch_split_semitones,
             merge_pitch_semitones=self.merge_pitch_semitones,
             merge_gap_s=self.merge_gap_s,
         )

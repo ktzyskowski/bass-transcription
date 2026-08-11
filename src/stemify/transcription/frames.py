@@ -29,9 +29,9 @@ peak-picks and thresholds, while ``SemiCRFDecoder`` scores the raw distributions
 recovers sub-threshold onsets the greedy pass discards.
 
 **``contour`` is optional.** It is a pyin point estimate, and it is here because
-``ClassicalEncoder`` has nothing else and a decoder still has to name a note. A model
-carrying a ``FrequencyHead`` supersedes it outright, so it is no longer a required
-field -- which is what it had become in practice, held by callers that never read it.
+a decoder has to name a note somehow. It is optional because a checkpoint without a
+``FrequencyHead`` still produces valid evidence -- onset and voicing, scoreable at
+cues level -- it simply cannot be decoded to notes.
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ if TYPE_CHECKING:  # torch is not imported at runtime -- see below
 
     Array: TypeAlias = np.ndarray | torch.Tensor
 else:
-    # This module is on the DSP path (``ClassicalEncoder`` reaches it), and that path
-    # deliberately does not pull torch. Annotations are lazy under ``from __future__
+    # This module sits below ``models``, and that layer deliberately does not pull
+    # torch. Annotations are lazy under ``from __future__
     # import annotations``, so the union above is never evaluated at runtime and this
     # placeholder only exists for anything that reads the name eagerly.
     Array = np.ndarray
@@ -60,9 +60,7 @@ PROBABILITY_HEADS = frozenset({"onset", "voicing"})
 
 A property of *this* type's contract, not of any network: it is what a consumer may
 assume about ``heads[name]`` without asking who produced it. The binary heads are
-squashed because their consumers are thresholds and peak-pickers (and because
-``ClassicalEncoder`` emits a 0/1 spike train, which is a probability and not a logit),
-while pitch stays raw because every consumer normalises across the bin axis itself and
+squashed because their consumers are thresholds and peak-pickers, while pitch stays raw because every consumer normalises across the bin axis itself and
 squashing each bin independently first would be a different distribution.
 
 The sigmoid that enforces this lives in ``models.frames``, beside the network whose
@@ -90,8 +88,8 @@ class Frames:
     hidden: Array | None = None
     """``(T, C)`` backbone activations, or ``None`` from a producer that has no network.
 
-    Optional rather than required because ``ClassicalEncoder`` has no backbone at all,
-    and because every checkpoint predating this field decodes without one. A decoder
+    Optional rather than required because every checkpoint predating this field
+    decodes without one. A decoder
     that needs it should say so when it is missing rather than pooling zeros.
     """
 
