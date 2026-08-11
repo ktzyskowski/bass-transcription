@@ -30,6 +30,7 @@ import torch
 from torch.utils.data import IterableDataset, get_worker_info
 
 from stemify.audio.features import SILENCE_DB
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.tracks import (
@@ -75,8 +76,7 @@ class ChunkBatch:
     y: dict[str, torch.Tensor]      # {head: (B, window)}, on the feature grid
     golds: list[Segmentation]
     frame_times: list[np.ndarray]
-    context: int                    # DP frames of left context; set by the dataset
-    right: int                      # DP frames the scan must not read; ditto
+    geometry: ChunkGeometry         # how the dataset cut the track; see `fit.geometry`
     streams: list[int]
     resets: list[bool]
     prevs: list[int]                # per row: what precedes its first gold segment
@@ -85,14 +85,14 @@ class ChunkBatch:
         return len(self.streams)
 
 
-def collate(chunks: list[Chunk], context: int, right: int) -> ChunkBatch:
+def collate(chunks: list[Chunk], geometry: ChunkGeometry) -> ChunkBatch:
     """Stack chunks into a batch. No padding: every chunk is the same width, which is
     also what lets the scan be captured as a CUDA graph.
 
-    ``context`` and ``right`` are passed in rather than read off the chunks. They are
-    properties of how the *dataset* cut the track, identical for every chunk it emits,
-    and copying a constant onto each row only to check the copies still agree is a
-    round trip that invents the invariant it then guards.
+    ``geometry`` is passed in rather than read off the chunks. It describes how the
+    *dataset* cut the track, identically for every chunk it emits, and copying a
+    constant onto each row only to check the copies still agree is a round trip that
+    invents the invariant it then guards.
 
     ``y`` stacks by key without this knowing any of them, so a future head (string,
     fret, velocity) costs nothing here."""
@@ -113,8 +113,7 @@ def collate(chunks: list[Chunk], context: int, right: int) -> ChunkBatch:
         },
         golds=[c.gold for c in chunks],
         frame_times=[c.frame_times for c in chunks],
-        context=context,
-        right=right,
+        geometry=geometry,
         streams=[c.stream for c in chunks],
         resets=[c.reset for c in chunks],
         prevs=[c.prev for c in chunks],
@@ -151,13 +150,17 @@ class _Track:
         # second thing to explain in any run that used it.
         self._drop_context = drop_context
         self._chunk, self._dmax, self._stride = chunk, dmax, stride
+        # Left context is `dmax`: the scan's candidate starts reach exactly that far
+        # back, so a window carrying less would cut a representable span in half.
+        self.geometry = ChunkGeometry(
+            context=dmax, chunk=chunk, right=right, stride=stride
+        )
         ft = self._examples[0].frame_times
         self._n_cqt = ft.size
         self._n_dp = self._n_cqt // stride
         # librosa's grid is exactly n * hop_length / sr, so the window's times -- including
         # the padded ones outside the track -- extrapolate exactly from one hop.
         self._hop = float(ft[1] - ft[0]) if ft.size > 1 else 0.01
-        self._w_dp = dmax + chunk + right
         # Gold is built once over the whole track, then split by chunk, so the pieces
         # tile it exactly -- which is what makes the per-chunk losses telescope.
         self._gold = gold_segments(ft[::stride], track.notes, dmax, labels)
@@ -168,8 +171,10 @@ class _Track:
         self, c: int
     ) -> tuple[np.ndarray, np.ndarray, Segmentation, dict[str, np.ndarray], int]:
         lo, hi = c * self._chunk, (c + 1) * self._chunk
-        a_dp = lo - self._dmax                      # negative on a track's first chunk
-        a, w = a_dp * self._stride, self._w_dp * self._stride
+        # Origin is negative on a track's first chunk: the window begins before the
+        # track does and is zero-padded there.
+        frame = self.geometry.at(lo - self.geometry.context)
+        a, w = frame.cqt_window()
 
         # (C, n_bins, w) -- every input channel, silence-padded where the window runs
         # off either end of the track.
@@ -182,8 +187,14 @@ class _Track:
         # worst dmax earlier, so a dmax left context always covers it -- the same
         # constant the scan needs for its own candidate starts.
         keep = [k for k, (_, _, j) in enumerate(self._gold) if lo < j <= hi]
+        # Track DP frames become this window's own here -- the one coordinate change
+        # in the pipeline, and the seam both recorded bugs in this area came through.
         gold = [
-            (self._gold[k][0], self._gold[k][1] - a_dp, self._gold[k][2] - a_dp)
+            (
+                self._gold[k][0],
+                frame.localise(self._gold[k][1]),
+                frame.localise(self._gold[k][2]),
+            )
             for k in keep
         ]
         # What the *previous* chunk ended on. Gold tiles the track contiguously, so the
@@ -301,6 +312,12 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
         # receptive field does not see zero-padding at the chunk's right edge. The left
         # edge needs no such margin -- dmax of real context already covers it.
         self.right_context = right_context
+        # One geometry for every chunk this dataset emits, and the same one each
+        # `_Track` cuts with -- so the batch cannot describe a cutting that differs
+        # from the one that produced it.
+        self.geometry = ChunkGeometry(
+            context=dmax, chunk=chunk_frames, right=right_context, stride=stride
+        )
 
     def _shard(self) -> tuple[list[TrainItem], int]:
         """This worker's tracks, and the id its first stream takes."""
@@ -381,4 +398,4 @@ class ChunkDataset(IterableDataset[ChunkBatch]):
                     Chunk(feats, ft, gold=gold, y=y, stream=base + b, reset=reset,
                           prev=prev)
                 )
-            yield collate(row, context=self.dmax, right=self.right_context)
+            yield collate(row, self.geometry)

@@ -20,6 +20,7 @@ from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.music.notes import NoteEvent
 from stemify.fitting.config import TrainConfig
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer
@@ -74,8 +75,7 @@ def _batch():
             _chunk([(0.2, 0.9), (1.2, 1.9)], [110, 146], stream=0),
             _chunk([(0.3, 0.8), (1.4, 2.0)], [98, 130], stream=1),
         ],
-        context=0,
-        right=0,
+        ChunkGeometry(context=0, chunk=1, right=0, stride=STRIDE),
     )
 
 

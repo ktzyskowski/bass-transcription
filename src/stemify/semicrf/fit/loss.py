@@ -225,16 +225,20 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         a note's onset to a frame with no onset under it. On a track's first chunk this
         reduces to ``(context, START)`` exactly, which is what it always was.
 
-        The slot arithmetic is the scan's own: its first step is ``j = context + 1`` and
-        reads window index ``k`` as position ``j - dmax + k``. A gold segment ending
-        inside the chunk starts at most ``dmax`` back, so the slot always lands in
-        range; ``initial_window`` raises if it does not.
+        The slot arithmetic is ``ChunkGeometry.seed_slot`` -- the geometry that cut the
+        chunk answers where one of its own positions lands in the window, rather than
+        this function re-deriving it from ``context`` and ``dmax``. A gold segment
+        ending inside the chunk starts at most ``dmax`` back, so the slot always lands
+        in range; ``initial_window`` raises if it does not.
         """
         n_rows = self.decoder.scorer.labels.n_rows
+        geometry = batch.geometry
         slots, labels = [], []
         for gold, prev in zip(batch.golds, batch.prevs, strict=True):
-            start = gold[0][1] if gold else batch.context
-            slots.append(start - batch.context - 1 + dmax)
+            # No gold in this chunk: seed at the scan's own start, which is a track's
+            # beginning and the only place `START` genuinely belongs.
+            start = gold[0][1] if gold else geometry.context
+            slots.append(geometry.seed_slot(start, dmax))
             labels.append(prev)
         return initial_window(
             torch.zeros(0, device=device), len(batch), dmax, n_rows,
@@ -314,7 +318,8 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         frames_list = frames_from_output(out, batch.frame_times, hidden=hidden)
         carry, prev_A = self._resume(batch, device)
         A, gold, window = self.decoder.nll_chunk(
-            frames_list, batch.golds, carry, batch.context, batch.right, batch.prevs
+            frames_list, batch.golds, carry,
+            batch.geometry.context, batch.geometry.right, batch.prevs
         )
         # The telescoping term. Mean over rows so the loss is per-track rather than
         # per-batch, then divided by the frames it scored so it is a *rate*.
@@ -404,11 +409,10 @@ class SemiCRFLoss(Loss[ChunkBatch]):
         between the terms. It would also supervise the margins twice per epoch, since
         one chunk's context is the previous chunk's scored region.
 
-        ``stride`` converts the DP grid (where ``context``/``right`` are counted) to
-        the feature grid the heads emit on.
+        The conversion from the DP grid (where ``context`` and ``right`` are counted)
+        to the feature grid the heads emit on is the geometry's, not this function's.
         """
-        stride = self.decoder.stride
-        return batch.context * stride, frames - batch.right * stride
+        return batch.geometry.scored_slice(frames)
 
     def scored_frames(self, batch: ChunkBatch, frames: int) -> int:
         """How many feature frames ``scored_slice`` covers -- the denominator that puts

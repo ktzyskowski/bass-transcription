@@ -252,7 +252,7 @@ def test_a_chain_starts_where_its_gold_does_not_where_the_chunk_does(track):  # 
         seeded = (window[0] != window.min()).nonzero()
         assert seeded.shape[0] == 1, "exactly one reachable (position, label)"
         slot, label = int(seeded[0, 0]), int(seeded[0, 1])
-        position = batch.context + 1 - DMAX + slot
+        position = batch.geometry.context + 1 - DMAX + slot
         assert position == batch.golds[0][0][1], (
             "the chain is seeded at the chunk's edge rather than where its earliest "
             "gold segment begins, so that segment is scored but not normalised"

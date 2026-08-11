@@ -39,6 +39,7 @@ from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.conditions import CONDITIONS
 from stemify.semicrf.fit.tracks import train_items
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 
@@ -121,7 +122,7 @@ def _whole_track_nll(model, cache, items, feats) -> float:
         prev=BINARY.START,
     )
     loss = SemiCRFLoss(decoder)
-    batch = collate([chunk], context=0, right=0)
+    batch = collate([chunk], ChunkGeometry(context=0, chunk=1, right=0, stride=1))
     with torch.no_grad():
         _, metrics = loss.compute(model, batch, torch.device("cpu"))
     # Multiplied back out of nats-per-frame into the structured NLL, which is the

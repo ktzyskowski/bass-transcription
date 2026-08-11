@@ -29,6 +29,7 @@ from torch import nn
 from stemify.conditions import CONDITIONS
 from stemify.persistence.serde import CachedItem
 from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.gold import gold_segments
@@ -122,7 +123,7 @@ def _whole_track_nll(model, items, feats, transitions: bool = False) -> float:
         y={}, stream=0, reset=True, prev=LABELS.START,
     )
     loss = SemiCRFLoss(decoder)
-    batch = collate([chunk], context=0, right=0)
+    batch = collate([chunk], ChunkGeometry(context=0, chunk=1, right=0, stride=1))
     with torch.no_grad():
         _, metrics = loss.compute(model, batch, torch.device("cpu"))
     return metrics["total"] * loss.scored_frames(batch, batch.features.shape[-1])

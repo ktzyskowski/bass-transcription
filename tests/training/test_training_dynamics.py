@@ -65,6 +65,7 @@ from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
 from stemify.semicrf import SemiCRFDecoder
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.fit.tracks import train_items
@@ -205,7 +206,7 @@ def _true_nll(model: nn.Module, decoder: SemiCRFDecoder, items, feats) -> float:
         y={}, stream=0, reset=True, prev=LABELS.START,
     )
     probe = SemiCRFLoss(decoder)
-    batch = collate([chunk], context=0, right=0)
+    batch = collate([chunk], ChunkGeometry(context=0, chunk=1, right=0, stride=1))
     was_training = model.training
     model.eval()
     with torch.no_grad():

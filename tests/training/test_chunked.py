@@ -27,6 +27,7 @@ from stemify.semicrf.spans import Grid
 from stemify.music.notes import NoteEvent
 from stemify.persistence.serde import CachedItem
 from stemify.audio.sources import Sources
+from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import ChunkDataset, collate
 from stemify.semicrf.fit.tracks import channel_window, train_items
 
@@ -99,7 +100,7 @@ def test_every_window_has_the_same_width_and_context(tmp_path, cache):
     want = (30 + 40 + 5) * STRIDE
     for batch in batches:
         assert batch.features.shape[-1] == want
-        assert batch.context == 30
+        assert batch.geometry.context == 30
         assert batch.features.shape[:3] == (2, 1, N_BINS)
 
 
@@ -193,7 +194,7 @@ def test_collate_rejects_mixed_widths(tmp_path, cache):
     wide = Chunk(np.zeros((1, N_BINS, 7)), np.arange(7) * HOP_S, [], {}, 0, False, 0)
     narrow = Chunk(a.features[0].numpy(), a.frame_times[0], [], {}, 1, False, 0)
     with pytest.raises(ValueError, match="share a shape"):
-        collate([wide, narrow], context=30, right=0)
+        collate([wide, narrow], ChunkGeometry(context=30, chunk=1, right=0, stride=1))
 
 
 # There is no "collate rejects mixed margins" test any more, and its absence is the
@@ -215,7 +216,7 @@ def test_collate_stacks_targets_it_has_never_heard_of(tmp_path, cache):
               {"nonsense": np.full(w, float(i))}, i, False, 0)
         for i in range(2)
     ]
-    batch = collate(rows, context=30, right=0)
+    batch = collate(rows, ChunkGeometry(context=30, chunk=1, right=0, stride=1))
     assert set(batch.y) == {"nonsense"}
     assert batch.y["nonsense"].shape == (2, w)
     assert batch.y["nonsense"][1, 0] == 1.0
@@ -272,5 +273,5 @@ def test_chunks_through_the_carry_equal_the_whole_track_log_partition(tmp_path, 
         # The batch carries no contour -- no potential reads one -- so the cue
         # builder is handed the same synthetic track the whole-track pass used.
         e = build_evidence(_cues(batch.frame_times[0], contour), STRIDE)
-        A, carry = chunk_log_partition(dec.scorer, e, grid, carry, batch.context)
+        A, carry = chunk_log_partition(dec.scorer, e, grid, carry, batch.geometry.context)
     assert torch.allclose(A, whole, atol=1e-3), f"{A.item()} != {whole.item()}"
