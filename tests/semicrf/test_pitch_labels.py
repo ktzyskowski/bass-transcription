@@ -15,10 +15,11 @@ import numpy as np
 import pytest
 
 from stemify.music.notes import NoteEvent
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 
 from spanscorer import CueScorer
+
+from refs import gold
 
 BINS = 144
 LABELS = LabelSet.from_bins(BINS)          # MIDI 27..74
@@ -36,7 +37,7 @@ def _notes(pitches: list[int]) -> list[NoteEvent]:
 
 def test_gold_labels_each_note_with_its_own_pitch():
     pitches = [40, 45, 52, 33]
-    segs = gold_segments(FT, _notes(pitches), dmax=115, labels=LABELS)
+    segs = gold(FT, _notes(pitches), dmax=115, labels=LABELS)
     named = [LABELS.midi_of(lab) for lab, _, _ in segs if LABELS.is_note(lab)]
     assert named == pitches
 
@@ -44,7 +45,7 @@ def test_gold_labels_each_note_with_its_own_pitch():
 def test_gold_under_the_default_alphabet_is_still_binary():
     """The default has to keep meaning what it meant, or every existing checkpoint's
     gold changes underneath it."""
-    segs = gold_segments(FT, _notes([40, 45]), dmax=115)
+    segs = gold(FT, _notes([40, 45]), dmax=115)
     assert {lab for lab, _, _ in segs} <= {0, BINARY.REST}
 
 
@@ -53,8 +54,8 @@ def test_a_gold_built_under_the_wrong_alphabet_is_wrong_and_quiet():
     defaulted. Both calls succeed and return the same *shape*; only the labels differ,
     and under the wide alphabet the default's answer means E1 every time."""
     notes = _notes([40, 45, 52])
-    wide = gold_segments(FT, notes, dmax=115, labels=LABELS)
-    defaulted = gold_segments(FT, notes, dmax=115)
+    wide = gold(FT, notes, dmax=115, labels=LABELS)
+    defaulted = gold(FT, notes, dmax=115)
     assert [(i, j) for _, i, j in wide] == [(i, j) for _, i, j in defaulted]
     assert {lab for lab, _, _ in defaulted if lab != BINARY.REST} == {0}
     assert LABELS.midi_of(0) == LABELS.lo != 40
@@ -64,7 +65,7 @@ def test_pitches_outside_the_alphabet_clamp_rather_than_raise():
     """A corpus note below the head's lowest bin has to land *somewhere*: the alphabet
     is derived from the pitch axis, so anything outside it is unrepresentable evidence,
     not a data error. Clamping keeps the tiling total, which the telescoping needs."""
-    segs = gold_segments(FT, _notes([LABELS.lo - 5]), dmax=115, labels=LABELS)
+    segs = gold(FT, _notes([LABELS.lo - 5]), dmax=115, labels=LABELS)
     assert [LABELS.midi_of(lab) for lab, _, _ in segs if LABELS.is_note(lab)] == [LABELS.lo]
 
 
@@ -78,7 +79,7 @@ def test_the_decoder_reads_the_pitch_off_the_label(monkeypatch):
     from stemify.semicrf.neural import NeuralSpanScorer
 
     pitches = [40, 45, 52, 33]
-    segs = gold_segments(FT, _notes(pitches), dmax=115, labels=LABELS)
+    segs = gold(FT, _notes(pitches), dmax=115, labels=LABELS)
     scorer = NeuralSpanScorer(LABELS, trunk_dim=4, dmax_s=115 * DT, dmax_frames=115)
     dec = SemiCRFDecoder(scorer=scorer)
     import torch

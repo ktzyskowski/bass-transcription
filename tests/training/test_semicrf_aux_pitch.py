@@ -16,7 +16,6 @@ import torch
 from torch import nn
 
 from stemify.semicrf import SemiCRFDecoder
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.models.heads import pitch_ce
 from stemify.music.notes import NoteEvent
@@ -25,6 +24,8 @@ from stemify.semicrf.fit.dataset import Chunk, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 
 from spanscorer import CueScorer
+
+from refs import gold
 
 DT = 0.0116
 T = 240
@@ -83,7 +84,7 @@ def _chunk(spans, stream: int, *, midi: float | None = 45.0) -> Chunk:
     return Chunk(
         features=feats[None],
         frame_times=TIMES,
-        gold=gold_segments(TIMES[::STRIDE], notes, dmax),
+        gold=gold(TIMES[::STRIDE], notes, dmax),
         y={"pitch": y_pitch},
         stream=stream,
         reset=True,

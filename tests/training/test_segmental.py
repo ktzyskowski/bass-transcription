@@ -16,7 +16,6 @@ import torch
 from torch import nn
 
 from stemify.semicrf import SemiCRFDecoder
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY
 from stemify.music.notes import NoteEvent
 from stemify.fitting.config import TrainConfig
@@ -26,6 +25,8 @@ from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.training.trainer import Trainer
 
 from spanscorer import CueScorer
+
+from refs import gold
 
 DT = 0.0116
 T = 240
@@ -63,7 +64,7 @@ def _chunk(spans, pitches_hz, stream: int) -> Chunk:
         # (1, n_bins, T): the channel axis is always present, single-channel or not.
         features=feats[None],
         frame_times=TIMES,
-        gold=gold_segments(TIMES[::STRIDE], notes, dmax),
+        gold=gold(TIMES[::STRIDE], notes, dmax),
         y={},
         stream=stream,
         reset=True,

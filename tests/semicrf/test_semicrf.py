@@ -28,10 +28,11 @@ from stemify.semicrf.window import initial_window
 from stemify.semicrf.viterbi import viterbi
 from stemify.semicrf.score import segmentation_score, segmentation_scores
 from stemify.semicrf.evidence import Evidence, build_evidence
-from stemify.semicrf.gold import gold_segments
 from stemify.music.notes import NoteEvent
 
 from spanscorer import CueScorer, fitted
+
+from refs import gold as build_gold, sounding
 
 SPANS = [(0.2, 0.9), (1.2, 1.9)]
 HZ = [110.0, 146.0]
@@ -39,7 +40,7 @@ MIDI = [45, 50]
 
 DT = 0.0116  # feature hop, seconds
 T = 240
-TIMES = np.arange(T) * DT  # ~2.8 s dmax
+TIMES = np.arange(T) * DT  # ~2.8 s grid
 
 
 def _curve(spans: list[tuple[float, float]], hi: float, lo: float) -> np.ndarray:
@@ -73,30 +74,6 @@ def _notes(spans: list[tuple[float, float]], midis: list[float]) -> list[NoteEve
     return [NoteEvent(onset=a, offset=b, midi_pitch=m) for (a, b), m in zip(spans, midis, strict=True)]
 
 
-def test_gold_rest_across_audible_gap():
-    # 0.9 -> 1.2 is a 0.3 s gap (> GAP_REST_S): a real rest between the two notes.
-    dec = SemiCRFDecoder(CueScorer())
-    e = build_evidence(_two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0]), dec.stride)
-    dmax = dec.scorer.dmax_for(e.frame_times[0])
-    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
-    labels = [lab for lab, _, _ in gold]
-    assert labels.count(NOTE) == 2
-    assert REST in labels  # the audible gap became a rest
-
-
-def test_gold_closes_a_note_off_artifact_gap():
-    # 0.5 -> 0.55 is a 0.05 s gap (< GAP_REST_S): a note-off artifact, so the notes
-    # are made contiguous (note -> note) with no interior rest.
-    dec = SemiCRFDecoder(CueScorer())
-    e = build_evidence(_two_note_cues([(0.2, 0.5), (0.55, 0.9)], [110.0, 110.0]), dec.stride)
-    dmax = dec.scorer.dmax_for(e.frame_times[0])
-    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.5), (0.55, 0.9)], [45, 45]), dmax)
-    # No rest between the notes: everything from the first note to the last is NOTE.
-    note_idx = [k for k, (lab, _, _) in enumerate(gold) if lab == NOTE]
-    between = gold[note_idx[0] : note_idx[-1] + 1]
-    assert all(lab == NOTE for lab, _, _ in between)
-
-
 def _score_by_loop(scorer, ev, gold, dmax):
     """The pre-vectorisation reference: one segment at a time, straight from the
     definition ``sum of unary + incoming transition``.
@@ -122,8 +99,7 @@ def test_gold_score_matches_the_per_segment_loop():
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     e = build_evidence(cues, dec.stride)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    dmax = dmax
-    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    gold = build_gold(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
     assert len(gold) > 2  # the test is vacuous if gold is trivial
 
     fast = segmentation_score(dec.scorer, e, gold, dmax)
@@ -137,8 +113,7 @@ def test_gold_score_gradient_matches_the_per_segment_loop():
     cues = _two_note_cues([(0.2, 0.9), (1.2, 1.9)], [110.0, 146.0])
     e = build_evidence(cues, dec.stride)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    dmax = dmax
-    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
+    gold = build_gold(e.frame_times[0], _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), dmax)
 
     g_fast = torch.autograd.grad(
         segmentation_score(dec.scorer, e, gold, dmax), list(dec.scorer.parameters()),
@@ -172,7 +147,7 @@ def test_gold_scores_batched_equals_per_track():
     ev = build_evidence([a, short], dec.stride)
     dmax = dec.scorer.dmax_for(ev.frame_times[0])
     golds = [
-        gold_segments(ft, n, dmax)
+        build_gold(ft, n, dmax)
         for ft, n in zip(ev.frame_times, [na, ns], strict=True)
     ]
 
@@ -193,8 +168,7 @@ def test_gold_scores_handles_a_track_with_no_segments():
     cues = _two_note_cues([(0.2, 0.9)], [110.0])
     e = build_evidence(cues, dec.stride)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    dmax = dmax
-    gold = gold_segments(e.frame_times[0], _notes([(0.2, 0.9)], [45]), dmax)
+    gold = build_gold(e.frame_times[0], _notes([(0.2, 0.9)], [45]), dmax)
 
     scores = segmentation_scores(dec.scorer, build_evidence([cues, cues], dec.stride), [[], gold], dmax)
     assert scores[0].item() == 0.0
@@ -584,7 +558,6 @@ def test_chunked_carry_holds_for_chunks_shorter_than_dmax():
     dec = SemiCRFDecoder(fitted(CueScorer()))
     e = _long_emissions(dec)
     dmax = dec.scorer.dmax_for(e.frame_times[0])
-    dmax = dmax
 
     size = max(1, dmax // 3)
     n = e.n_frames // size
@@ -721,16 +694,16 @@ def test_nll_is_differentiable_and_trains_down():
     notes = _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
 
-    first = dec.nll(cues, notes)
+    first = dec.nll(cues, sounding(cues.frame_times, notes))
     assert first.requires_grad
     for _ in range(60):
         opt.zero_grad()
-        loss = dec.nll(cues, notes)
+        loss = dec.nll(cues, sounding(cues.frame_times, notes))
         loss.backward()
         # a learned potential receives gradient -> the encoder would too, end to end
         assert dec.scorer.w_on.grad is not None
         opt.step()
-    assert dec.nll(cues, notes).item() < first.item()
+    assert dec.nll(cues, sounding(cues.frame_times, notes)).item() < first.item()
 
 
 def test_nll_grad_reaches_the_encoder_through_grad_bearing_frames():
@@ -748,7 +721,7 @@ def test_nll_grad_reaches_the_encoder_through_grad_bearing_frames():
         cues.frame_times, onset=onset_logit + bias, voicing=voicing_logit,
         contour=cues.contour,
     )
-    dec.nll(tcues, notes).backward()
+    dec.nll(tcues, sounding(tcues.frame_times, notes)).backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
 
 
@@ -768,7 +741,7 @@ def test_decode_recovers_two_notes_after_fitting():
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(120):
         opt.zero_grad()
-        dec.nll(cues, notes).backward()
+        dec.nll(cues, sounding(cues.frame_times, notes)).backward()
         opt.step()
 
     decoded = dec.decode(cues)
@@ -794,8 +767,13 @@ def test_batched_nll_equals_single_track_padded():
     )
     ns = _notes([(0.2, 0.9)], [45])
 
-    batched = dec.nll_batch([a, short], [na, ns])
-    single = torch.stack([dec.nll(a, na), dec.nll(short, ns)])
+    batched = dec.nll_batch(
+        [a, short], [sounding(a.frame_times, na), sounding(short.frame_times, ns)]
+    )
+    single = torch.stack([
+        dec.nll(a, sounding(a.frame_times, na)),
+        dec.nll(short, sounding(short.frame_times, ns)),
+    ])
     assert torch.allclose(batched, single, atol=1e-4)
 
 
@@ -813,7 +791,11 @@ def test_batched_nll_grad_survives_padding():
 
     short = _two_note_cues([(0.3, 0.8)], [98.0])
     dec.nll_batch(
-        [tcues, short], [_notes([(0.2, 0.9), (1.2, 1.9)], [45, 50]), _notes([(0.3, 0.8)], [43])]
+        [tcues, short],
+        [
+            sounding(tcues.frame_times, _notes([(0.2, 0.9), (1.2, 1.9)], [45, 50])),
+            sounding(short.frame_times, _notes([(0.3, 0.8)], [43])),
+        ],
     ).mean().backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
 
@@ -844,7 +826,7 @@ def _fitted(cues: Frames, notes: list[NoteEvent], steps: int = 120) -> SemiCRFDe
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(steps):
         opt.zero_grad()
-        dec.nll(cues, notes).backward()
+        dec.nll(cues, sounding(cues.frame_times, notes)).backward()
         opt.step()
     return dec
 
@@ -854,7 +836,7 @@ def test_numpy_cues_decode_on_device(device):
     # placement is the authority and the emissions must follow the parameters.
     dec = SemiCRFDecoder(CueScorer()).to(device)
     cues, notes = _two_note_cues(SPANS, HZ), _notes(SPANS, MIDI)
-    nll = dec.nll(cues, notes)
+    nll = dec.nll(cues, sounding(cues.frame_times, notes))
     assert nll.device.type == device.type
     assert isinstance(dec.decode(cues), list)
 
@@ -864,7 +846,7 @@ def test_tensor_cues_grad_reaches_encoder_on_device(device):
     dec = SemiCRFDecoder(CueScorer()).to(device)
     bias = torch.zeros(1, device=device, requires_grad=True)
     tcues = _tensor_cues(_two_note_cues(SPANS, HZ), device, bias)
-    dec.nll(tcues, _notes(SPANS, MIDI)).backward()
+    dec.nll(tcues, sounding(tcues.frame_times, _notes(SPANS, MIDI))).backward()
     assert bias.grad is not None and bias.grad.abs().item() > 0
     assert dec.scorer.w_on.grad is not None
 
@@ -876,7 +858,10 @@ def test_nll_batch_on_device(device):
     short = _two_note_cues([(0.3, 0.8)], [98.0])
     out = dec.nll_batch(
         [_tensor_cues(full, device), _tensor_cues(short, device)],
-        [_notes(SPANS, MIDI), _notes([(0.3, 0.8)], [43])],
+        [
+            sounding(full.frame_times, _notes(SPANS, MIDI)),
+            sounding(short.frame_times, _notes([(0.3, 0.8)], [43])),
+        ],
     )
     assert out.shape == (2,) and out.device.type == device.type
 
@@ -889,7 +874,8 @@ def test_cuda_nll_matches_cpu():
     cpu = SemiCRFDecoder(CueScorer())
     gpu = SemiCRFDecoder(CueScorer())
     gpu.load_state_dict(cpu.state_dict())
-    assert torch.allclose(cpu.nll(cues, notes), gpu.to("cuda").nll(cues, notes).cpu(),
+    ref = sounding(cues.frame_times, notes)
+    assert torch.allclose(cpu.nll(cues, ref), gpu.to("cuda").nll(cues, ref).cpu(),
                           atol=1e-4)
 
 
@@ -945,7 +931,7 @@ def test_decode_without_voicing_head_falls_back_to_contour():
     opt = torch.optim.Adam(dec.parameters(), lr=0.2)
     for _ in range(120):
         opt.zero_grad()
-        dec.nll(cues, notes).backward()
+        dec.nll(cues, sounding(cues.frame_times, notes)).backward()
         opt.step()
     assert len(dec.decode(cues)) == 2
 
@@ -967,7 +953,7 @@ def test_the_dp_runs_with_no_contour_at_all():
     )
     dec = SemiCRFDecoder(CueScorer())
     notes = _notes([(0.1, 0.4), (0.5, 0.6)], [45, 50])
-    loss = dec.nll(cues, notes)
+    loss = dec.nll(cues, sounding(cues.frame_times, notes))
     assert torch.isfinite(loss)
     loss.backward()   # and the gradient still reaches the cues
 
@@ -996,7 +982,9 @@ def test_no_voicing_head_and_no_contour_is_refused():
         contour=None,
     )
     with pytest.raises(ValueError, match="no voicing signal"):
-        SemiCRFDecoder(CueScorer()).nll(cues, _notes([(0.1, 0.2)], [45]))
+        SemiCRFDecoder(CueScorer()).nll(
+            cues, sounding(cues.frame_times, _notes([(0.1, 0.2)], [45]))
+        )
 
 
 def test_the_pitch_logits_survive_into_inference():

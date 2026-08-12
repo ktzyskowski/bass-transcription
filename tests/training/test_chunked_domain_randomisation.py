@@ -28,6 +28,7 @@ from stemify.persistence.serde import CachedItem
 from stemify.semicrf.fit.dataset import ChunkDataset
 from stemify.semicrf.fit.tracks import TrainItem
 
+
 N_BINS, HOP_S = 12, 0.0116
 STRIDE, CHUNK, DMAX = 3, 40, 30
 N_CQT = 600
@@ -48,11 +49,15 @@ def _notes() -> list[NoteEvent]:
 def _item(tmp: Path, name: str, marker: float) -> TrainItem:
     """One cached track whose every feature value is ``marker``."""
     path = tmp / f"{name}.npz"
+    times = np.arange(N_CQT) * HOP_S
+    voiced = np.zeros(N_CQT, dtype=np.float32)
+    for note in _notes():
+        voiced[(times >= note.onset) & (times < note.offset)] = 1.0
     CachedItem(
         name,
         np.full((N_BINS, N_CQT), marker, dtype=np.float32),
-        {},
-        np.arange(N_CQT) * HOP_S,
+        {"voicing": voiced},
+        times,
     ).save(path)
     return TrainItem(features=(path,), notes=_notes())
 

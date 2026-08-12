@@ -32,6 +32,22 @@ from spanscorer import CueScorer
 from stemify.semicrf.fit.dataset import ChunkDataset, collate
 from stemify.semicrf.fit.tracks import channel_window, train_items
 
+from refs import gold
+
+
+def _voicing_target(item, n_cqt: int, hop_s: float) -> dict:
+    """The reference `voicing` mask gold reads, for a fake track.
+
+    A fixture supplies where the bass is audible rather than deriving it -- these
+    synthetic notes stop dead at note-off, which is the simplest statable choice.
+    """
+    times = np.arange(n_cqt) * hop_s
+    voiced = np.zeros(n_cqt, dtype=np.float32)
+    for note in item.reference_notes():
+        voiced[(times >= note.onset) & (times < note.offset)] = 1.0
+    return {"voicing": voiced}
+
+
 N_BINS, HOP_S = 12, 0.0116
 STRIDE = 3
 
@@ -71,7 +87,8 @@ class _FakeDataset(list):
             Path(item.audio()).write_bytes(b"")
             feats = rng.standard_normal((N_BINS, n)).astype(np.float32)
             CachedItem(
-                item.name, feats, {}, np.arange(n) * HOP_S
+                item.name, feats, _voicing_target(item, n, HOP_S),
+                np.arange(n) * HOP_S,
             ).save(feature_path(cache, item.audio()))
             self.append(item)
 
@@ -169,9 +186,8 @@ def test_gold_segments_tile_the_track_across_chunks(tmp_path, cache):
         spans += [(i + offset, j + offset) for _, i, j in batch.golds[0]]
 
     reference = _Item("t0", n, tmp_path).reference_notes()
-    from stemify.semicrf.gold import gold_segments
 
-    whole = gold_segments(np.arange(n)[::STRIDE] * HOP_S, reference, dmax)
+    whole = gold(np.arange(n)[::STRIDE] * HOP_S, reference, dmax)
     covered = [(i, j) for _, i, j in whole if j <= per_track * chunk]
 
     assert spans == sorted(spans), "segments must arrive in track order"

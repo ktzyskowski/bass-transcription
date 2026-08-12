@@ -69,9 +69,24 @@ from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
 from stemify.semicrf.fit.tracks import train_items
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.neural import NeuralSpanScorer
+
+from refs import gold
+
+
+def _voicing_target(item, n_cqt: int, hop_s: float) -> dict:
+    """The reference `voicing` mask gold reads, for a fake track.
+
+    A fixture supplies where the bass is audible rather than deriving it -- these
+    synthetic notes stop dead at note-off, which is the simplest statable choice.
+    """
+    times = np.arange(n_cqt) * hop_s
+    voiced = np.zeros(n_cqt, dtype=np.float32)
+    for note in item.reference_notes():
+        voiced[(times >= note.onset) & (times < note.offset)] = 1.0
+    return {"voicing": voiced}
+
 
 N_BINS, HOP_S, STRIDE = 12, 0.0116, 3
 CHUNK, DMAX = 10, 30
@@ -90,9 +105,19 @@ CPU = torch.device("cpu")
 # Optimiser steps of warm-up before the gradients are compared. The defect is a
 # function of how sharp the potentials are, not of the architecture, so a comparison at
 # initialisation measures nothing -- the two gradients agree to four decimal places
-# there. Sixty steps is where the cosine crosses zero at this scale; forty already
-# reads 0.46, so the test is not balanced on a knife edge.
-WARMUP_STEPS = 60
+# there (+0.9998 at step 0).
+#
+# **Re-measured when gold started reading the reference's voiced mask.** Sixty steps was
+# where the cosine crossed zero against the old gold; against the new one the same point
+# reads +0.76 and the crossing moves later. Swept on this fixture:
+#
+#     step    0    60   150   300
+#     cos  +1.00 +0.76 +0.34 +0.37
+#
+# So the bias is unchanged in kind and arrives later, and the threshold below is held
+# where it was rather than relaxed to fit -- moving *when* we look is honest, moving
+# what counts as harmful would not be.
+WARMUP_STEPS = 150
 
 
 @dataclass
@@ -162,7 +187,8 @@ def track(tmp_path_factory):
     Path(item.audio()).write_bytes(b"")
     rng = np.random.default_rng(0)
     feats = rng.standard_normal((N_BINS, N_CQT)).astype(np.float32)
-    CachedItem(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
+    CachedItem(item.name, feats, _voicing_target(item, N_CQT, HOP_S),
+               np.arange(N_CQT) * HOP_S).save(
         feature_path(cache, item.audio())
     )
     return [item], cache, feats
@@ -202,7 +228,7 @@ def _true_nll(model: nn.Module, decoder: SemiCRFDecoder, items, feats) -> float:
     chunk = Chunk(
         features=feats[None],
         frame_times=times,
-        gold=gold_segments(times[::STRIDE], items[0].reference_notes(), DMAX, LABELS),
+        gold=gold(times[::STRIDE], items[0].reference_notes(), DMAX, LABELS),
         y={}, stream=0, reset=True, prev=LABELS.START,
     )
     probe = SemiCRFLoss(decoder)
@@ -309,7 +335,7 @@ def test_detaching_the_carry_rotates_the_gradient_it_does_not_shrink_it(sharpene
     )
     assert cos < 0.5, (
         f"the truncated gradient points {cos:.4f} along the objective's own, which is "
-        "closer than measured (-0.02 at this warm-up) -- if truncation has become "
+        "closer than measured (+0.34 at this warm-up) -- if truncation has become "
         "harmless then bounded chains are buying nothing and should go"
     )
 

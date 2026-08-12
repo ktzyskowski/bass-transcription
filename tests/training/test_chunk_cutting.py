@@ -45,11 +45,12 @@ import pytest
 
 from stemify.audio.features import SILENCE_DB
 from stemify.persistence.serde import CachedItem
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.dataset import _Track
 from stemify.semicrf.fit.tracks import TrainItem
 from stemify.music.notes import NoteEvent
+
+from refs import gold
 
 N_BINS, HOP_S = 4, 0.0116
 STRIDE = 3
@@ -67,6 +68,13 @@ def _cached(tmp: Path, n_cqt: int, heads=("onset",)) -> Path:
     features[0] = np.arange(n_cqt)
     features[1:] = 7.0
     targets = {head: np.arange(n_cqt, dtype=np.float32) for head in heads}
+    # `voicing` is not one of the frame-index markers: gold reads it to place rests, so
+    # it has to be a real mask. These synthetic notes stop dead at note-off.
+    times = np.arange(n_cqt) * HOP_S
+    voiced = np.zeros(n_cqt, dtype=np.float32)
+    for note in _notes(n_cqt):
+        voiced[(times >= note.onset) & (times < note.offset)] = 1.0
+    targets["voicing"] = voiced
     path = tmp / "track.npz"
     CachedItem("track", features, targets, np.arange(n_cqt) * HOP_S).save(path)
     return path
@@ -170,16 +178,16 @@ def test_the_chunk_golds_are_the_whole_track_gold_split(
     """
     labels = LabelSet(lo=38, hi=50)
     track = _track(tmp_path, n_cqt, chunk, dmax, right, labels=labels)
-    whole = gold_segments(
+    whole = gold(
         np.arange(n_cqt)[::STRIDE] * HOP_S, _notes(n_cqt), dmax, labels
     )
     scanned = track.n_chunks * chunk
 
     rebuilt = []
     for c in range(track.n_chunks):
-        _, _, gold, _, _ = track[c]
+        _, _, chunk_gold, _, _ = track[c]
         origin = c * chunk - dmax
-        rebuilt += [(label, start + origin, end + origin) for label, start, end in gold]
+        rebuilt += [(label, start + origin, end + origin) for label, start, end in chunk_gold]
 
     want = [seg for seg in whole if seg[2] <= scanned]
     assert rebuilt == want, (
@@ -199,8 +207,8 @@ def test_every_gold_segment_lands_where_the_scan_will_look_for_it(
     track = _track(tmp_path, n_cqt, chunk, dmax, right)
     context = track.geometry.context
     for c in range(track.n_chunks):
-        _, _, gold, _, _ = track[c]
-        for _label, start, end in gold:
+        _, _, chunk_gold, _, _ = track[c]
+        for _label, start, end in chunk_gold:
             assert context < end <= context + chunk, (
                 f"chunk {c}: segment ends at local {end}, outside the scanned "
                 f"({context}, {context + chunk}]"
@@ -225,10 +233,10 @@ def test_the_first_segments_seed_slot_fits_the_alpha_window(
     """
     track = _track(tmp_path, n_cqt, chunk, dmax, right)
     for c in range(track.n_chunks):
-        _, _, gold, _, _ = track[c]
-        if not gold:
+        _, _, chunk_gold, _, _ = track[c]
+        if not chunk_gold:
             continue
-        slot = track.geometry.seed_slot(gold[0][1], dmax)
+        slot = track.geometry.seed_slot(chunk_gold[0][1], dmax)
         assert 0 <= slot < dmax, f"chunk {c}: seed slot {slot} outside [0, {dmax})"
 
 
@@ -255,14 +263,14 @@ def test_each_chunk_is_told_what_the_previous_one_ended_on(
     expected = labels.START
     seen_any = False
     for c in range(track.n_chunks):
-        _, _, gold, _, prev = track[c]
-        if not gold:
+        _, _, chunk_gold, _, prev = track[c]
+        if not chunk_gold:
             continue
         assert prev == expected, (
             f"chunk {c} is scored against {prev}, but the previous gold segment was "
             f"{expected}"
         )
-        expected = gold[-1][0]
+        expected = chunk_gold[-1][0]
         seen_any = True
     assert seen_any, "no chunk carried gold -- this fixture is not exercising anything"
 
@@ -274,8 +282,8 @@ def test_only_a_tracks_first_chunk_is_seeded_from_start(tmp_path):
     track = _track(tmp_path, 900, 40, 30, labels=labels)
     prevs = []
     for c in range(track.n_chunks):
-        _, _, gold, _, prev = track[c]
-        if gold:
+        _, _, chunk_gold, _, prev = track[c]
+        if chunk_gold:
             prevs.append(prev)
     assert prevs[0] == labels.START
     assert labels.START not in prevs[1:], (
@@ -330,7 +338,7 @@ def test_a_gold_index_names_the_dp_frame_the_scan_will_score_it_at(
 
     track = _track(tmp_path, n_cqt, chunk, dmax, right)
     for c in range(track.n_chunks):
-        features, times, gold, _, _ = track[c]
+        features, times, chunk_gold, _, _ = track[c]
         origin = c * chunk - dmax
         n_dp_window = features.shape[-1] // STRIDE
         evidence = build_evidence(
@@ -346,7 +354,7 @@ def test_a_gold_index_names_the_dp_frame_the_scan_will_score_it_at(
         want = (np.arange(origin, origin + n_dp_window) * STRIDE) * HOP_S
         assert np.allclose(evidence.frame_times[0], want)
 
-        for label, start, end in gold:
+        for label, start, end in chunk_gold:
             # The DP frame gold points at, read back off the features it labels.
             for local in (start, end - 1):
                 cqt = features[0, 0, local * STRIDE]

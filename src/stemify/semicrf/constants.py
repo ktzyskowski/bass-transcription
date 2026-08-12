@@ -4,18 +4,15 @@ the label integers and the ``log 0`` sentinel without a cycle.
 """
 
 # Decimate the ~11.6 ms feature grid before the DP: the scan is O(T * dmax), so a
-# coarser grid is a direct speed lever, and a ~35 ms boundary resolution is well
-# inside the 50 ms onset tolerance the note metric scores at.
+# coarser grid is a direct speed lever. A ~35 ms grid places an onset within +-17.4 ms,
+# comfortably inside the note metric's 50 ms tolerance -- but only because gold rounds
+# to the *nearest* frame. It used to round up, making the error one-sided at 0..+35 ms
+# and leaving a model 15 ms of late-side budget where it now has 33.
 STRIDE = 3
-# Longest representable segment. Must exceed the longest real bass note, or a held
-# note is forced to split; 4 s is comfortably past that.
+# Longest representable segment. A note outlasting it becomes consecutive spans of the
+# same label rather than being cut short, so this is a cost in extra boundaries the
+# model must learn to expect, not a correctness bound; 4 s is past any real bass note.
 DMAX_S = 4.0
-# A between-note MIDI gap shorter than this is a note-off artifact (the audio rings
-# on), not audible silence -- gold closes it into a contiguous note->note transition
-# instead of a phantom rest. Longer gaps stay rests. This is the fix that stops the
-# CRF learning to avoid note->note and collapsing legato runs.
-GAP_REST_S = 0.12
-
 # Segment labels. START is only reachable at position 0, which makes the first-
 # segment case fall out of the same scan as every other step (no special-casing).
 NOTE, REST, START = 0, 1, 2

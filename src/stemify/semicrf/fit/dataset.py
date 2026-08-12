@@ -32,6 +32,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 from stemify.audio.features import SILENCE_DB
 from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.segmentation import LocalSegmentation, TrackSegmentation
+from stemify.music.reference import Reference
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.fit.tracks import (
@@ -163,7 +164,21 @@ class _Track:
         self._hop = float(ft[1] - ft[0]) if ft.size > 1 else 0.01
         # Gold is built once over the whole track, then split by chunk, so the pieces
         # tile it exactly -- which is what makes the per-chunk losses telescope.
-        self._gold = gold_segments(ft[::stride], track.notes, dmax, labels)
+        #
+        # From the *reference*, not from the notes alone: a rest is where the bass is
+        # inaudible, and the mask that says so is the same one the voicing head is
+        # trained against. Deriving it here a second way is what put 28% of gold's
+        # rests on frames the head calls voiced -- see `music.reference`.
+        if "voicing" not in self._examples[0].targets:
+            raise KeyError(
+                f"{self._examples[0].name!r} has no cached 'voicing' target, which "
+                "gold needs to know where the bass stops sounding. The dataset must "
+                "be built with it -- `train_items(..., heads=[..., 'voicing'])`."
+            )
+        self._reference = Reference.from_targets(
+            ft, self._examples[0].targets["voicing"], track.notes
+        ).decimated(stride)
+        self._gold = gold_segments(self._reference, dmax, labels)
         self._start = labels.START
         self.n_chunks = self._n_dp // chunk  # a ragged tail would break static shapes
 

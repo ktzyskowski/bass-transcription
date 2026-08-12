@@ -1,83 +1,108 @@
-"""Build the gold segmentation the NLL scores against, from reference notes.
+"""Build the gold segmentation the NLL scores against, from a track's ``Reference``.
 
-Isolated from the DP because the audible-gap rule -- deciding which between-note
-gaps are real rests and which are note-off artifacts to close -- is where subtle
-label bugs hide, and it is pure numpy, so it earns dense unit tests of its own.
+Isolated from the DP because this is where the labelling rule lives, and it is pure
+numpy, so it earns dense unit tests of its own.
+
+**Gold is a *view* of the reference, not a second derivation of it.** It used to take
+only the note list and answer "when does this note stop sounding" from a flat 120 ms
+constant, while the voicing target answered the same question by measuring each note's
+decay. On 40 real tracks that put 28% of gold's REST frames on frames the voicing target
+called voiced -- and the voicing head's output *is* the DP's rest evidence, so gold was
+being scored against a signal it contradicted. 55-59% of rest spans scored better merged
+into the note before them, a median 8.8 nats each, which is a per-span bribe to
+under-segment about 76 times a track.
+
+So the rule below reads the reference's own mask. **A rest is where the bass is not
+audible** -- not where the MIDI happens to have a gap. The two definitions cannot drift
+again because there is now only one.
 """
 
 import numpy as np
 
-from stemify.semicrf.constants import GAP_REST_S
+from stemify.music.reference import Reference
+from stemify.music.grids import nearest_frame
 from stemify.semicrf.labelset import BINARY, LabelSet
 from stemify.semicrf.segmentation import TrackSegmentation
-from stemify.music.notes import NoteEvent
 
 
 def gold_segments(
-    frame_times: np.ndarray,
-    ref: list[NoteEvent],
+    reference: Reference,
     dmax: int,
     labels: LabelSet = BINARY,
 ) -> TrackSegmentation:
-    """Tile ``[0, T)`` into ``(label, start, end)`` gold segments from reference notes.
+    """Tile ``[0, T)`` into ``(label, start, end)`` gold segments.
 
-    Each note is a ``note`` span (clipped to ``dmax``); the space between notes is a
-    ``rest`` only when the gap is longer than ``GAP_REST_S`` -- real audible silence.
-    A shorter gap is a MIDI note-off artifact the audio rings through, so the previous
-    note is extended to close it, yielding contiguous ``note->note`` gold. Training on
-    the raw MIDI gaps instead teaches rests the audio never contains and a spurious
-    ``note->note`` penalty that collapses legato runs (the under-segmentation trap).
+    Each note owns its own frames and then its **ring-out** -- the voiced frames after
+    its MIDI offset, up to the next onset. What is left over, where the reference says
+    the bass is silent, is a ``rest``.
 
-    **``labels`` is what makes a gold note name a pitch.** Under ``BINARY`` every note
-    is label 0 and this is the two-label rule it always was. Under a pitch alphabet
-    label 0 is *the lowest representable semitone*, so defaulting the alphabet where a
-    wide one is meant does not raise, does not change a shape, and trains every note in
-    the corpus toward E1."""
-    n_frames = frame_times.size
-    spans = []
-    for note in sorted(ref, key=lambda n: n.onset):
-        start = int(np.clip(
-            np.searchsorted(frame_times, note.onset), 0, n_frames - 1
-        ))
-        end = int(np.clip(
-            np.searchsorted(frame_times, note.offset), start + 1, n_frames
-        ))
-        spans.append((start, end, labels.label_of(note.midi_pitch)))
+    A note longer than ``dmax`` becomes consecutive segments of the *same* label rather
+    than being truncated into a rest. The DP cannot represent it as one span, and a
+    ``rest`` in the middle of a sounding note would teach silence the audio does not
+    contain; consecutive same-pitch spans are what a unison transition already models.
 
+    **Onsets are placed with ``nearest_frame``**, the same function the frame path's
+    onset target uses. Rounding *up* to the next frame -- which is the right answer to
+    "which frames does this note occupy" -- made every decoded onset late by up to a
+    frame, since the decoder reads a note's time back off this index.
+
+    **``labels`` is what makes a gold note name a pitch.** Under ``BINARY`` every note is
+    label 0 and this is the two-label rule it always was. Under a pitch alphabet label 0
+    is *the lowest representable semitone*, so defaulting the alphabet where a wide one
+    is meant does not raise, does not change a shape, and trains every note in the
+    corpus toward E1.
+    """
+    if dmax < 1:
+        raise ValueError(
+            f"dmax must be at least 1 frame, got {dmax}; a segment cap of zero admits "
+            "no span that advances, so no tiling of a non-empty grid exists"
+        )
+    n_frames = reference.n_frames
+    if n_frames == 0:
+        return TrackSegmentation([])
+
+    times, voiced = reference.frame_times, reference.voiced
     segs: list[tuple[int, int, int]] = []
 
-    def add_rest(lo: int, hi: int) -> None:
+    def emit(label: int, lo: int, hi: int) -> None:
+        """Append ``[lo, hi)`` as consecutive spans no longer than ``dmax``.
+
+        One helper for notes and rests alike: the cap is the DP's, not the label's, so
+        expressing it once is what stops a long note becoming a rest in its own tail.
+        """
         while lo < hi:
             capped = min(hi, lo + dmax)
-            segs.append((labels.REST, lo, capped))
+            segs.append((label, lo, capped))
             lo = capped
 
-    cur = 0
-    for start, end, label in spans:
-        start = max(start, cur)
-        if end <= start:
+    onsets = (
+        np.clip(
+            nearest_frame(times, np.array([n.onset for n in reference.notes])),
+            0, n_frames - 1,
+        ).tolist()
+        if reference.notes else []
+    )
+
+    cursor = 0
+    for k, note in enumerate(reference.notes):
+        start = max(onsets[k], cursor)
+        # A note owns frames up to the next onset; its ring-out lives in there. Past the
+        # last note, up to the end of the grid.
+        limit = onsets[k + 1] if k + 1 < len(reference.notes) else n_frames
+        limit = max(limit, start)
+        if start >= n_frames or limit <= start:
             continue
-        if start > cur:  # a gap: audible rest, or a note-off artifact to close?
-            gap_s = (
-                float(frame_times[start] - frame_times[cur]) if cur < n_frames
-                else GAP_REST_S + 1
-            )
-            if gap_s > GAP_REST_S:
-                add_rest(cur, start)
-            elif segs and labels.is_note(segs[-1][0]):  # extend prev over the artifact
-                prev_start = segs[-1][1]
-                prev_end = min(start, prev_start + dmax)
-                # The *previous* note's label, not this one's: the extension closes a
-                # note-off artifact by holding the note that was already sounding.
-                segs[-1] = (segs[-1][0], prev_start, prev_end)
-                if prev_end < start:  # dmax-limited: remainder must still tile
-                    add_rest(prev_end, start)
-            else:
-                add_rest(cur, start)  # no prior note to extend
-        # clip an over-long note to one representable segment
-        end = min(end, start + dmax)
-        segs.append((label, start, end))
-        cur = end
-    if cur < n_frames:
-        add_rest(cur, n_frames)
+        if start > cursor:
+            # Whatever precedes this note and is not some earlier note's ring-out.
+            emit(labels.REST, cursor, start)
+        # The note sounds while the reference says so. `nearest_frame` may put the
+        # onset a frame before the first voiced frame, so the note always owns at
+        # least its own first frame.
+        sounding = np.flatnonzero(voiced[start:limit])
+        end = start + 1 if sounding.size == 0 else start + int(sounding[-1]) + 1
+        emit(labels.label_of(note.midi_pitch), start, end)
+        cursor = end
+
+    if cursor < n_frames:
+        emit(labels.REST, cursor, n_frames)
     return TrackSegmentation(segs)

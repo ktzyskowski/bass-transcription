@@ -99,11 +99,13 @@ def test_a_non_empty_loader_still_averages_normally():
 # --------------------------------------------------------------------------- #
 def _item(tmp: Path, name: str) -> TrainItem:
     path = tmp / f"{name}.npz"
+    times = np.arange(N_CQT) * HOP_S
+    voiced = ((times >= 0.1) & (times < 0.4)).astype(np.float32)
     CachedItem(
         name,
         np.zeros((N_BINS, N_CQT), dtype=np.float32),
-        {},
-        np.arange(N_CQT) * HOP_S,
+        {"voicing": voiced},
+        times,
     ).save(path)
     return TrainItem(
         features=(path,),

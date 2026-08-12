@@ -32,6 +32,7 @@ from stemify.transcription.decoder import Decoder
 from stemify.semicrf.constants import STRIDE
 from stemify.semicrf.evidence import Evidence, build_evidence
 from stemify.semicrf.forward import chunk_log_partition, log_partitions
+from stemify.music.reference import Reference
 from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.score import segmentation_scores
 from stemify.semicrf.spans import SpanScorer
@@ -82,24 +83,29 @@ class SemiCRFDecoder(Decoder, nn.Module):
         evidence = build_evidence(frames_list, self.stride, self.device)
         return evidence, self.scorer.dmax_for(evidence.frame_times[0])
 
-    def nll(self, frames: Frames, notes: list[NoteEvent]) -> torch.Tensor:
+    def nll(self, frames: Frames, reference: Reference) -> torch.Tensor:
         """``log Z - score(gold)`` for one track -- the batch of one."""
-        return self.nll_batch([frames], [notes])[0]
+        return self.nll_batch([frames], [reference])[0]
 
     def nll_batch(
         self,
         frames_list: Sequence[Frames],
-        notes_list: Sequence[list[NoteEvent]],
+        references: Sequence[Reference],
     ) -> torch.Tensor:
         """Per-track NLL ``(B,)``: one batched ``log Z`` scan over the padded evidence,
         minus each track's gold score.
 
         Both halves read the *same* padded batch: gold indices never reach past a
-        track's true length, so the flat padding beyond it is never gathered."""
+        track's true length, so the flat padding beyond it is never gathered.
+
+        ``references`` are the ground truth, passed in rather than derived from
+        ``frames_list``. That separation is load-bearing: ``frames`` carries the
+        *model's* voicing, and gold built from it would score the model against its own
+        prediction. The old signature took notes only and hid the dependency."""
         evidence, dmax = self._prepare(frames_list)
         golds = [
-            gold_segments(times, notes, dmax, self.scorer.labels)
-            for times, notes in zip(evidence.frame_times, notes_list, strict=True)
+            gold_segments(reference.decimated(self.stride), dmax, self.scorer.labels)
+            for reference in references
         ]
         return log_partitions(self.scorer, evidence, dmax) - segmentation_scores(
             self.scorer, evidence, golds, dmax

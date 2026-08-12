@@ -24,12 +24,13 @@ import torch
 
 from stemify.models.frames import frames_from_logits
 from stemify.semicrf import SemiCRFDecoder
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.window import initial_window
 from stemify.audio.features import N_BINS
 from stemify.music.notes import NoteEvent
 
 from spanscorer import CueScorer
+
+from refs import gold as build_gold
 
 DT, T = 0.0116, 240
 TIMES = np.arange(T) * DT
@@ -58,7 +59,7 @@ def _backward(
             p.normal_(0, 0.5)
 
     _, dmax = decoder._prepare([cues])
-    gold = gold_segments(TIMES[:: decoder.stride], NOTES if notes else [], dmax)
+    gold = build_gold(TIMES[:: decoder.stride], NOTES if notes else [], dmax)
     rows = decoder.scorer.labels.n_rows
     carry = initial_window(torch.zeros(dmax, rows), 1, dmax, rows)
     A, gold_score, _ = decoder.nll_chunk([cues], [gold], carry, 0, 0)

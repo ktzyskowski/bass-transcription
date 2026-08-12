@@ -398,7 +398,9 @@ class SemiCRFRecipe(Recipe):
         for condition in conditions:
             items += train_items(
                 condition.dataset(root, split, limit), condition, store,
-                heads=self.aux_heads,
+                # `voicing` regardless of the aux weights: gold reads it to place
+                # rests, so it is a *dataset* requirement, not a loss's.
+                heads=sorted({*self.aux_heads, "voicing"}),
             )
         return chunked_ds.ChunkDataset(
             items,

@@ -32,7 +32,6 @@ from stemify.semicrf import SemiCRFDecoder
 from stemify.semicrf.fit.geometry import ChunkGeometry
 from stemify.semicrf.fit.dataset import Chunk, ChunkDataset, collate
 from stemify.semicrf.fit.loss import SemiCRFLoss
-from stemify.semicrf.gold import gold_segments
 from stemify.semicrf.labelset import LabelSet
 from stemify.semicrf.neural import NeuralSpanScorer
 
@@ -46,6 +45,22 @@ from test_chunk_carry import (  # noqa: F401  (fixtures)
 from stemify.semicrf.fit.tracks import train_items
 
 from spanscorer import CueScorer
+
+from refs import gold
+
+
+def _voicing_target(item, n_cqt: int, hop_s: float) -> dict:
+    """The reference `voicing` mask gold reads, for a fake track.
+
+    A fixture supplies where the bass is audible rather than deriving it -- these
+    synthetic notes stop dead at note-off, which is the simplest statable choice.
+    """
+    times = np.arange(n_cqt) * hop_s
+    voiced = np.zeros(n_cqt, dtype=np.float32)
+    for note in item.reference_notes():
+        voiced[(times >= note.onset) & (times < note.offset)] = 1.0
+    return {"voicing": voiced}
+
 
 DP_HOP = HOP_S * STRIDE
 DMAX_S = DMAX * DP_HOP                       # so `grid` derives exactly DMAX frames
@@ -119,7 +134,7 @@ def _whole_track_nll(model, items, feats, transitions: bool = False) -> float:
     chunk = Chunk(
         features=feats[None],
         frame_times=times,
-        gold=gold_segments(
+        gold=gold(
             times[::STRIDE], items[0].reference_notes(), DMAX, decoder.scorer.labels
         ),
         y={}, stream=0, reset=True, prev=LABELS.START,
@@ -184,7 +199,8 @@ def _second_track(tmp_path, cache) -> list[_Item]:
     Path(item.audio()).write_bytes(b"")
     rng = np.random.default_rng(1)
     feats = rng.standard_normal((N_BINS, N_CQT)).astype(np.float32)
-    CachedItem(item.name, feats, {}, np.arange(N_CQT) * HOP_S).save(
+    CachedItem(item.name, feats, _voicing_target(item, N_CQT, HOP_S),
+               np.arange(N_CQT) * HOP_S).save(
         feature_path(cache, item.audio())
     )
     return [item]
